@@ -1,0 +1,50 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #0f0f14; color: #e9e9ef;
+  font-family: system-ui, "Segoe UI", "Malgun Gothic", sans-serif; }
+header { padding: 16px 22px; background: #1a1a22; border-bottom: 1px solid #000;
+  display: flex; align-items: baseline; gap: 12px; }
+header strong { font-size: 18px; }
+header .sub { color: #8a8a96; font-size: 13px; }
+header #btnQuit { margin-left: auto; align-self: center; }
+
+main { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 22px; align-items: start; }
+@media (max-width: 900px){ main { grid-template-columns: 1fr; } }
+
+.card { background: #17171e; border: 1px solid #26262e; border-radius: 12px; padding: 18px 20px; }
+.card h2 { margin: 0 0 6px; font-size: 17px; color: #cfe3ff; }
+.card .hint { font-size: 12px; color: #7a7a88; font-weight: normal; }
+.card .desc { color: #9a9aa6; font-size: 13px; margin: 0 0 14px; }
+
+.row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.lbl { color: #9a9aa6; font-size: 12px; word-break: break-all; }
+.ck { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #c8c8d2; margin: 10px 0; }
+.nmrow label { font-size: 13px; color: #c8c8d2; white-space: nowrap; }
+.nmrow input { flex: 1; background: #101016; color: #e9e9ef; border: 1px solid #33333f;
+  border-radius: 7px; padding: 8px 10px; font-size: 13px; min-width: 0; }
+.nmrow input:focus { outline: none; border-color: #2f6df0; }
+.nmrow .ext { color: #7a7a88; font-size: 12px; }
+
+button { background: #2b2b34; color: #e9e9ef; border: 1px solid #3a3a46; border-radius: 7px;
+  padding: 9px 13px; cursor: pointer; font-size: 13px; }
+button:hover { background: #3a3a46; }
+button:disabled { opacity: .4; cursor: default; }
+button.primary { background: #2f6df0; border-color: #2f6df0; color: #fff; font-weight: 600; }
+button.primary:hover { background: #4380ff; }
+/* 종료 버튼 — 실수로 누르기 쉬운 자리라 색으로 분명히 구분한다(실제 확인은 app.py 의 closing 핸들러) */
+button.danger { background: #c0392b; border-color: #e05a4a; color: #fff; font-weight: 600; }
+button.danger:hover { background: #e04b39; border-color: #ff7a68; }
+#btnCreate { width: 100%; margin-top: 8px; }
+
+.prog { height: 10px; background: #26262e; border-radius: 6px; overflow: hidden; margin-top: 12px; }
+#progBar { height: 100%; width: 0; background: linear-gradient(90deg,#2f6df0,#57c7ff); transition: width .2s; }
+.log { margin-top: 10px; max-height: 180px; overflow-y: auto; background: #0c0c11; border: 1px solid #24242c;
+  border-radius: 8px; padding: 10px; font-family: Consolas, monospace; font-size: 11px; color: #a8b8c8; white-space: pre-wrap; }
+
+.rlist { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.ritem { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #12121a;
+  border: 1px solid #24242c; border-radius: 8px; }
+.ritem .nm { flex: 1; font-size: 13px; word-break: break-all; }
+.ritem .meta { font-size: 11px; color: #7a7a88; }
+.ritem button { padding: 6px 12px; }
+.empty { color: #6a6a76; font-size: 13px; padding: 10px; }
+.hidden { display: none !important; }

@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>원전 3D 텍스트/크랙 검증 뷰어</title>
+<style>
+  body{margin:0;overflow:hidden;font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;background:#1a1a1a;}
+  #info{position:absolute;top:10px;left:10px;color:#eee;background:rgba(0,0,0,.75);
+        padding:15px;border-radius:10px;font-size:13px;line-height:1.8;max-width:320px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+        max-height:94vh; overflow-y:auto;}
+  #info .mbtn{flex:1; background:#333; color:#fff; border:1px solid #555; border-radius:6px; padding:6px 4px; cursor:pointer; font-size:12px;}
+  #info .mbtn:hover{background:#444;}
+  #info .mbtn.active{background:#00695c; border-color:#00e5ff; color:#fff; font-weight:bold;}
+  #info .mbtn.reset{background:#5a2d2d;}
+  #info .mbtn.reset:hover{background:#7a3d3d;}
+  #info b {font-size: 15px; color: #fff;}
+  #info label{display:flex; align-items: center; cursor:pointer; margin-top: 5px; margin-bottom: 5px;}
+  #info input[type="checkbox"] {margin-right: 8px; cursor: pointer;}
+  #info select {margin-left: 8px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 2px 5px;}
+  #panel{position:absolute;top:10px;right:10px;width:340px;max-height:94vh;overflow:auto;
+         background:rgba(0,0,0,.85);color:#eee;border-radius:10px;padding:15px;display:none;font-size:13px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);}
+  #panel h3{margin:.2em 0;color:#ffdd33; border-bottom: 1px solid #444; padding-bottom: 5px;} 
+  #panel img{width:100%;border-radius:6px;margin:8px 0;cursor:zoom-in; border: 1px solid #444;}
+  #panel .src{color:#9cf;word-break:break-all; font-weight: bold;} 
+  #panel .close{float:right;cursor:pointer;color:#f88; font-weight: bold; background: #333; padding: 2px 6px; border-radius: 4px;}
+  #panel .close:hover{background: #555;}
+  /* 우측 전체 이미지 리스트 */
+  #imglist{position:absolute;top:10px;right:10px;width:300px;max-height:94vh;display:flex;flex-direction:column;
+    background:rgba(0,0,0,.85);color:#eee;border-radius:10px;padding:12px;font-size:13px;box-shadow:0 4px 6px rgba(0,0,0,0.5);}
+  #imglist h3{margin:.2em 0;color:#30c0ff;border-bottom:1px solid #444;padding-bottom:6px;
+    display:flex;justify-content:space-between;align-items:center;font-size:15px;}
+  #imglist .reset{font-size:11px;background:#333;border:1px solid #555;color:#9cf;border-radius:5px;padding:3px 7px;cursor:pointer;}
+  #imglist .reset:hover{background:#444;}
+  #imgHot{font-size:12px;color:#ffdd33;margin:5px 0;line-height:1.5;}
+  #imgItems{overflow-y:auto;flex:1;margin-top:6px;}
+  .imgItem{display:flex;gap:8px;align-items:center;padding:5px;border-radius:6px;cursor:pointer;border:1px solid transparent;margin-bottom:2px;}
+  .imgItem:hover{background:#1e2630;border-color:#30c0ff;}
+  .imgItem.active{background:#2a2a10;border-color:#ffee00;}
+  .imgItem img{width:70px;height:50px;object-fit:cover;border-radius:4px;background:#000;flex-shrink:0;}
+  .imgItem .nm{font-size:11px;word-break:break-all;color:#cde;}
+  /* 지점 검사: 클릭한 3D 점을 각 사진에 투영한 위치(노란 원) */
+  .imgItem .tw{position:relative;width:70px;height:50px;flex-shrink:0;}
+  .imgItem .uvdot{position:absolute;width:13px;height:13px;margin:-6.5px 0 0 -6.5px;border:2px solid #ffee00;
+    border-radius:50%;box-shadow:0 0 6px #ffee00, inset 0 0 3px #ffee00;pointer-events:none;}
+  .imgItem .uvdot::after{content:'';position:absolute;inset:4px;background:#ffee00;border-radius:50%;}
+  /* 카메라 정보 패널 */
+  #caminfo{position:absolute;bottom:12px;left:12px;background:rgba(0,0,0,.88);color:#eee;border-radius:10px;
+    padding:12px 14px;font-size:13px;display:none;box-shadow:0 4px 6px rgba(0,0,0,0.5);min-width:220px;}
+  #caminfo h3{margin:.1em 0 .5em;color:#ffee00;font-size:15px;}
+  #caminfo .coord{font-family:Consolas,monospace;color:#9cf;line-height:1.7;font-size:14px;}
+  #caminfo .clear{margin-top:10px;font-size:11px;background:#5a2d2d;border:1px solid #855;color:#fdd;border-radius:5px;padding:5px 9px;cursor:pointer;}
+  #caminfo .clear:hover{background:#7a3d3d;}
+  /* 원본 크게 보기 모달 (앱 내부 GUI) */
+  #imgmodal{position:absolute;inset:0;z-index:60;background:rgba(0,0,0,.92);display:none;flex-direction:column;}
+  #imgmodal .bar{height:48px;display:flex;align-items:center;gap:8px;padding:0 14px;background:#111;border-bottom:1px solid #000;}
+  #imgmodal .bar .title{font-weight:bold;color:#30c0ff;margin-right:auto;word-break:break-all;font-size:14px;}
+  #imgmodal .bar button{background:#2b2b34;color:#eee;border:1px solid #3a3a46;border-radius:6px;padding:6px 11px;cursor:pointer;font-size:13px;}
+  #imgmodal .bar button:hover{background:#3a3a46;}
+  #imgmodal .bar .close{background:#5a2d2d;border-color:#855;}
+  #imView{flex:1;overflow:hidden;position:relative;cursor:crosshair;background:#0a0a0d;}
+  /* will-change: 확대 후 패닝(translate)을 컴포지터 레이어 이동으로 만든다. 없으면 매 프레임
+     '확대된 1920px 이미지'를 메인 스레드에서 재래스터화해 줌인할수록 느려진다(측정: JS 는 0.002ms,
+     병목은 paint). backface-visibility 로 GPU 레이어를 확실히 유지한다. */
+  #imStage{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform;backface-visibility:hidden;}
+  #imStage img{display:block;user-select:none;-webkit-user-drag:none;}
+  #imMarker{position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;border:2px solid #ff33cc;border-radius:50%;
+    box-shadow:0 0 8px #ff33cc;pointer-events:none;display:none;}
+  #imCrackMarker{position:absolute;width:36px;height:36px;margin:-18px 0 0 -18px;border:3px solid #ff2d2d;border-radius:50%;
+    box-shadow:0 0 12px #ff2d2d, inset 0 0 8px rgba(255,45,45,.6);pointer-events:none;display:none;}
+  /* 지점 검사에서 온 표식은 노랑 — 검출된 크랙(빨강)과 구분한다 */
+  #imCrackMarker.inspect{border-color:#ffee00;box-shadow:0 0 12px #ffee00, inset 0 0 8px rgba(255,238,0,.6);}
+  #imCoord{position:absolute;bottom:14px;left:14px;background:rgba(0,0,0,.82);color:#9cf;padding:9px 13px;border-radius:8px;
+    font-family:Consolas,monospace;font-size:14px;box-shadow:0 3px 6px rgba(0,0,0,.5);}
+  /* ===== 크랙 HUD 콜아웃 마커 (사이버네틱) ===== */
+  #hud{position:fixed;inset:0;z-index:5;pointer-events:none;overflow:hidden;}
+  .hud-marker{position:absolute;left:0;top:0;pointer-events:none;}
+  /* 레티클은 3D 스프라이트(makeReticleTex)로 옮겼다 → 메시 뒤면 GPU 깊이 테스트로 자동 가려짐.
+     여기 남은 건 그 레티클을 따라다니는 리더선+태그(DOM)뿐. */
+  /* 리더선: 앵커에서 태그로 이어지는 얇은 발광선(고정 오프셋) */
+  .hud-marker .leader{position:absolute;left:0;top:0;width:32px;height:1px;background:var(--sev);
+    transform-origin:left center;transform:rotate(-58deg);box-shadow:0 0 4px var(--sev);opacity:0;transition:opacity .15s;}
+  /* 태그: 각진(코너컷) 발광 칩 + 폭 수치. 평소 숨김, 호버/선택/고위험 때 표시 */
+  .hud-marker .tag{position:absolute;left:17px;top:-34px;padding:3px 9px;font:600 11px Consolas,monospace;
+    letter-spacing:.5px;color:var(--sev);background:rgba(6,10,14,.82);border:1px solid var(--sev);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);box-shadow:0 0 8px rgba(0,0,0,.6);
+    white-space:nowrap;pointer-events:auto;cursor:pointer;opacity:0;transform:translateX(-4px);
+    transition:opacity .15s, transform .15s;}
+  .hud-marker.show .leader{opacity:.9;}
+  .hud-marker.show .tag{opacity:1;transform:translateX(0);}
+  .hud-marker.active .tag{border-color:#fff;color:#fff;box-shadow:0 0 12px rgba(255,255,255,.4);}
+  .hud-marker.active .leader{background:#fff;box-shadow:0 0 6px #fff;}
+  /* 성능 계측 오버레이 (F2 로 토글) */
+  #stats{position:fixed;left:12px;top:12px;z-index:60;background:rgba(6,10,14,.9);border:1px solid #2a3a48;
+    border-radius:8px;padding:8px 11px;font:11px/1.55 Consolas,monospace;color:#7fffd4;white-space:pre;
+    pointer-events:none;display:none;box-shadow:0 3px 10px rgba(0,0,0,.6);}
+  /* 보고서 로딩/오류 표시 (메시가 GB 급이면 수 초 걸린다) */
+  #boot{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:50;
+    background:rgba(10,14,18,.92);border:1px solid #2a3a48;border-radius:10px;padding:18px 26px;
+    font:14px Consolas,monospace;color:#9cf;box-shadow:0 6px 24px rgba(0,0,0,.6);max-width:80vw;}
+</style></head><body>
+<div id="boot"><span id="bootMsg">보고서 여는 중...</span></div>
+<div id="stats"></div>
+<div id="hud"></div>
+<div id="info">
+  <b>원전 환경 디지털 트윈 분석</b><br>
+  <span style="color:#aaa" id="hdrCounts">분석 이미지: — · 검출 포인트: —</span>
+  <div id="reportMeta" style="font-size:11px;color:#7a8a99;line-height:1.6;margin-top:4px;"></div>
+  <div id="scaleWarn" style="display:none;font-size:11px;color:#ffb84d;background:rgba(80,50,10,.35);
+    border:1px solid #6a4a1a;border-radius:6px;padding:6px 9px;margin-top:6px;line-height:1.5;"></div>
+  <!-- 심각도 색 범례: 색이 무엇을 뜻하는지 항상 보이게 -->
+  <div id="sevLegend" style="margin-top:8px;font-size:11px;color:#bbb;">
+    <div style="height:9px;border-radius:5px;margin-bottom:3px;
+      background:linear-gradient(90deg,rgb(38,235,89),rgb(179,255,31),rgb(255,229,0),rgb(255,107,0),rgb(255,15,10));"></div>
+    <div style="display:flex;justify-content:space-between;color:#8a8a96;">
+      <span>0.1mm 경미</span><span>1mm</span><span>10mm 심각</span></div>
+  </div>
+  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
+
+  <label><input type="checkbox" id="ckHot" checked> 🔵 크랙 심각도 점(폭별 색) 표시</label>
+  <label><input type="checkbox" id="ckText" checked> 🔴 검출 픽셀 (텍스트/크랙) 표시</label>
+  <label style="padding-left: 20px; font-size: 12px; color:#ccc;">
+    ↳ 픽셀 색상: 
+    <select id="colorSelect">
+      <option value="0xffff00" selected>노랑 (기본)</option>
+      <option value="0xff3333">빨강</option>
+      <option value="0x33ff33">초록</option>
+      <option value="0x33b8ff">파랑</option>
+      <option value="0xffffff">하양</option>
+    </select>
+  </label>
+  <label style="padding-left: 20px; font-size: 12px; color:#ccc;">
+    ↳ 픽셀 크기:
+    <select id="sizeSelect">
+      <option value="0.005">0.5 cm</option>
+      <option value="0.01" selected>1 cm (기본)</option>
+      <option value="0.02">2 cm</option>
+      <option value="0.05">5 cm</option>
+    </select>
+  </label>
+  
+  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
+  <label><input type="checkbox" id="ckGrid" checked> 🌐 좌표축 및 바닥 그리드 표시</label>
+  <label><input type="checkbox" id="ckDarkMesh"> 🌙 구조물 어둡게 보기 (픽셀 강조)</label>
+  <label><input type="checkbox" id="ckCam" checked> 📷 카메라 위치(파란색) 표시</label>
+
+  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
+  <b style="font-size:14px;">🔎 지점 검사</b>
+  <div style="display:flex; gap:6px; margin:8px 0;">
+    <button id="btnInspect" class="mbtn">지점 검사 모드</button>
+  </div>
+  <div id="inspectMsg" style="font-size:11px;color:#888;margin-bottom:4px;">끄면 일반 조작으로 돌아갑니다.</div>
+
+  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
+  <b style="font-size:14px;">📏 측정 도구 <span style="font-size:11px; color:#888; font-weight:normal;">(1 단위 = 1 m)</span></b>
+  <div style="display:flex; gap:6px; margin:8px 0;">
+    <button id="btnDist" class="mbtn">거리 측정</button>
+    <button id="btnRad" class="mbtn">반경 측정</button>
+    <button id="btnReset" class="mbtn reset">초기화</button>
+  </div>
+  <label style="font-size:12px; color:#ccc;">표시 단위:
+    <select id="unitSelect">
+      <option value="mm" selected>mm</option>
+      <option value="cm">cm</option>
+      <option value="m">m</option>
+      <option value="auto">자동</option>
+    </select>
+  </label>
+  <div id="measResult" style="margin-top:8px; font-size:12px; color:#eee; background:#222; padding:8px; border-radius:6px; line-height:1.5;">측정 모드를 선택하세요.</div>
+
+  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
+  <label style="font-size: 12px; color:#ccc;">🖱️ 마우스 감도: 
+    <input type="range" id="camSens" min="0.1" max="3.0" step="0.1" value="1.0" style="vertical-align: middle; width: 80px;">
+    <span id="camSensVal">1.0</span>
+  </label>
+  <div style="margin-top: 10px; font-size: 11px; color:#888; background: #222; padding: 8px; border-radius: 6px;">
+    [조작법]<br><b style="color:#ffb84d">좌클릭 드래그: 시점 회전 · 우클릭(홀드): 줌인</b><br>
+    <b style="color:#aac">WASD 이동 · Space 상승 · Ctrl 하강 · Shift 가속</b><br>
+    · 노란 핫스팟 클릭 → 우측 목록이 해당 이미지들로 필터<br>
+    · 파란 카메라 클릭 → 노랑 강조 + 위치 좌표<br>
+    · 우측 이미지 클릭 → 그 카메라 시점으로 이동 (우클릭 → 원본 크게 보기)
+  </div>
+</div>
+
+<div id="imglist">
+  <h3><span id="imgTitle">전체 이미지</span>
+      <button class="reset" id="imgReset" style="display:none">전체 보기</button></h3>
+  <div id="imgHot"></div>
+  <div id="imgItems"></div>
+</div>
+
+<div id="caminfo">
+  <h3>📷 카메라 정보</h3>
+  <div id="camName" style="color:#cde;margin-bottom:6px;word-break:break-all;"></div>
+  <div class="coord" id="camCoord"></div>
+  <button class="clear" id="camClear">선택 해제 / 오버레이 끄기</button>
+</div>
+
+<div id="imgmodal">
+  <div class="bar">
+    <span class="title" id="imTitle"></span>
+    <button id="imZoomOut">➖ 축소</button>
+    <button id="imZoomReset">맞춤</button>
+    <button id="imZoomIn">➕ 확대</button>
+    <button class="close" id="imClose">✕ 닫기</button>
+  </div>
+  <div id="imView">
+    <div id="imStage"><img id="imImg" alt=""><div id="imCrackMarker"></div><div id="imMarker"></div></div>
+  </div>
+  <div id="imCoord">이미지의 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.</div>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"/libs/three.module.js",
+"three/addons/":"/libs/addons/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1a1a1a);
+// Z축을 위(UP)로 설정 (일반적인 드론/사진 측량 좌표계)
+THREE.Object3D.DEFAULT_UP = new THREE.Vector3(0,0,1);
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 1000000);
+camera.up.set(0,0,1);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+const dl=new THREE.DirectionalLight(0xffffff,0.5); dl.position.set(1,1,2); scene.add(dl);
+scene.add(new THREE.AmbientLight(0xffffff,0.85));
+
+// ================= FPS 카메라 제어를 위한 변수 및 설정 =================
+camera.rotation.order = 'ZXY';
+let camYaw = 0;
+let camPitch = Math.PI / 2;
+let isDragging = false;
+let isZooming = false;
+let mouseSensitivity = 1.0;
+let targetFov = 60; 
+const BASE_FOV = 60;
+const ZOOM_FOV = 20;
+
+// ================= 보고서 로딩 =================
+const REPORT = __REPORT__;
+const _q = encodeURIComponent(REPORT);
+const api = (kind, extra = '') => `/api/report/${kind}?p=${_q}${extra}`;
+const imgUrl = (cam, kind) => api('img', `&id=${cam.id}&kind=${kind}`);
+
+async function _fetch(url, as) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url.split('?')[0]} → ${r.status} ${await r.text()}`);
+  return as === 'json' ? r.json() : r.arrayBuffer();
+}
+
+const _boot = document.getElementById('bootMsg');
+const _say = m => { if (_boot) _boot.textContent = m; };
+
+let DATA, _meshBuf;
+try {
+  _say('보고서 메타 읽는 중...');
+  DATA = await _fetch(api('meta'), 'json');
+  _say(`3D 메시 받는 중... (카메라 ${DATA.counts.cameras}대 · 크랙 ${DATA.counts.hotspots}개)`);
+  _meshBuf = await _fetch(api('mesh'), 'buf');
+} catch (e) {
+  _say('보고서를 열 수 없습니다: ' + e.message);
+  throw e;
+}
+document.getElementById('hdrCounts').textContent =
+  `분석 이미지: ${DATA.counts.cameras}장 · 검출 포인트: ${DATA.counts.hotspots}개`;
+
+(function showMeta(){
+  const m = DATA.report_meta;
+  if(!m || !Object.keys(m).length) return;
+  const esc = s => String(s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+  const rows = [];
+  if(m.created) rows.push('생성: ' + esc(m.created.replace('T',' ')));
+  if(m.mesh_file) rows.push('메시: ' + esc(m.mesh_file) + (m.mesh_faces ? ` (${m.mesh_faces.toLocaleString()}면, ${m.mesh_diag_m}m)` : ''));
+  if(m.images_found != null){
+    let s = `이미지: ${m.images_analyzed}/${m.images_found}장 분석`;
+    if(m.images_skipped) s += ` · <span style="color:#ffb84d">${m.images_skipped}장 제외</span>`;
+    rows.push(s);
+  }
+  if(m.width_mm_range) rows.push(`크랙 폭: ${m.width_mm_range[0]}~${m.width_mm_range[1]}mm`);
+  document.getElementById('reportMeta').innerHTML = rows.join('<br>');
+  if(m.scale_warning){
+    document.getElementById('scaleWarn').style.display='block';
+    document.getElementById('scaleWarn').innerHTML =
+      '⚠ 측정 스케일 확인 필요<br><span style="color:#c9a86a">크랙 폭이 비정상적으로 큽니다'
+      + (m.width_mm_range ? ` (최대 ${m.width_mm_range[1]}mm)` : '')
+      + '. 메시가 실척(1단위=1m)이 아닐 수 있어 mm 값을 신뢰하기 어렵습니다.</span>';
+  }
+})();
+
+const gridGroup = new THREE.Group();
+scene.add(gridGroup);
+
+let globalMesh = null;
+let originalMeshColor = 0xcccccc;
+let hasVertexColors = false;
+let sceneCenter = new THREE.Vector3();
+
+try {
+  const geo = new PLYLoader().parse(_meshBuf);
+  _meshBuf = null;
+  geo.computeVertexNormals();
+  hasVertexColors = !!geo.getAttribute('color');
+  originalMeshColor = hasVertexColors ? 0xffffff : 0xcccccc;
+  
+  globalMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      vertexColors: hasVertexColors, 
+      color: originalMeshColor, 
+      side: THREE.DoubleSide
+  }));
+  scene.add(globalMesh);
+  
+  geo.computeBoundingSphere(); const s=geo.boundingSphere;
+  sceneCenter.copy(s.center);
+  camera.position.copy(s.center).add(new THREE.Vector3(0,-s.radius*2.5,s.radius*0.6));
+  camera.near=s.radius/100; camera.far=s.radius*100; 
+  
+  // 타겟 대신 바라보는 방향으로 초기 회전값(Yaw, Pitch) 설정
+  camera.lookAt(s.center);
+  camYaw = camera.rotation.z;
+  camPitch = camera.rotation.x;
+  
+  camera.updateProjectionMatrix();
+} catch(e) {
+  alert('내장 3D 모델(PLY) 로드 실패: ' + e);
+}
+
+function makeDotTex(){
+  const S=64, c=document.createElement('canvas'); c.width=c.height=S;
+  const x=c.getContext('2d');
+  const g=x.createRadialGradient(S/2,S/2,0, S/2,S/2,S/2);
+  g.addColorStop(0,'rgba(255,255,255,1)');   g.addColorStop(0.55,'rgba(255,255,255,1)');
+  g.addColorStop(0.80,'rgba(255,255,255,0.5)'); g.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle=g; x.fillRect(0,0,S,S);
+  const t=new THREE.CanvasTexture(c); t.needsUpdate=true; return t;
+}
+let textPts=null;
+let crackSizeM=0.01;
+function applyCrackSize(){ if(textPts) textPts.material.size = crackSizeM; }
+if (DATA.text_points.length){
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(DATA.text_points.flat(),3));
+  const mat=new THREE.PointsMaterial({color:0xffff00, map:makeDotTex(),
+      sizeAttenuation:true, transparent:true, alphaTest:0.35, depthWrite:true});
+  mat.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace(
+      'gl_Position = projectionMatrix * mvPosition;',
+      'mvPosition.xyz *= 0.996;\n\tgl_Position = projectionMatrix * mvPosition;');
+  };
+  textPts=new THREE.Points(g, mat);
+  scene.add(textPts);
+}
+
+const SEV_MIN_MM=0.1, SEV_MAX_MM=10;
+const SEV_STOPS=[[0.15,0.92,0.35],[0.70,1.00,0.12],[1.00,0.90,0.00],[1.00,0.42,0.00],[1.00,0.06,0.04]];
+function sevT(wmm){
+  const w=Math.max(1e-6, wmm==null?0:wmm);
+  const u=(Math.log10(w)-Math.log10(SEV_MIN_MM))/(Math.log10(SEV_MAX_MM)-Math.log10(SEV_MIN_MM));
+  return Math.pow(Math.min(1,Math.max(0,u)), 0.5);
+}
+function sevColor(wmm){
+  const t=sevT(wmm), n=SEV_STOPS.length-1;
+  const f=t*n, i=Math.min(n-1,Math.floor(f)), k=f-i, a=SEV_STOPS[i], b=SEV_STOPS[i+1];
+  return new THREE.Color(a[0]+(b[0]-a[0])*k, a[1]+(b[1]-a[1])*k, a[2]+(b[2]-a[2])*k);
+}
+const hud=document.getElementById('hud');
+const hudMarkers=[];
+let selIdx=-1;
+let hoverIdx=-1, hoverTag=-1;
+const hotGroup=new THREE.Group(); scene.add(hotGroup);
+
+function makeReticleTex(){
+  const S=256, c=document.createElement('canvas'); c.width=c.height=S;
+  const x=c.getContext('2d');
+  const g=x.createRadialGradient(S/2,S/2,0, S/2,S/2,S/2);
+  g.addColorStop(0,'rgba(255,255,255,0.50)'); g.addColorStop(0.30,'rgba(255,255,255,0.20)');
+  g.addColorStop(0.62,'rgba(255,255,255,0.05)'); g.addColorStop(1,'rgba(255,255,255,0)');
+  x.fillStyle=g; x.fillRect(0,0,S,S);
+  x.translate(S/2,S/2); x.rotate(Math.PI/4);
+  const d=S*0.40;
+  x.shadowColor='#fff'; x.shadowBlur=S*0.14; x.strokeStyle='#fff'; x.lineWidth=S*0.055;
+  x.strokeRect(-d/2,-d/2,d,d); x.strokeRect(-d/2,-d/2,d,d);
+  x.shadowBlur=S*0.10; x.fillStyle='#fff';
+  const i=d*0.44; x.fillRect(-i/2,-i/2,i,i); x.fillRect(-i/2,-i/2,i,i);
+  const t=new THREE.CanvasTexture(c); t.needsUpdate=true; return t;
+}
+const reticleTex=makeReticleTex();
+function fmtWL(h){
+  const w=(h.width_mm_max!==undefined?h.width_mm_max:h.width_mm);
+  const l=h.length_mm;
+  return '폭 '+(w!=null?Number(w).toFixed(2):'?')+'mm<br>길이 '+(l!=null?Math.round(l):'?')+'mm';
+}
+DATA.hotspots.forEach((h,i)=>{
+  const col=sevColor(h.width_mm_max!==undefined?h.width_mm_max:h.width_mm);
+  const rgb='rgb('+Math.round(col.r*255)+','+Math.round(col.g*255)+','+Math.round(col.b*255)+')';
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:reticleTex, color:col.clone(),
+      transparent:true, depthWrite:false}));
+  sp.position.set(h.xyz[0],h.xyz[1],h.xyz[2]);
+  sp.userData={i, sev:col.clone()};
+  hotGroup.add(sp);
+  const el=document.createElement('div'); el.className='hud-marker'; el.style.setProperty('--sev',rgb);
+  el.innerHTML='<div class="leader"></div><div class="tag">'+fmtWL(h)+'</div>';
+  el.addEventListener('mouseenter',()=>{ hoverTag=i; });
+  el.addEventListener('mouseleave',()=>{ if(hoverTag===i) hoverTag=-1; });
+  el.addEventListener('click',ev=>{ ev.stopPropagation(); selectHotspot(i); showHotspotRep(h); });
+  hud.appendChild(el); hudMarkers.push({el,h,i,sprite:sp});
+});
+function selectHotspot(i){
+  if(selIdx>=0 && selIdx!==i) deselectHotspot();
+  selIdx=i;
+  if(i>=0){ const m=hudMarkers[i]; m.el.classList.add('active','show');
+    m.sprite.material.color.setHex(0xffffff); }
+}
+function deselectHotspot(){
+  if(selIdx<0) return;
+  const m=hudMarkers[selIdx]; m.el.classList.remove('active');
+  m.sprite.material.color.copy(m.sprite.userData.sev);
+  if(!m.el.classList.contains('high')) m.el.classList.remove('show');
+  selIdx=-1;
+}
+function updateHUD(){
+  const on = hud.style.display!=='none';
+  hotGroup.visible = on;
+  if(!on) return;
+  const W=innerWidth,H=innerHeight, v=new THREE.Vector3();
+  for(const m of hudMarkers){
+    if(m.i!==hoverIdx && m.i!==selIdx && m.i!==hoverTag){ m.el.style.display='none'; continue; }
+    v.copy(m.sprite.position).project(camera);
+    if(v.z>1||v.x<-1.2||v.x>1.2||v.y<-1.2||v.y>1.2){ m.el.style.display='none'; continue; }
+    m.el.style.display='block'; m.el.classList.add('show');
+    m.el.style.left=((v.x*0.5+0.5)*W)+'px'; m.el.style.top=((-v.y*0.5+0.5)*H)+'px';
+  }
+}
+
+let modelDiag = 1;
+let alignMode = false, alignAspect = null;
+const camGroup = new THREE.Group(); scene.add(camGroup);
+const camMeshes = [];
+const camBySource = {};
+let selectedCam = null;
+const CAM_BLUE = 0x30c0ff, CAM_YELLOW = 0xffee00;
+const allCams = DATA.cameras || [];
+const camDataBySource = {}; allCams.forEach(c => camDataBySource[c.source] = c);
+
+function projectToCam(cam, X){
+  if(cam.fx === undefined) return null;
+  const rx=X[0]-cam.pos[0], ry=X[1]-cam.pos[1], rz=X[2]-cam.pos[2];
+  const Zc = rx*cam.fwd[0]+ry*cam.fwd[1]+rz*cam.fwd[2];
+  if(Zc <= 1e-6) return null;
+  const Xc = rx*cam.right[0]+ry*cam.right[1]+rz*cam.right[2];
+  const Yc = -(rx*cam.up[0]+ry*cam.up[1]+rz*cam.up[2]);
+  const u = (cam.fx*Xc/Zc + cam.cx)/cam.w;
+  const v = (cam.fy*Yc/Zc + cam.cy)/cam.h;
+  if(u<0||u>1||v<0||v>1) return null;
+  return {u, v};
+}
+function pickRepView(h){
+  let fb = null;
+  for(const vw of (h.views||[])){
+    const cam = camDataBySource[vw.source]; if(!cam) continue;
+    if(!fb) fb = {cam, u:0.5, v:0.5};
+    const pr = projectToCam(cam, h.xyz);
+    if(pr) return {cam, u:pr.u, v:pr.v};
+  }
+  return fb;
+}
+
+const CAM_SIZE_M = 0.30;
+function buildCameras(diag){
+  camGroup.clear(); camMeshes.length = 0;
+  const L = CAM_SIZE_M, coneR = CAM_SIZE_M*0.20, coneH = CAM_SIZE_M*0.44;
+  allCams.forEach(c=>{
+    const P=new THREE.Vector3(c.pos[0],c.pos[1],c.pos[2]);
+    const f=new THREE.Vector3(c.fwd[0],c.fwd[1],c.fwd[2]).normalize();
+    const up=new THREE.Vector3(c.up[0],c.up[1],c.up[2]).normalize();
+    const rt=new THREE.Vector3(c.right[0],c.right[1],c.right[2]).normalize();
+    const g=new THREE.Group(); g.userData={cam:c};
+    const coneMat=new THREE.MeshBasicMaterial({color:CAM_BLUE});
+    const cone=new THREE.Mesh(new THREE.ConeGeometry(coneR,coneH,14),coneMat);
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), f);
+    cone.position.copy(P).addScaledVector(f, coneH*0.5);
+    cone.userData={cam:c}; g.add(cone); camMeshes.push(cone);
+    const hh=L*Math.tan(c.fov*Math.PI/180/2), hw=hh*c.aspect;
+    const fc=P.clone().addScaledVector(f,L);
+    const c1=fc.clone().addScaledVector(rt, hw).addScaledVector(up, hh);
+    const c2=fc.clone().addScaledVector(rt,-hw).addScaledVector(up, hh);
+    const c3=fc.clone().addScaledVector(rt,-hw).addScaledVector(up,-hh);
+    const c4=fc.clone().addScaledVector(rt, hw).addScaledVector(up,-hh);
+    const pts=[P,c1, P,c2, P,c3, P,c4, c1,c2, c2,c3, c3,c4, c4,c1];
+    const lmat=new THREE.LineBasicMaterial({color:CAM_BLUE});
+    g.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lmat));
+    g.userData.materials=[coneMat,lmat];
+    camGroup.add(g); camBySource[c.source]=g; c._group=g;
+  });
+}
+function setCamColor(g,color){ if(g&&g.userData.materials) g.userData.materials.forEach(m=>m.color.setHex(color)); }
+
+function selectCamera(c, fly){
+  const g = c._group || camBySource[c.source];
+  if(selectedCam && selectedCam!==g) setCamColor(selectedCam, CAM_BLUE);
+  selectedCam = g; setCamColor(g, CAM_YELLOW);
+  document.getElementById('caminfo').style.display='block';
+  document.getElementById('camName').textContent = c.source;
+  document.getElementById('camCoord').innerHTML =
+    'X : '+c.pos[0].toFixed(3)+'<br>Y : '+c.pos[1].toFixed(3)+'<br>Z : '+c.pos[2].toFixed(3);
+  document.querySelectorAll('.imgItem').forEach(el=>el.classList.toggle('active', el.dataset.src===c.source));
+  if(fly) flyToCamera(c);
+}
+
+let anim=null;
+function flyToCamera(c){
+  const P=new THREE.Vector3(c.pos[0],c.pos[1],c.pos[2]);
+  const f=new THREE.Vector3(c.fwd[0],c.fwd[1],c.fwd[2]).normalize();
+  
+  // [수정] 목표 지점에서도 카메라 up 방향을 항상 Z축으로 고정
+  const up = new THREE.Vector3(0, 0, 1);
+  
+  // 목표 지점의 쿼터니언 계산
+  const tgtMat = new THREE.Matrix4().lookAt(P, P.clone().add(f), up);
+  const qTarget = new THREE.Quaternion().setFromRotationMatrix(tgtMat);
+
+  anim={t:0, dur:0.7, p0:camera.position.clone(), p1:P.clone(),
+        q0:camera.quaternion.clone(), q1:qTarget,
+        f0:camera.fov, f1:c.fov, alignCam:c};
+  alignMode=true; alignAspect=c.aspect;
+}
+
+function tickAnim(dt){
+  if(!anim) return;
+  anim.t=Math.min(1, anim.t + dt/anim.dur);
+  const e = anim.t<0.5 ? 2*anim.t*anim.t : 1-Math.pow(-2*anim.t+2,2)/2;
+  
+  camera.position.lerpVectors(anim.p0, anim.p1, e);
+  camera.quaternion.slerpQuaternions(anim.q0, anim.q1, e);
+  camera.fov = anim.f0 + (anim.f1-anim.f0)*e; 
+  camera.updateProjectionMatrix();
+  
+  if(anim.t>=1){ 
+    enterAlignMode(anim.alignCam); 
+    // 비행이 끝나면 동기화 유지
+    camYaw = camera.rotation.z;
+    camPitch = camera.rotation.x;
+    anim=null; 
+  }
+}
+
+function enterAlignMode(c){
+  alignMode=true; alignAspect=c.aspect;
+  // [수정] 얼라인 모드에서도 카메라 up 방향을 Z축으로 고정
+  camera.up.set(0, 0, 1);
+  camera.fov=c.fov; camera.updateProjectionMatrix();
+}
+function exitAlignMode(){
+  if(anim) anim=null;
+  if(!alignMode) return;
+  alignMode=false; alignAspect=null;
+  camera.up.set(0,0,1);
+  camera.updateProjectionMatrix();
+  // 동기화
+  camYaw = camera.rotation.z;
+  camPitch = camera.rotation.x;
+}
+
+const TW = 70, TH = 50;
+function uvToThumbPx(cam, uv){
+  const a = cam.w / cam.h, b = TW / TH;
+  const dw = (a > b) ? TH * a : TW;
+  const dh = (a > b) ? TH : TW / a;
+  const x = (TW - dw) / 2 + uv.u * dw;
+  const y = (TH - dh) / 2 + uv.v * dh;
+  return (x < 0 || y < 0 || x > TW || y > TH) ? null : {x, y};
+}
+function renderImageList(cams, hotspot, uvmap, info){
+  const items=document.getElementById('imgItems'); items.innerHTML='';
+  document.getElementById('imgTitle').textContent = info ? '지점 연결 이미지' : (hotspot ? '핫스팟 이미지' : '전체 이미지');
+  document.getElementById('imgReset').style.display = (hotspot || info) ? 'inline-block' : 'none';
+  document.getElementById('imgHot').innerHTML = info ? info : (hotspot
+    ? ('▶ "'+hotspot.text+'" · 신뢰도 '+(hotspot.conf*100).toFixed(0)+'% · '+cams.length+'장<br>'+
+       '<span style="color:#888">X '+hotspot.xyz[0].toFixed(2)+'  Y '+hotspot.xyz[1].toFixed(2)+'  Z '+hotspot.xyz[2].toFixed(2)+'</span>')
+    : (allCams.length+'장 · 이미지를 클릭하면 촬영 카메라 시점으로 이동합니다.'));
+  cams.forEach(c=>{
+    const el=document.createElement('div'); el.className='imgItem'; el.dataset.src=c.source;
+    if(selectedCam && camBySource[c.source]===selectedCam) el.classList.add('active');
+    const uv = uvmap && uvmap[c.source];
+    const px = uv ? uvToThumbPx(c, uv) : null;
+    el.innerHTML='<div class="tw"><img loading="lazy" src="'+imgUrl(c,'thumb')+'">'
+      + (px ? '<div class="uvdot" style="left:'+px.x.toFixed(1)+'px;top:'+px.y.toFixed(1)+'px"></div>' : '')
+      + '</div><span class="nm">'+c.source+'</span>';
+    el.title = uv ? '클릭: 카메라 시점으로 이동 · 우클릭: 원본에서 이 지점(노란 원) 크게 보기'
+                  : '클릭: 카메라 시점으로 이동 · 우클릭: 원본 크게 보기(3D 좌표 측정)';
+    el.onclick=()=>selectCamera(c, true);
+    el.oncontextmenu=(ev)=>{ ev.preventDefault(); openImageModal(c, uv || null, uv ? 'inspect' : null); };
+    items.appendChild(el);
+  });
+}
+function filterByHotspot(h){
+  const srcs=new Set((h.views||[]).map(v=>v.source));
+  renderImageList(allCams.filter(c=>srcs.has(c.source)), h);
+}
+
+let inspectMode=false;
+function setInspect(on){
+  inspectMode = !!on;
+  if(inspectMode && measureMode) setMode(measureMode);
+  document.getElementById('btnInspect').classList.toggle('active', inspectMode);
+  renderer.domElement.style.cursor = inspectMode ? 'crosshair' : 'default';
+  document.getElementById('inspectMsg').textContent = inspectMode
+    ? '구조물의 한 점을 클릭하세요 → 그 점이 찍힌 사진들이 뜹니다.'
+    : '끄면 일반 조작으로 돌아갑니다.';
+  if(!inspectMode){
+    if(worldMarker) worldMarker.visible=false;
+    renderImageList(allCams, null);
+  }
+}
+function inspectAt(e){
+  const hit = pickMesh(e);
+  if(!hit){ document.getElementById('inspectMsg').textContent='구조물 표면을 클릭하세요.'; return; }
+  const p = hit.point, n = hit.normal;
+  placeWorldMarker(p);
+  const P=[p.x,p.y,p.z], uvmap={}, seen=[];
+  let nFrustum=0;
+  for(const c of allCams){
+    const uv = projectToCam(c, P);
+    if(!uv) continue;
+    nFrustum++;
+    if(n){
+      const dx=c.pos[0]-p.x, dy=c.pos[1]-p.y, dz=c.pos[2]-p.z;
+      if(n.x*dx + n.y*dy + n.z*dz <= 0) continue;
+    }
+    uvmap[c.source]=uv;
+    seen.push({c, d: Math.hypot(c.pos[0]-p.x, c.pos[1]-p.y, c.pos[2]-p.z)});
+  }
+  seen.sort((a,b)=>a.d-b.d);
+  const info = '▶ 이 지점이 찍힌 사진 '+seen.length+'장 (전체 '+allCams.length+'대 중)<br>'
+    + '<span style="color:#888">X '+p.x.toFixed(2)+'  Y '+p.y.toFixed(2)+'  Z '+p.z.toFixed(2)
+    + ' · 노란 원 = 이 지점 · 법선 뒤 '+(nFrustum-seen.length)+'대 제외</span>';
+  renderImageList(seen.map(s=>s.c), null, uvmap, info);
+  document.getElementById('inspectMsg').textContent =
+    seen.length ? '다른 지점을 클릭하면 갱신됩니다.' : '이 지점을 찍은 사진이 없습니다.';
+}
+
+function makeCrop(container, cam, u, v, cropFrac){
+  container.innerHTML='';
+  const box=document.createElement('div');
+  box.style.cssText='position:relative;width:100%;height:210px;overflow:hidden;border-radius:8px;background:#000;cursor:pointer;';
+  const im=new Image(); im.style.cssText='position:absolute;left:0;top:0;max-width:none;';
+  im.onload=function(){
+    const CW=box.clientWidth||280, CH=box.clientHeight||210;
+    const s=CW/(im.naturalWidth*cropFrac);
+    const w=im.naturalWidth*s, hh=im.naturalHeight*s;
+    im.style.width=w+'px'; im.style.height=hh+'px';
+    im.style.left=(CW/2 - u*w)+'px'; im.style.top=(CH/2 - v*hh)+'px';
+  };
+  im.src=imgUrl(cam,'full');
+  box.appendChild(im);
+  const mk=document.createElement('div');
+  mk.style.cssText='position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;border:2px solid #ff3b3b;border-radius:50%;box-shadow:0 0 9px #ff3b3b;pointer-events:none;';
+  box.appendChild(mk);
+  box.title='좌클릭: 카메라 시점으로 이동 · 우클릭: 자세히 보기(원본)';
+  box.onclick=()=>selectCamera(cam, true);
+  box.oncontextmenu=(e)=>{ e.preventDefault(); openImageModal(cam, {u:u, v:v}); };
+  container.appendChild(box);
+}
+
+function showHotspotRep(h){
+  document.getElementById('imgTitle').textContent='대표 크랙 이미지';
+  document.getElementById('imgReset').style.display='inline-block';
+  const wtxt = (h.width_mm!==undefined) ? (h.text||'') : (h.text||'크랙');
+  document.getElementById('imgHot').innerHTML =
+    '▶ '+wtxt+'<br><span style="color:#888">X '+h.xyz[0].toFixed(2)+'  Y '+h.xyz[1].toFixed(2)+'  Z '+h.xyz[2].toFixed(2)+'</span>';
+  const items=document.getElementById('imgItems'); items.innerHTML='';
+  const rep=pickRepView(h);
+  if(!rep){ items.innerHTML='<div style="color:#888;padding:8px">대표 이미지를 찾지 못했습니다.</div>'; return; }
+  const crop=document.createElement('div'); items.appendChild(crop);
+  makeCrop(crop, rep.cam, rep.u, rep.v, 0.32);
+  const lbl=document.createElement('div');
+  lbl.style.cssText='font-size:11px;color:#9cf;margin:7px 0;';
+  lbl.textContent='대표 뷰: '+rep.cam.source+'  (좌클릭: 시점 이동 · 우클릭: 자세히)';
+  items.appendChild(lbl);
+  const others=(h.views||[]).filter(v=>!rep.cam || v.source!==rep.cam.source);
+  if(others.length){
+    const t=document.createElement('div');
+    t.style.cssText='font-size:11px;color:#888;margin-top:8px;';
+    t.textContent='다른 뷰 '+others.length+'장 (좌클릭: 시점 이동 · 우클릭: 자세히)';
+    items.appendChild(t);
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin-top:5px;';
+    others.forEach(vw=>{
+      const cam=camDataBySource[vw.source]; if(!cam) return;
+      const im=document.createElement('img'); im.src=imgUrl(cam,'thumb');
+      im.style.cssText='width:58px;height:44px;object-fit:cover;border-radius:4px;cursor:pointer;border:1px solid #333;';
+      im.title=cam.source+' — 좌클릭: 시점 이동+대표교체 · 우클릭: 자세히';
+      im.onclick=()=>{ selectCamera(cam, true);
+        const pr=projectToCam(cam,h.xyz)||{u:0.5,v:0.5};
+        makeCrop(crop, cam, pr.u, pr.v, 0.32);
+        lbl.textContent='대표 뷰: '+cam.source+'  (좌클릭: 시점 이동 · 우클릭: 자세히)'; };
+      im.oncontextmenu=(e)=>{ e.preventDefault();
+        const pr=projectToCam(cam,h.xyz)||{u:0.5,v:0.5}; openImageModal(cam, pr); };
+      row.appendChild(im);
+    });
+    items.appendChild(row);
+  }
+}
+document.getElementById('imgReset').onclick=()=>{
+  deselectHotspot();
+  if(worldMarker) worldMarker.visible=false;
+  renderImageList(allCams, null);
+};
+document.getElementById('camClear').onclick=()=>{
+  if(selectedCam){ setCamColor(selectedCam,CAM_BLUE); selectedCam=null; }
+  document.getElementById('caminfo').style.display='none';
+  document.querySelectorAll('.imgItem').forEach(el=>el.classList.remove('active'));
+  if(worldMarker) worldMarker.visible=false;
+};
+document.getElementById('ckCam').onchange=e=>{ camGroup.visible=e.target.checked; };
+renderImageList(allCams, null);
+
+let modalCam=null, modalMark=null, mv={scale:1,tx:0,ty:0}, mvFitScale=1, mDrag=null, mMoved=false;
+let worldMarker=null;
+
+function crackMarkerOpacity(){
+  const r = mv.scale / (mvFitScale || mv.scale);
+  if(r <= 2) return 1;
+  if(r >= 8) return 0.05;
+  return 1 - (r - 2) / 6 * 0.95;
+}
+
+function openImageModal(c, markUV, kind){
+  modalCam=c; modalMark = markUV || null;
+  document.getElementById('imTitle').textContent=c.source;
+  document.getElementById('imMarker').style.display='none';
+  const cm=document.getElementById('imCrackMarker');
+  cm.style.display='none';
+  cm.classList.toggle('inspect', kind==='inspect');
+  document.getElementById('imCoord').textContent = !modalMark
+    ? '이미지의 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.'
+    : (kind==='inspect'
+       ? '노란 원 = 클릭하신 지점 · 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.'
+       : '빨간 원 = 검출된 크랙 위치 · 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.');
+  const img=document.getElementById('imImg');
+  img.onload=()=>{ fitModal(); placeCrackMarker(); };
+  img.src=imgUrl(c,'full');
+  document.getElementById('imgmodal').style.display='flex';
+}
+function placeCrackMarker(){
+  const mk=document.getElementById('imCrackMarker'), img=document.getElementById('imImg');
+  if(modalMark && img.naturalWidth){
+    mk.style.left=(modalMark.u*img.naturalWidth)+'px';
+    mk.style.top =(modalMark.v*img.naturalHeight)+'px';
+    mk.style.display='block';
+    mk.style.opacity=crackMarkerOpacity();
+  } else { mk.style.display='none'; }
+}
+function closeModal(){ document.getElementById('imgmodal').style.display='none'; modalCam=null; }
+function applyModal(){
+  document.getElementById('imStage').style.transform='translate('+mv.tx+'px,'+mv.ty+'px) scale('+mv.scale+')';
+  const mk=document.getElementById('imCrackMarker');
+  if(mk && mk.style.display!=='none') mk.style.opacity=crackMarkerOpacity();
+}
+function fitModal(){
+  const img=document.getElementById('imImg'), view=document.getElementById('imView');
+  if(!img.naturalWidth) return;
+  const s=Math.min(view.clientWidth/img.naturalWidth, view.clientHeight/img.naturalHeight)*0.98;
+  mvFitScale = s;
+  mv={scale:s, tx:(view.clientWidth-img.naturalWidth*s)/2, ty:(view.clientHeight-img.naturalHeight*s)/2};
+  applyModal();
+}
+function zoomModal(mx,my,fac){
+  const ns=Math.max(0.05, Math.min(30, mv.scale*fac));
+  mv.tx=mx-(mx-mv.tx)*(ns/mv.scale); mv.ty=my-(my-mv.ty)*(ns/mv.scale); mv.scale=ns; applyModal();
+}
+
+function imageToWorld(cam, nx, ny){
+  if(!globalMesh) return null;
+  const px=nx*cam.w, py=ny*cam.h;
+  const x=(px-cam.cx)/cam.fx, y=(py-cam.cy)/cam.fy;
+  const P=new THREE.Vector3(cam.pos[0],cam.pos[1],cam.pos[2]);
+  const rt=new THREE.Vector3(cam.right[0],cam.right[1],cam.right[2]);
+  const up=new THREE.Vector3(cam.up[0],cam.up[1],cam.up[2]);
+  const f=new THREE.Vector3(cam.fwd[0],cam.fwd[1],cam.fwd[2]);
+  const dir=rt.multiplyScalar(x).addScaledVector(up,-y).add(f).normalize();
+  const hit=new THREE.Raycaster(P, dir).intersectObject(globalMesh,false);
+  return hit.length ? hit[0].point.clone() : null;
+}
+function placeWorldMarker(p){
+  if(!worldMarker){
+    worldMarker=new THREE.Mesh(new THREE.SphereGeometry(1,16,16),
+        new THREE.MeshBasicMaterial({color:0xff33cc, depthTest:false}));
+    worldMarker.renderOrder=1001; scene.add(worldMarker);
+  }
+  worldMarker.visible=true; worldMarker.position.copy(p);
+  worldMarker.scale.setScalar(MARK_PX*worldPerPixel(camera.position.distanceTo(p)));
+}
+function onModalClick(e){
+  if(!modalCam) return;
+  const img=document.getElementById('imImg'), rect=img.getBoundingClientRect();
+  const nx=(e.clientX-rect.left)/rect.width, ny=(e.clientY-rect.top)/rect.height;
+  if(nx<0||ny<0||nx>1||ny>1) return;
+  const mk=document.getElementById('imMarker');
+  mk.style.left=(nx*img.naturalWidth)+'px'; mk.style.top=(ny*img.naturalHeight)+'px'; mk.style.display='block';
+  const w=imageToWorld(modalCam, nx, ny);
+  if(w){
+    document.getElementById('imCoord').innerHTML=
+      '📍 3D 좌표 &nbsp; X <b>'+w.x.toFixed(3)+'</b> &nbsp; Y <b>'+w.y.toFixed(3)+'</b> &nbsp; Z <b>'+w.z.toFixed(3)+'</b> &nbsp;(단위 m · 자홍색 마커는 3D 화면에도 표시)';
+    placeWorldMarker(w);
+  } else {
+    document.getElementById('imCoord').textContent='이 점은 3D 모델 표면과 만나지 않습니다 (배경/빈 공간).';
+  }
+}
+(function(){
+  const view=document.getElementById('imView');
+  view.addEventListener('pointerdown', e=>{ mDrag={x:e.clientX,y:e.clientY,tx:mv.tx,ty:mv.ty}; mMoved=false; view.setPointerCapture(e.pointerId); });
+  view.addEventListener('pointermove', e=>{ if(!mDrag)return; const dx=e.clientX-mDrag.x, dy=e.clientY-mDrag.y;
+    if(Math.abs(dx)+Math.abs(dy)>3) mMoved=true; mv.tx=mDrag.tx+dx; mv.ty=mDrag.ty+dy; applyModal(); });
+  view.addEventListener('pointerup', e=>{ const dragged=mMoved; mDrag=null; if(!dragged) onModalClick(e); });
+  view.addEventListener('wheel', e=>{ e.preventDefault(); const r=view.getBoundingClientRect();
+    zoomModal(e.clientX-r.left, e.clientY-r.top, e.deltaY<0?1.15:1/1.15); }, {passive:false});
+  document.getElementById('imClose').onclick=closeModal;
+  document.getElementById('imZoomIn').onclick=()=>{ const r=view.getBoundingClientRect(); zoomModal(r.width/2,r.height/2,1.25); };
+  document.getElementById('imZoomOut').onclick=()=>{ const r=view.getBoundingClientRect(); zoomModal(r.width/2,r.height/2,1/1.25); };
+  document.getElementById('imZoomReset').onclick=fitModal;
+  window.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
+})();
+
+let baseScale=1;
+function fitSizes(){
+  const box = new THREE.Box3().setFromObject(globalMesh || scene); 
+  const d = box.getSize(new THREE.Vector3()).length();
+  baseScale = d * 0.005;
+  modelDiag = d; buildCameras(d);
+  applyCrackSize();
+
+  gridGroup.clear();
+  const center = box.getCenter(new THREE.Vector3());
+  sceneCenter.copy(center);
+  const minZ = box.min.z; 
+  
+  const gridHelper = new THREE.GridHelper(d * 1.5, 50, 0x888888, 0x444444);
+  gridHelper.rotation.x = Math.PI / 2;
+  gridHelper.position.set(center.x, center.y, minZ);
+  gridGroup.add(gridHelper);
+  
+  const axesHelper = new THREE.AxesHelper(d * 0.3);
+  axesHelper.position.set(center.x, center.y, minZ);
+  axesHelper.material.linewidth = 3;
+  gridGroup.add(axesHelper);
+}
+setTimeout(fitSizes, 500);
+
+document.getElementById('ckText').onchange = e => { if(textPts) textPts.visible = e.target.checked; };
+document.getElementById('ckHot').onchange = e => { hud.style.display = e.target.checked ? '' : 'none'; };
+document.getElementById('ckGrid').onchange = e => { gridGroup.visible = e.target.checked; };
+
+document.getElementById('colorSelect').onchange = e => {
+  if(textPts) textPts.material.color.setHex(parseInt(e.target.value));
+};
+document.getElementById('sizeSelect').onchange = e => { crackSizeM = parseFloat(e.target.value); applyCrackSize(); };
+
+document.getElementById('ckDarkMesh').onchange = e => {
+  if(!globalMesh) return;
+  if(e.target.checked) {
+      globalMesh.material.color.setHex(0x111111);
+      if(globalMesh.material.vertexColors) globalMesh.material.vertexColors = false;
+  } else {
+      globalMesh.material.color.setHex(originalMeshColor);
+      if(hasVertexColors) globalMesh.material.vertexColors = true;
+  }
+  globalMesh.material.needsUpdate = true;
+};
+
+const ray=new THREE.Raycaster(), mouse=new THREE.Vector2(); let mIn=false;
+renderer.domElement.addEventListener('mousemove',e=>{mouse.x=(e.clientX/innerWidth)*2-1;mouse.y=-(e.clientY/innerHeight)*2+1;mIn=true;});
+renderer.domElement.addEventListener('mouseleave',()=>mIn=false);
+
+function updateHover(){
+  if(measureMode||!mIn||isDragging){ renderer.domElement.style.cursor='default'; hoverIdx=-1; return; }
+  ray.setFromCamera(mouse,camera);
+  const c = camGroup.visible ? ray.intersectObjects(camMeshes,false) : [];
+  const s = hotGroup.visible ? ray.intersectObjects(hotGroup.children,false) : [];
+  hoverIdx = s.length ? s[0].object.userData.i : -1;
+  renderer.domElement.style.cursor = (c.length||hoverIdx>=0) ? 'pointer' : (inspectMode ? 'crosshair' : 'default');
+}
+
+function hotBlocked(dist){
+  if(!globalMesh) return false;
+  const f=ray.far; ray.far=dist*0.995;
+  const hit=ray.intersectObject(globalMesh,false).length>0;
+  ray.far=f; return hit;
+}
+
+// ================= 마우스 이벤트 (감도 조절, 회전, 줌인) =================
+document.getElementById('camSens').oninput = (e) => {
+  mouseSensitivity = parseFloat(e.target.value);
+  document.getElementById('camSensVal').textContent = mouseSensitivity.toFixed(1);
+};
+
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+
+let dragDelta = 0;
+
+renderer.domElement.addEventListener('mousedown', e => {
+  dragDelta = 0;
+  if (e.button === 0) {
+    // --- [수정] 좌클릭 시 인터랙션을 방해하지 않도록 예외 처리 추가 ---
+    // 1. 측정 모드나 지점 검사 모드가 활성화되어 있다면 드래그(시점 전환) 진입 방지
+    if (measureMode || inspectMode) return;
+    
+    // 2. 핫스팟 위에 마우스가 있는 경우 진입 방지
+    if (hoverIdx >= 0) return;
+    
+    // 3. 카메라 오브젝트 마커 위에 있는 경우 진입 방지
+    ray.setFromCamera(mouse, camera);
+    const camHit = camGroup.visible ? ray.intersectObjects(camMeshes, false) : [];
+    if (camHit.length > 0) return;
+    // ------------------------------------------------------------------
+
+    isDragging = true;
+    // 조건에 걸리지 않은 빈 허공일 경우에만 포인터 잠금 요청 및 드래그 시작
+    renderer.domElement.requestPointerLock();
+  } else if (e.button === 2) {
+    isZooming = true;
+    targetFov = ZOOM_FOV;
+  }
+});
+
+// 화면 밖으로 커서가 나간 상태(혹은 Pointer Lock 상태)에서의 마우스 클릭 해제 감지
+document.addEventListener('mouseup', e => {
+  if (e.button === 0) {
+    isDragging = false;
+    // 커서 고정 해제 및 다시 표시
+    if (document.pointerLockElement === renderer.domElement) {
+      document.exitPointerLock();
+    }
+  } else if (e.button === 2) {
+    isZooming = false;
+    targetFov = BASE_FOV;
+  }
+});
+
+// (안전장치) 시스템 등 외부 요인에 의해 포인터 락이 풀리는 경우의 상태 동기화
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== renderer.domElement) {
+    isDragging = false;
+  }
+});
+
+// Pointer Lock 상태에서의 움직임 계산을 위해 이벤트 리스너를 document 단위로 확장
+document.addEventListener('mousemove', e => {
+  // 포인터가 잠겨있고 좌클릭(isDragging) 중일 때만 동작
+  if (isDragging && document.pointerLockElement === renderer.domElement) {
+    const movementX = e.movementX || 0;
+    const movementY = e.movementY || 0;
+    dragDelta += Math.abs(movementX) + Math.abs(movementY);
+
+    const sens = mouseSensitivity * 0.002;
+    camYaw -= movementX * sens;
+    camPitch -= movementY * sens;
+
+    camera.rotation.z = camYaw;
+    camera.rotation.x = camPitch;
+  }
+});
+
+renderer.domElement.addEventListener('click',e=>{
+  if (dragDelta > 5) return; // 드래그 시 클릭 무시
+  
+  if(measureMode){ onMeasureClick(e); return; }
+  if(inspectMode){ inspectAt(e); return; }
+  mouse.x=(e.clientX/innerWidth)*2-1; mouse.y=-(e.clientY/innerHeight)*2+1;
+  ray.setFromCamera(mouse,camera);
+  const hotHit = hotGroup.visible ? ray.intersectObjects(hotGroup.children,false) : [];
+  if(hotHit.length && !hotBlocked(hotHit[0].distance)){
+    const i=hotHit[0].object.userData.i;
+    selectHotspot(i); showHotspotRep(hudMarkers[i].h); return;
+  }
+  const camHit = camGroup.visible ? ray.intersectObjects(camMeshes,false) : [];
+  if(camHit.length) selectCamera(camHit[0].object.userData.cam, false);
+});
+
+// ================= 측정 도구 =================
+let measureMode=null, measPts=[], measNormals=[], lastMeasure=null;
+const measureGroup=new THREE.Group(); scene.add(measureGroup);
+const DIST_COLOR=0x00e5ff, RAD_COLOR=0xff9800;
+
+const HOT_PX = 7;
+const MARK_PX = 5;
+const LABEL_PX = 26;
+function worldPerPixel(dist){
+  const vFOV = camera.fov * Math.PI/180;
+  return (2*dist*Math.tan(vFOV/2)) / (renderer.domElement.clientHeight || innerHeight);
+}
+function keepConstantSize(){
+  const cp = camera.position;
+  if(worldMarker && worldMarker.visible){
+    worldMarker.scale.setScalar(MARK_PX * worldPerPixel(cp.distanceTo(worldMarker.position)));
+  }
+  for(const o of measureGroup.children){
+    if(o.isSprite){
+      const h = LABEL_PX * worldPerPixel(cp.distanceTo(o.position));
+      o.scale.set(h*(o.userData.aspect||1), h, 1);
+    } else if(o.userData && o.userData.mark){
+      o.scale.setScalar(MARK_PX * worldPerPixel(cp.distanceTo(o.position)));
+    }
+  }
+}
+
+const HOT_QUAD = HOT_PX*3.7;
+const HOT_LIFT = 0.004;
+const _hp = new THREE.Vector3();
+function updateReticles(){
+  if(!hotGroup.visible) return;
+  const cp=camera.position, t=performance.now();
+  const pulse = 0.90 + 0.10*(0.5+0.5*Math.sin(t/2200*Math.PI*2));
+  for(const m of hudMarkers){
+    const x=m.h.xyz; _hp.set(x[0],x[1],x[2]);
+    const d=cp.distanceTo(_hp);
+    m.sprite.position.lerpVectors(_hp, cp, HOT_LIFT);
+    m.sprite.scale.setScalar(HOT_QUAD * worldPerPixel(d*(1-HOT_LIFT)) * (m.i===selIdx?1.28:1));
+    m.sprite.material.opacity = (m.i===selIdx) ? 1 : pulse;
+  }
+}
+
+function setMeasResult(html){ document.getElementById('measResult').innerHTML=html; }
+function modePrompt(){
+  if(measureMode==='distance') return '① 첫 번째 점을 클릭하세요.';
+  if(measureMode==='radius')   return '① 원의 중심을 클릭하세요.';
+  return '측정 모드를 선택하세요.';
+}
+function updateModeButtons(){
+  document.getElementById('btnDist').classList.toggle('active', measureMode==='distance');
+  document.getElementById('btnRad').classList.toggle('active', measureMode==='radius');
+}
+function disposeObj(o){
+  if(o.geometry) o.geometry.dispose();
+  if(o.material){ if(o.material.map) o.material.map.dispose(); o.material.dispose(); }
+}
+function resetMeasure(clearText){
+  measPts=[]; measNormals=[]; lastMeasure=null;
+  while(measureGroup.children.length){ disposeObj(measureGroup.children.pop()); }
+  if(clearText!==false) setMeasResult(modePrompt());
+}
+function setMode(m){
+  measureMode = (measureMode===m) ? null : m;
+  if(measureMode && inspectMode) setInspect(false);
+  resetMeasure(false); updateModeButtons();
+  renderer.domElement.style.cursor = measureMode ? 'crosshair' : 'default';
+  setMeasResult(measureMode ? modePrompt() : '측정 모드를 선택하세요.');
+}
+
+function pickMesh(e){
+  if(!globalMesh) return null;
+  const mx=(e.clientX/innerWidth)*2-1, my=-(e.clientY/innerHeight)*2+1;
+  ray.setFromCamera(new THREE.Vector2(mx,my), camera);
+  const hit=ray.intersectObject(globalMesh,false);
+  if(!hit.length) return null;
+  const h=hit[0]; let normal=null;
+  if(h.face){
+    normal=h.face.normal.clone()
+      .applyMatrix3(new THREE.Matrix3().getNormalMatrix(globalMesh.matrixWorld)).normalize();
+  }
+  return {point:h.point.clone(), normal};
+}
+
+function addMarker(pos,color){
+  const m=new THREE.Mesh(new THREE.SphereGeometry(1,16,16),
+      new THREE.MeshBasicMaterial({color, depthTest:false}));
+  m.renderOrder=999; m.position.copy(pos); m.userData.mark=true;
+  m.scale.setScalar(MARK_PX * worldPerPixel(camera.position.distanceTo(pos)));
+  measureGroup.add(m); return m;
+}
+function addLine(a,b,color){
+  const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints([a,b]),
+      new THREE.LineBasicMaterial({color, depthTest:false}));
+  l.renderOrder=998; measureGroup.add(l); return l;
+}
+function addCircle(center,normal,radius,color){
+  let n = normal ? normal.clone().normalize()
+                 : camera.getWorldDirection(new THREE.Vector3()).clone().negate();
+  let tmp=new THREE.Vector3(1,0,0); if(Math.abs(n.dot(tmp))>0.9) tmp.set(0,1,0);
+  const u=new THREE.Vector3().crossVectors(n,tmp).normalize();
+  const v=new THREE.Vector3().crossVectors(n,u).normalize();
+  const pts=[], seg=100;
+  for(let i=0;i<=seg;i++){ const t=i/seg*Math.PI*2;
+    pts.push(center.clone().addScaledVector(u,Math.cos(t)*radius).addScaledVector(v,Math.sin(t)*radius)); }
+  const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({color, depthTest:false}));
+  l.renderOrder=998; measureGroup.add(l); return l;
+}
+function makeLabel(text,pos,cssColor){
+  const pad=22, fs=46; const cv=document.createElement('canvas'); let ctx=cv.getContext('2d');
+  ctx.font='bold '+fs+'px Segoe UI, sans-serif'; const tw=Math.ceil(ctx.measureText(text).width);
+  cv.width=tw+pad*2; cv.height=fs+pad; ctx=cv.getContext('2d');
+  ctx.font='bold '+fs+'px Segoe UI, sans-serif';
+  ctx.fillStyle='rgba(0,0,0,0.72)'; ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle=cssColor; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(text, cv.width/2, cv.height/2);
+  const tex=new THREE.CanvasTexture(cv); tex.minFilter=THREE.LinearFilter;
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, depthTest:false, transparent:true}));
+  sp.renderOrder=1000; sp.position.copy(pos);
+  sp.userData.aspect = cv.width/cv.height;
+  const h = LABEL_PX * worldPerPixel(camera.position.distanceTo(pos));
+  sp.scale.set(h*sp.userData.aspect, h, 1);
+  measureGroup.add(sp); return sp;
+}
+
+function fmtUnit(meters){
+  const u=document.getElementById('unitSelect').value;
+  const mm=meters*1000, cm=meters*100;
+  const f=(v,d)=>v.toLocaleString('en-US',{maximumFractionDigits:d, minimumFractionDigits:2});
+  if(u==='mm') return f(mm,2)+' mm';
+  if(u==='cm') return f(cm,2)+' cm';
+  if(u==='m')  return f(meters,4)+' m';
+  if(mm<10)    return f(mm,2)+' mm';
+  if(mm<1000)  return f(cm,2)+' cm';
+  return f(meters,4)+' m';
+}
+function allUnits(meters){
+  return (meters*1000).toFixed(2)+' mm · '+(meters*100).toFixed(2)+' cm · '+meters.toFixed(4)+' m';
+}
+function showResult(){
+  if(!lastMeasure) return;
+  if(lastMeasure.type==='distance'){
+    setMeasResult('<b style="color:#00e5ff;">거리</b><br>'+
+      '<span style="font-size:16px;font-weight:bold;">'+fmtUnit(lastMeasure.value)+'</span><br>'+
+      '<span style="color:#aaa;">'+allUnits(lastMeasure.value)+'</span>');
+  } else {
+    const r=lastMeasure.value;
+    setMeasResult('<b style="color:#ff9800;">반경</b><br>'+
+      '<span style="font-size:16px;font-weight:bold;">R = '+fmtUnit(r)+'</span><br>'+
+      '<span style="color:#ccc;">지름 D = '+fmtUnit(r*2)+'</span><br>'+
+      '<span style="color:#888;">'+allUnits(r)+'</span>');
+  }
+}
+function relabel(){
+  if(!lastMeasure) return;
+  if(lastMeasure.label){ measureGroup.remove(lastMeasure.label); disposeObj(lastMeasure.label); }
+  const txt=(lastMeasure.type==='radius'?'R ':'')+fmtUnit(lastMeasure.value);
+  lastMeasure.label=makeLabel(txt, lastMeasure.mid,
+      lastMeasure.type==='radius' ? '#ff9800' : '#00e5ff');
+}
+
+function onMeasureClick(e){
+  const hit=pickMesh(e);
+  if(!hit){ setMeasResult('⚠ 모델 표면을 클릭하세요 (빈 공간이 선택됨).'); return; }
+  if(measureMode==='distance'){
+    if(measPts.length>=2) resetMeasure(false);
+    measPts.push(hit.point); addMarker(hit.point, DIST_COLOR);
+    if(measPts.length<2){ setMeasResult('② 두 번째 점을 클릭하세요.'); return; }
+    const d=measPts[0].distanceTo(measPts[1]);
+    addLine(measPts[0],measPts[1],DIST_COLOR);
+    const mid=measPts[0].clone().add(measPts[1]).multiplyScalar(0.5);
+    lastMeasure={type:'distance', value:d, mid:mid, label:null};
+    relabel(); showResult();
+  } else if(measureMode==='radius'){
+    if(measPts.length>=2) resetMeasure(false);
+    measPts.push(hit.point); measNormals.push(hit.normal);
+    addMarker(hit.point, measPts.length===1 ? 0xffc107 : RAD_COLOR);
+    if(measPts.length<2){ setMeasResult('② 원 위(가장자리)의 한 점을 클릭하세요.'); return; }
+    const c=measPts[0], p=measPts[1], r=c.distanceTo(p);
+    addLine(c,p,RAD_COLOR); addCircle(c, measNormals[0], r, RAD_COLOR);
+    const mid=c.clone().add(p).multiplyScalar(0.5);
+    lastMeasure={type:'radius', value:r, mid:mid, label:null};
+    relabel(); showResult();
+  }
+}
+
+document.getElementById('btnInspect').onclick=()=>setInspect(!inspectMode);
+document.getElementById('btnDist').onclick=()=>setMode('distance');
+document.getElementById('btnRad').onclick =()=>setMode('radius');
+document.getElementById('btnReset').onclick=()=>resetMeasure(true);
+document.getElementById('unitSelect').onchange=()=>{ showResult(); relabel(); };
+
+addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);});
+renderer.domElement.addEventListener('mousedown', exitAlignMode);
+renderer.domElement.addEventListener('wheel', exitAlignMode, {passive:true});
+document.getElementById('boot').style.display='none';
+
+const _st = {on:false, el:document.getElementById('stats'), n:0, t0:performance.now(),
+             fps:0, acc:{hover:0, retic:0, hud:0, render:0, total:0}};
+addEventListener('keydown', e => {
+  if(e.key === 'F2'){ _st.on = !_st.on; _st.el.style.display = _st.on ? 'block' : 'none'; }
+});
+const _now = () => performance.now();
+function _statsTick(){
+  _st.n++;
+  const now = _now(), dt = now - _st.t0;
+  if(dt >= 500){
+    const f = _st.n, a = _st.acc;
+    _st.fps = f / (dt/1000);
+    const r = renderer.info.render, mem = renderer.info.memory;
+    _st.el.textContent =
+      `FPS ${_st.fps.toFixed(1)}   frame ${(dt/f).toFixed(2)}ms\n` +
+      `── 프레임당 ────────────\n` +
+      `hover      ${(a.hover/f).toFixed(2)}ms\n` +
+      `reticles   ${(a.retic/f).toFixed(2)}ms\n` +
+      `hud(DOM)   ${(a.hud/f).toFixed(2)}ms\n` +
+      `render     ${(a.render/f).toFixed(2)}ms\n` +
+      `기타       ${((dt - a.total)/f).toFixed(2)}ms\n` +
+      `── 씬 ──────────────────\n` +
+      `draw calls ${r.calls}\n` +
+      `triangles  ${r.triangles.toLocaleString()}\n` +
+      `points     ${r.points.toLocaleString()}\n` +
+      `geometries ${mem.geometries}   textures ${mem.textures}\n` +
+      `pixelRatio ${renderer.getPixelRatio()}  ${renderer.domElement.width}×${renderer.domElement.height}`;
+    _st.n = 0; _st.t0 = now;
+    for(const k in a) a[k] = 0;
+  }
+}
+
+const _keys = new Set();
+const _MOVE = ['KeyW','KeyA','KeyS','KeyD','Space','ControlLeft','ControlRight'];
+function _typingTarget(){
+  const t = document.activeElement, tag = t && t.tagName;
+  return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+}
+addEventListener('keydown', e=>{
+  if(_typingTarget()) return;
+  if(_MOVE.includes(e.code)){ _keys.add(e.code); e.preventDefault(); }
+  else if(e.code==='ShiftLeft'||e.code==='ShiftRight') _keys.add(e.code);
+});
+addEventListener('keyup', e=>{ _keys.delete(e.code); });
+addEventListener('blur', ()=> _keys.clear());
+
+const _fwd=new THREE.Vector3(), _right=new THREE.Vector3(), _move=new THREE.Vector3();
+function updateFly(dt){
+  const f = (_keys.has('KeyW')?1:0) - (_keys.has('KeyS')?1:0);
+  const r = (_keys.has('KeyD')?1:0) - (_keys.has('KeyA')?1:0);
+  const u = (_keys.has('Space')?1:0) - ((_keys.has('ControlLeft')||_keys.has('ControlRight'))?1:0);
+  if(!f && !r && !u) return;
+  if(alignMode) exitAlignMode();
+  camera.getWorldDirection(_fwd);
+  _right.crossVectors(_fwd, camera.up).normalize();
+  _move.set(0,0,0).addScaledVector(_fwd, f).addScaledVector(_right, r);
+  _move.z += u;
+  if(_move.lengthSq() === 0) return;
+  _move.normalize();
+  const sprint = (_keys.has('ShiftLeft')||_keys.has('ShiftRight')) ? 4 : 1;
+  _move.multiplyScalar((modelDiag||1) * 0.15 * dt * sprint);
+  camera.position.add(_move); 
+}
+
+const _clock=new THREE.Clock();
+(function loop(){
+  requestAnimationFrame(loop);
+  const _f0 = _st.on ? _now() : 0;
+  const _dt = _clock.getDelta();
+  
+  tickAnim(_dt); updateFly(_dt); 
+  
+  // 부드러운 줌인/줌아웃 처리
+  if (!anim && Math.abs(camera.fov - targetFov) > 0.1) {
+    camera.fov += (targetFov - camera.fov) * 0.2;
+    camera.updateProjectionMatrix();
+  }
+
+  let t = _st.on ? _now() : 0;
+  updateHover();                       if(_st.on){ _st.acc.hover += _now()-t; t = _now(); }
+  keepConstantSize(); updateReticles(); if(_st.on){ _st.acc.retic += _now()-t; t = _now(); }
+  updateHUD();                         if(_st.on){ _st.acc.hud   += _now()-t; }
+  const cw=renderer.domElement.clientWidth||innerWidth, ch=renderer.domElement.clientHeight||innerHeight;
+  const _r0 = _st.on ? _now() : 0;
+  if(alignMode && alignAspect){
+    let vw=cw, vh=cw/alignAspect; if(vh>ch){ vh=ch; vw=ch*alignAspect; }
+    const vx=(cw-vw)/2, vy=(ch-vh)/2;
+    if(Math.abs(camera.aspect-alignAspect)>1e-4){ camera.aspect=alignAspect; camera.updateProjectionMatrix(); }
+    renderer.setScissorTest(false); renderer.setViewport(0,0,cw,ch); renderer.clear();
+    renderer.setScissorTest(true);  renderer.setViewport(vx,vy,vw,vh); renderer.setScissor(vx,vy,vw,vh);
+    renderer.render(scene,camera);
+  } else {
+    const a=cw/ch;
+    if(Math.abs(camera.aspect-a)>1e-4){ camera.aspect=a; camera.updateProjectionMatrix(); }
+    renderer.setScissorTest(false); renderer.setViewport(0,0,cw,ch);
+    renderer.render(scene,camera);
+  }
+  if(_st.on){
+    _st.acc.render += _now()-_r0;
+    _st.acc.total  += _now()-_f0;
+    _statsTick();
+  }
+})();
+</script></body></html>

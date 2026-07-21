@@ -1,0 +1,5 @@
+# Git LFS — 모델 가중치 (100MB 초과 바이너리)
+model/best.pt filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
+# 텍스트 정규화 제외 (바이너리)
+*.pt binary

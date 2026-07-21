@@ -1,0 +1,17 @@
+# CrackTwinStudio 런타임 의존성
+# GPU 사용 시에는 CUDA 지원 torch/torchvision 을 별도 인덱스로 설치하세요.
+#   (예: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121)
+
+numpy
+opencv-python
+torch
+torchvision
+trimesh
+pillow
+scikit-image
+scipy
+pywebview
+
+# 역투영 광선-메시 교차 가속 (사실상 필수 — 없으면 전 이미지 역투영 실패)
+embreex
+rtree
