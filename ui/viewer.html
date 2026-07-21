@@ -712,18 +712,21 @@ function makeCrop(container, cam, u, v, cropFrac){
   const box=document.createElement('div');
   box.style.cssText='position:relative;width:100%;height:210px;overflow:hidden;border-radius:8px;background:#000;cursor:pointer;';
   const im=new Image(); im.style.cssText='position:absolute;left:0;top:0;max-width:none;';
-  im.onload=function(){
+  // 검출 마스크를 원본과 똑같이 정렬해 겹쳐 → 대표 뷰에서 크랙이 보이게(마스크는 원본과 동일 해상도)
+  const mask = cam.has_mask ? new Image() : null;
+  if(mask) mask.style.cssText='position:absolute;left:0;top:0;max-width:none;pointer-events:none;';
+  function layout(){
     const CW=box.clientWidth||280, CH=box.clientHeight||210;
     const s=CW/(im.naturalWidth*cropFrac);
     const w=im.naturalWidth*s, hh=im.naturalHeight*s;
-    im.style.width=w+'px'; im.style.height=hh+'px';
-    im.style.left=(CW/2 - u*w)+'px'; im.style.top=(CH/2 - v*hh)+'px';
-  };
+    const L=(CW/2 - u*w), T=(CH/2 - v*hh);
+    im.style.width=w+'px'; im.style.height=hh+'px'; im.style.left=L+'px'; im.style.top=T+'px';
+    if(mask){ mask.style.width=w+'px'; mask.style.height=hh+'px'; mask.style.left=L+'px'; mask.style.top=T+'px'; }
+  }
+  im.onload=layout;
   im.src=imgUrl(cam,'full');
   box.appendChild(im);
-  const mk=document.createElement('div');
-  mk.style.cssText='position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;border:2px solid #ff3b3b;border-radius:50%;box-shadow:0 0 9px #ff3b3b;pointer-events:none;';
-  box.appendChild(mk);
+  if(mask){ mask.onload=layout; mask.src=imgUrl(cam,'mask'); box.appendChild(mask); }
   box.title='좌클릭: 카메라 시점으로 이동 · 우클릭: 자세히 보기(원본)';
   box.onclick=()=>selectCamera(cam, true);                                   // 좌클릭 → 시점 이동
   box.oncontextmenu=(e)=>{ e.preventDefault(); openImageModal(cam, {u:u, v:v}); };  // 우클릭 → 자세히
@@ -811,11 +814,9 @@ function openImageModal(c, markUV, kind){
   const cm=document.getElementById('imCrackMarker');
   cm.style.display='none';
   cm.classList.toggle('inspect', kind==='inspect');
-  document.getElementById('imCoord').textContent = !modalMark
-    ? '이미지의 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.'
-    : (kind==='inspect'
-       ? '노란 원 = 클릭하신 지점 · 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.'
-       : '빨간 원 = 검출된 크랙 위치 · 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.');
+  document.getElementById('imCoord').textContent = (modalMark && kind==='inspect')
+    ? '노란 원 = 클릭하신 지점 · 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.'
+    : '이미지의 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.';   // 크랙은 검출 마스크로 표시(빨간 원 제거)
   const img=document.getElementById('imImg');
   img.onload=()=>{ fitModal(); placeCrackMarker(); };
   img.src=imgUrl(c,'full');
@@ -834,7 +835,8 @@ function openImageModal(c, markUV, kind){
 }
 function placeCrackMarker(){
   const mk=document.getElementById('imCrackMarker'), img=document.getElementById('imImg');
-  if(modalMark && img.naturalWidth){
+  // 크랙(빨간 원)은 검출 마스크로 대체 → 지점검사(노란 원, inspect)일 때만 표시
+  if(modalMark && img.naturalWidth && mk.classList.contains('inspect')){
     mk.style.left=(modalMark.u*img.naturalWidth)+'px';
     mk.style.top =(modalMark.v*img.naturalHeight)+'px';
     mk.style.display='block';
