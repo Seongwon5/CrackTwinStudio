@@ -37,6 +37,10 @@
   .imgItem .nm{font-size:11px;word-break:break-all;color:#cde;}
   /* 지점 검사: 클릭한 3D 점을 각 사진에 투영한 위치(노란 원) */
   .imgItem .tw{position:relative;width:70px;height:50px;flex-shrink:0;}
+  .imgItem .tw .mk{position:absolute;inset:0;width:70px;height:50px;object-fit:cover;border-radius:4px;pointer-events:none;background:transparent!important;}
+  .twmini{position:relative;width:58px;height:44px;flex-shrink:0;}
+  .twmini img{width:58px;height:44px;object-fit:cover;border-radius:4px;border:1px solid #333;display:block;}
+  .twmini .mk{position:absolute;inset:0;border:1px solid transparent;pointer-events:none;}
   .imgItem .uvdot{position:absolute;width:13px;height:13px;margin:-6.5px 0 0 -6.5px;border:2px solid #ffee00;
     border-radius:50%;box-shadow:0 0 6px #ffee00, inset 0 0 3px #ffee00;pointer-events:none;}
   .imgItem .uvdot::after{content:'';position:absolute;inset:4px;background:#ffee00;border-radius:50%;}
@@ -639,6 +643,7 @@ function renderImageList(cams, hotspot, uvmap, info){
     const uv = uvmap && uvmap[c.source];
     const px = uv ? uvToThumbPx(c, uv) : null;
     el.innerHTML='<div class="tw"><img loading="lazy" src="'+imgUrl(c,'thumb')+'">'
+      + (c.has_mask ? '<img class="mk" loading="lazy" src="'+imgUrl(c,'mask')+'">' : '')
       + (px ? '<div class="uvdot" style="left:'+px.x.toFixed(1)+'px;top:'+px.y.toFixed(1)+'px"></div>' : '')
       + '</div><span class="nm">'+c.source+'</span>';
     el.title = uv ? '클릭: 카메라 시점으로 이동 · 우클릭: 원본에서 이 지점(노란 원) 크게 보기'
@@ -757,8 +762,9 @@ function showHotspotRep(h){
     row.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin-top:5px;';
     others.forEach(vw=>{
       const cam=camDataBySource[vw.source]; if(!cam) return;
-      const im=document.createElement('img'); im.src=imgUrl(cam,'thumb');
-      im.style.cssText='width:58px;height:44px;object-fit:cover;border-radius:4px;cursor:pointer;border:1px solid #333;';
+      const im=document.createElement('div'); im.className='twmini'; im.style.cursor='pointer';
+      im.innerHTML='<img src="'+imgUrl(cam,'thumb')+'">'
+        + (cam.has_mask ? '<img class="mk" src="'+imgUrl(cam,'mask')+'">' : '');
       im.title=cam.source+' — 좌클릭: 시점 이동+대표교체 · 우클릭: 자세히';
       im.onclick=()=>{ selectCamera(cam, true);                                   // 좌클릭 → 시점 이동
         const pr=projectToCam(cam,h.xyz)||{u:0.5,v:0.5};
@@ -817,8 +823,9 @@ function openImageModal(c, markUV, kind){
   const maskImg=document.getElementById('imMask'), tog=document.getElementById('imMaskToggle');
   if(c.has_mask){
     document.getElementById('imMaskLabel').style.display='flex';
+    tog.checked = true;                             // 이미지 클릭 시 기본으로 마스크 씌워 보여줌
     maskImg.src=imgUrl(c,'mask');
-    maskImg.style.display = tog.checked ? 'block' : 'none';
+    maskImg.style.display = 'block';
   } else {
     document.getElementById('imMaskLabel').style.display='none';
     maskImg.removeAttribute('src'); maskImg.style.display='none';
