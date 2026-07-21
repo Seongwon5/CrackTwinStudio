@@ -399,6 +399,11 @@ class CrackSegmenter:
         self.device = device
         self.dtype = next(self.model.parameters()).dtype     # FP16/FP32 자동 대응
         self.thr, self.tile, self.overlap, self.crack_index = thr, tile, overlap, crack_index
+        # channels_last(NHWC): FP16 텐서코어 커널 활성화 — 3060 Ti 실측 +8%, 마스크 IoU 0.9996.
+        # (cudnn.benchmark 는 실측 1.00x 라 미적용)
+        self._chlast = str(device).startswith("cuda")
+        if self._chlast:
+            self.model = self.model.to(memory_format=torch.channels_last)
 
     def _predict_tile(self, tile_bgr):
         """단일 타일(가변 크기) 추론. 16의 배수로 반사패딩 후 크랙 확률맵 반환."""
@@ -408,6 +413,8 @@ class CrackSegmenter:
         if ph or pw:
             x = np.pad(x, ((0, ph), (0, pw), (0, 0)), mode="reflect")
         t = torch.from_numpy(np.ascontiguousarray(x.transpose(2, 0, 1)[None])).to(self.device, self.dtype)
+        if self._chlast:
+            t = t.contiguous(memory_format=torch.channels_last)
         with torch.no_grad():
             out = self.model(t); out = out["out"] if isinstance(out, dict) else out
             prob = torch.softmax(out.float(), dim=1)[0, self.crack_index]
@@ -440,6 +447,8 @@ class CrackSegmenter:
             ch = coords[i:i + batch_size]
             batch = [img_bgr[y:y + self.tile, x:x + self.tile].astype(np.float32).transpose(2, 0, 1) for (y, x) in ch]
             t = torch.from_numpy(np.ascontiguousarray(np.stack(batch))).to(self.device, self.dtype)
+            if self._chlast:
+                t = t.contiguous(memory_format=torch.channels_last)
             with torch.no_grad():
                 out = self.model(t); out = out["out"] if isinstance(out, dict) else out
                 prob = torch.softmax(out.float(), dim=1)[:, self.crack_index].cpu().numpy()
