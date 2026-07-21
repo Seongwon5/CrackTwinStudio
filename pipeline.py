@@ -778,101 +778,148 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
     all_cameras, all_hotspots, all_crack_pts = [], [], []
     skipped = list(no_xmp)                       # 분석에서 빠진 이미지(사유 불문) 집계
 
-    for n, (img_path, xmp_path) in enumerate(pairs):
-        name = os.path.basename(img_path)
-        try:
-            K, dist, R, T, calib_wh = parse_xmp(xmp_path)
-            pil = ImageOps.exif_transpose(Image.open(img_path))
-            disp = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
-            disp = orient_to_xmp(disp, calib_wh)
-            dh, dw = disp.shape[:2]
-            C = pick_center(K, R, T)
-            cam = camera_pose(K, R, T, dw, dh)
-            cam.update({"id": n, "source": name,
-                        # 원본 JPEG 바이트. data-URI/base64 로 부풀리지 않는다(저장 시 zip 에 그대로).
-                        "_thumb": encode_jpeg_bytes(disp, THUMB_MAX_PX, 75),
-                        "_full": encode_jpeg_bytes(disp, FULL_MAX_PX, FULL_JPEG_Q)})
-            all_cameras.append(cam)
+    # ---- 파이프라이닝: ①로드(스레드 프리페치) → ②GPU 추론(메인) → ③후처리(워커) ----
+    # 프로파일(6장 실측): 추론 92% · 후처리 8%(역투영+정량화) · 로드 <1%.
+    # GPU 추론이 지배적이라 이득 상한은 '후처리+로드를 추론 뒤에 숨기는' ≈8%지만
+    # 무손실 스케줄링 최적화이고, GPU 가 빨라질수록 겹침 비중이 커진다.
+    # 스레드 안전: GPU 는 메인 스레드 전용, 메시 레이캐스트는 후처리 워커(1개) 전용.
+    # 무거운 구간(PIL 디코드·cv2·embree·skimage)은 GIL 을 놓아 실제로 겹친다.
+    from concurrent.futures import ThreadPoolExecutor
+    from collections import deque
 
-            if detect:
-                try:
-                    prob = seg.predict_prob_batched(disp, batch_size=CRACK_BATCH)
-                except RuntimeError as e:
-                    import torch
-                    if "out of memory" in str(e).lower():
-                        torch.cuda.empty_cache()
-                    log(f"    (배치 추론 폴백: {e})"); prob = seg.predict_prob(disp)
-                mask = (prob >= thr).astype(np.uint8)
-                ncr = int(mask.sum())
-                if ncr > 0:
-                    cam["_mask"] = encode_mask_png(mask, FULL_MAX_PX)   # 이미지 탭 오버레이용
-                    cam["has_mask"] = True
-                    fx = float(K[0, 0])
-                    ys, xs = np.where(mask > 0); uv = np.column_stack([xs, ys]).astype(float)
-                    if len(uv) > SCALE_MAP_CAP:
-                        uv = uv[np.random.default_rng(n).choice(len(uv), SCALE_MAP_CAP, replace=False)]
-                    locs, ray_idx, tri_idx, dirs = backproject(uv, K, dist, R, C, mesh)
-                    if len(locs):
-                        cloud = locs
-                        if len(cloud) > MAX_CRACK_POINTS_PER_IMG:
-                            cloud = cloud[np.random.default_rng(n + 1).choice(len(cloud), MAX_CRACK_POINTS_PER_IMG, replace=False)]
-                        all_crack_pts.extend(cloud.tolist())
-                        med_depth = float(np.median(np.linalg.norm(C - locs, axis=1)))
-                    else:
-                        med_depth = 1.0
-                    smap = build_scale_map(mask.shape, uv, locs, ray_idx, tri_idx, dirs, C, fx, mesh, med_depth / fx * 1000.0)
-                    met = quantify_crack(mask, mm_per_px=smap, min_branch_px=4,   # 웹 가지 보존
-                                         bridge_px=CRACK_BRIDGE_PX)               # 5px 이내 끊긴 크랙 잇기
-                    for inst in met.instances:
-                        px, py = inst["max_width_xy"]
-                        loc, _r, _t, _d = backproject(np.array([[px, py]], float), K, dist, R, C, mesh)
-                        if len(loc) == 0:
-                            continue
-                        p3 = loc[0]; z = float(np.linalg.norm(C - p3))
-                        cosq = abs(float(np.dot(_d[0], mesh.face_normals[int(_t[0])]))) if len(_t) else 1.0
-                        conf = float(prob[int(py), int(px)]) if (0 <= py < dh and 0 <= px < dw) else 1.0
-                        # 크랙 중심선 → 3D 폴리라인(poly): 메시에 맞은 점만 순서 유지
-                        cl = inst.get("centerline") or []
-                        wp = inst.get("width_profile") or []
-                        poly = []; poly_w = []; poly_n = []; hit = {}
-                        if cl:
-                            cuv = np.array(cl, float)
-                            clocs, cray, _ct, _cd = backproject(cuv, K, dist, R, C, mesh)
-                            hit = {int(cray[k]): clocs[k] for k in range(len(cray))}
-                            tri_of = {int(cray[k]): int(_ct[k]) for k in range(len(cray))}  # 정점→맞은 면
-                            for i in range(len(cuv)):                 # 메시에 맞은 정점만, 순서·폭·법선 유지
-                                if i in hit:
-                                    poly.append([round(float(hit[i][0]), 5), round(float(hit[i][1]), 5), round(float(hit[i][2]), 5)])
-                                    poly_w.append(round(float(wp[i]), 3) if i < len(wp) else None)
-                                    nrm = mesh.face_normals[tri_of[i]].astype(float)
-                                    if float(np.dot(nrm, C - hit[i])) < 0:     # 카메라(바깥) 쪽으로 향하게
-                                        nrm = -nrm
-                                    poly_n.append([round(float(nrm[0]), 4), round(float(nrm[1]), 4), round(float(nrm[2]), 4)])
-                        # [프로토타입] 3D 폭: 중심점 C 와 최근접 경계점 B 를 각각 역투영해 |C3d-B3d|×2.
-                        # 경사·곡면의 이방성 foreshortening 을 실측으로 반영(2D 방식의 등방 cosθ 근사 대체).
-                        width_mm_3d = None
-                        edge = inst.get("edge") or []
-                        if cl and edge:
-                            elocs, eray, _et, _ed = backproject(np.array(edge, float), K, dist, R, C, mesh)
-                            ehit = {int(eray[k]): elocs[k] for k in range(len(eray))}
-                            w3 = [2000.0 * float(np.linalg.norm(hit[i] - ehit[i]))   # ×2(반→전폭) ×1000(m→mm)
-                                  for i in range(len(cl)) if i in hit and i in ehit]
-                            if w3:
-                                width_mm_3d = round(max(w3), 3)
-                        all_hotspots.append({"conf": round(conf, 3),
-                                             "xyz": [float(p3[0]), float(p3[1]), float(p3[2])],
-                                             "width_mm": round(float(inst["max_width"]), 3),
-                                             "width_mm_3d": width_mm_3d,   # 프로토타입(사장님 제안 방식)
-                                             "length_mm": round(float(inst["length"]), 2),
-                                             "quality": round(cosq / max(z, 1e-6), 6),
-                                             "poly": poly, "poly_w": poly_w, "poly_n": poly_n, "source": name})
-                log(f"  [{n+1}/{len(pairs)}] {name}  crack_px={ncr}")
-            else:
-                log(f"  [{n+1}/{len(pairs)}] {name} (카메라만)")
-        except Exception as e:
-            log(f"  [오류] {name}: {e}")
-            skipped.append(name)                 # 실패도 집계에 포함
-        progress(n + 1, len(pairs))
+    def _load_one(n, img_path, xmp_path):
+        """①로드: 디코드·방향정렬·JPEG 인코딩 — GPU 와 무관한 준비 작업 전부."""
+        name = os.path.basename(img_path)
+        K, dist, R, T, calib_wh = parse_xmp(xmp_path)
+        pil = ImageOps.exif_transpose(Image.open(img_path))
+        disp = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
+        disp = orient_to_xmp(disp, calib_wh)
+        dh, dw = disp.shape[:2]
+        C = pick_center(K, R, T)
+        cam = camera_pose(K, R, T, dw, dh)
+        cam.update({"id": n, "source": name,
+                    # 원본 JPEG 바이트. data-URI/base64 로 부풀리지 않는다(저장 시 zip 에 그대로).
+                    "_thumb": encode_jpeg_bytes(disp, THUMB_MAX_PX, 75),
+                    "_full": encode_jpeg_bytes(disp, FULL_MAX_PX, FULL_JPEG_Q)})
+        return {"n": n, "name": name, "K": K, "dist": dist, "R": R, "C": C,
+                "cam": cam, "disp": disp, "dh": dh, "dw": dw}
+
+    def _post_one(it, prob, mask):
+        """③후처리: 마스크 인코딩·역투영·스케일맵·정량화 — 결과는 메인에서 이미지 순서대로 수확."""
+        n = it["n"]; name = it["name"]
+        K = it["K"]; dist = it["dist"]; R = it["R"]; C = it["C"]
+        dh = it["dh"]; dw = it["dw"]
+        crack_pts = []; hots = []
+        mask_png = encode_mask_png(mask, FULL_MAX_PX)   # 이미지 탭 오버레이용
+        fx = float(K[0, 0])
+        ys, xs = np.where(mask > 0); uv = np.column_stack([xs, ys]).astype(float)
+        if len(uv) > SCALE_MAP_CAP:
+            uv = uv[np.random.default_rng(n).choice(len(uv), SCALE_MAP_CAP, replace=False)]
+        locs, ray_idx, tri_idx, dirs = backproject(uv, K, dist, R, C, mesh)
+        if len(locs):
+            cloud = locs
+            if len(cloud) > MAX_CRACK_POINTS_PER_IMG:
+                cloud = cloud[np.random.default_rng(n + 1).choice(len(cloud), MAX_CRACK_POINTS_PER_IMG, replace=False)]
+            crack_pts.extend(cloud.tolist())
+            med_depth = float(np.median(np.linalg.norm(C - locs, axis=1)))
+        else:
+            med_depth = 1.0
+        smap = build_scale_map(mask.shape, uv, locs, ray_idx, tri_idx, dirs, C, fx, mesh, med_depth / fx * 1000.0)
+        met = quantify_crack(mask, mm_per_px=smap, min_branch_px=4,   # 웹 가지 보존
+                             bridge_px=CRACK_BRIDGE_PX)               # 5px 이내 끊긴 크랙 잇기
+        for inst in met.instances:
+            px, py = inst["max_width_xy"]
+            loc, _r, _t, _d = backproject(np.array([[px, py]], float), K, dist, R, C, mesh)
+            if len(loc) == 0:
+                continue
+            p3 = loc[0]; z = float(np.linalg.norm(C - p3))
+            cosq = abs(float(np.dot(_d[0], mesh.face_normals[int(_t[0])]))) if len(_t) else 1.0
+            conf = float(prob[int(py), int(px)]) if (0 <= py < dh and 0 <= px < dw) else 1.0
+            # 크랙 중심선 → 3D 폴리라인(poly): 메시에 맞은 점만 순서 유지
+            cl = inst.get("centerline") or []
+            wp = inst.get("width_profile") or []
+            poly = []; poly_w = []; poly_n = []; hit = {}
+            if cl:
+                cuv = np.array(cl, float)
+                clocs, cray, _ct, _cd = backproject(cuv, K, dist, R, C, mesh)
+                hit = {int(cray[k]): clocs[k] for k in range(len(cray))}
+                tri_of = {int(cray[k]): int(_ct[k]) for k in range(len(cray))}  # 정점→맞은 면
+                for i in range(len(cuv)):                 # 메시에 맞은 정점만, 순서·폭·법선 유지
+                    if i in hit:
+                        poly.append([round(float(hit[i][0]), 5), round(float(hit[i][1]), 5), round(float(hit[i][2]), 5)])
+                        poly_w.append(round(float(wp[i]), 3) if i < len(wp) else None)
+                        nrm = mesh.face_normals[tri_of[i]].astype(float)
+                        if float(np.dot(nrm, C - hit[i])) < 0:     # 카메라(바깥) 쪽으로 향하게
+                            nrm = -nrm
+                        poly_n.append([round(float(nrm[0]), 4), round(float(nrm[1]), 4), round(float(nrm[2]), 4)])
+            # [프로토타입] 3D 폭: 중심점 C 와 최근접 경계점 B 를 각각 역투영해 |C3d-B3d|×2.
+            # 경사·곡면의 이방성 foreshortening 을 실측으로 반영(2D 방식의 등방 cosθ 근사 대체).
+            width_mm_3d = None
+            edge = inst.get("edge") or []
+            if cl and edge:
+                elocs, eray, _et, _ed = backproject(np.array(edge, float), K, dist, R, C, mesh)
+                ehit = {int(eray[k]): elocs[k] for k in range(len(eray))}
+                w3 = [2000.0 * float(np.linalg.norm(hit[i] - ehit[i]))   # ×2(반→전폭) ×1000(m→mm)
+                      for i in range(len(cl)) if i in hit and i in ehit]
+                if w3:
+                    width_mm_3d = round(max(w3), 3)
+            hots.append({"conf": round(conf, 3),
+                         "xyz": [float(p3[0]), float(p3[1]), float(p3[2])],
+                         "width_mm": round(float(inst["max_width"]), 3),
+                         "width_mm_3d": width_mm_3d,   # 프로토타입(사장님 제안 방식)
+                         "length_mm": round(float(inst["length"]), 2),
+                         "quality": round(cosq / max(z, 1e-6), 6),
+                         "poly": poly, "poly_w": poly_w, "poly_n": poly_n, "source": name})
+        return {"mask_png": mask_png, "crack_pts": crack_pts, "hotspots": hots}
+
+    with ThreadPoolExecutor(max_workers=2) as loader, ThreadPoolExecutor(max_workers=1) as poster:
+        load_q = deque(); next_i = 0
+
+        def _fill():                                   # 프리페치 깊이 3 — 원본 배열 메모리 상한
+            nonlocal next_i
+            while next_i < len(pairs) and len(load_q) < 3:
+                i = next_i; next_i += 1
+                load_q.append((i, pairs[i][0], loader.submit(_load_one, i, *pairs[i])))
+        _fill()
+        post_futs = []                                 # (n, name, cam, future) — 이미지 순서 유지
+        while load_q:
+            i, img_path, fut = load_q.popleft()
+            name = os.path.basename(img_path)
+            try:
+                it = fut.result()
+                all_cameras.append(it["cam"])          # 메인 스레드에서 순서대로 append → id 순 유지
+                if detect:
+                    disp = it.pop("disp")
+                    try:
+                        prob = seg.predict_prob_batched(disp, batch_size=CRACK_BATCH)
+                    except RuntimeError as e:
+                        import torch
+                        if "out of memory" in str(e).lower():
+                            torch.cuda.empty_cache()
+                        log(f"    (배치 추론 폴백: {e})"); prob = seg.predict_prob(disp)
+                    del disp
+                    mask = (prob >= thr).astype(np.uint8)
+                    ncr = int(mask.sum())
+                    if ncr > 0:                        # 후처리는 워커에 넘기고 다음 이미지 추론으로
+                        post_futs.append((i, name, it["cam"], poster.submit(_post_one, it, prob, mask)))
+                    log(f"  [{i+1}/{len(pairs)}] {name}  crack_px={ncr}")
+                else:
+                    log(f"  [{i+1}/{len(pairs)}] {name} (카메라만)")
+            except Exception as e:
+                log(f"  [오류] {name}: {e}")
+                skipped.append(name)                 # 실패도 집계에 포함
+            progress(i + 1, len(pairs))
+            _fill()
+        # 후처리 결과 수확: 이미지 순서대로 통합 → 직렬 처리와 결과·순서 동일(결정적)
+        for i, name, cam, fut in post_futs:
+            try:
+                r = fut.result()
+                cam["_mask"] = r["mask_png"]; cam["has_mask"] = True
+                all_crack_pts.extend(r["crack_pts"])
+                all_hotspots.extend(r["hotspots"])
+            except Exception as e:
+                log(f"  [후처리 오류] {name}: {e}")
+                skipped.append(name)
 
     n_ok = len(all_cameras)
     if skipped:
