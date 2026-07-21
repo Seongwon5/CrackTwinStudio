@@ -111,8 +111,6 @@
   <div id="sevLegend" style="margin-top:8px;font-size:11px;color:#bbb;">
     <div style="height:9px;border-radius:5px;margin-bottom:3px;
       background:linear-gradient(90deg,rgb(38,235,89),rgb(179,255,31),rgb(255,229,0),rgb(255,107,0),rgb(255,15,10));"></div>
-    <div style="display:flex;justify-content:space-between;color:#8a8a96;">
-      <span>0.1mm 경미</span><span>1mm</span><span>10mm 심각</span></div>
   </div>
   <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
 
@@ -1302,7 +1300,7 @@ addEventListener('blur', ()=> _keys.clear());   // 포커스 이탈 시 눌린 �
 const _fwd=new THREE.Vector3(), _right=new THREE.Vector3(), _move=new THREE.Vector3();
 let _flyRamp = 0;                                 // 0→1 가속 램프
 const FLY_ACCEL = 1.2;                            // 최대 속도까지 걸리는 시간(초)
-const FLY_MIN = 0.12;                             // 시작 속도 = 최대의 12%
+const FLY_MIN = 0.05;                             // 시작 속도 = 최대의 5% (천천히 출발)
 function updateFly(dt){
   const f = (_keys.has('KeyW')?1:0) - (_keys.has('KeyS')?1:0);
   const r = (_keys.has('KeyD')?1:0) - (_keys.has('KeyA')?1:0);
