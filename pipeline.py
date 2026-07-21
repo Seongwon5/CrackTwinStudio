@@ -37,8 +37,7 @@ TEXTPOINT_MERGE_M = 0.02          # 크랙 점군 복셀 다운샘플 격자
 # DBSCAN 기반 크랙 병합: 핫스팟의 중심선(poly) 기하를 3D에서 밀도 연결로 묶는다.
 # eps 안으로 인접한 중심선은 '연속된 한 크랙'으로 병합 → 조각난/살짝 끊긴 크랙이 이어진다.
 DBSCAN_EPS_M = 0.02              # 병합·갭브리징 거리(m). "몇 mm 이내면 연결"의 그 거리(튜닝 노브)
-DBSCAN_MIN_SAMPLES = 2          # 코어 최소 이웃(고립된 오검출 점 제거)
-DBSCAN_MAX_PTS = 80000          # 병합용 조밀화 점 상한(성능 보호)
+DBSCAN_MIN_SAMPLES = 2          # (dbscan 유틸용) 코어 최소 이웃 — 병합은 복셀 성분화로 대체됨
 FUSE_VOXEL_M = 0.02             # 다시점 융합 복셀(m). 이 안의 여러 뷰 중심선점을 한 점으로 합침
 FULL_MAX_PX, FULL_JPEG_Q = 1920, 82   # 내장 원본 이미지 최대변/품질(용량 제어)
 THUMB_MAX_PX = 900                # 썸네일 최대변
@@ -941,23 +940,36 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             owners.append(np.full(len(dens), hi, np.int64))
         P = np.vstack(parts)
         owner = np.concatenate(owners)
-        if len(P) > DBSCAN_MAX_PTS:                              # 성능 보호(소속 유지)
-            sel = np.random.default_rng(0).choice(len(P), DBSCAN_MAX_PTS, replace=False)
-            P, owner = P[sel], owner[sel]
-        # 2) DBSCAN 으로 3D 밀도 군집화 → 물리적으로 연속된 크랙이 한 군집
-        labels = dbscan(P, eps, DBSCAN_MIN_SAMPLES)
-        # 3) 핫스팟을 '자기 점들의 다수결 라벨' 군집에 배정(전부 노이즈면 단독 처리)
+        # 2) eps 복셀 연결 성분으로 군집화 — 물리적으로 연속된 크랙이 한 군집.
+        #    (기존: DBSCAN_MAX_PTS=8만 전역 랜덤 서브샘플 후 DBSCAN. 전체 데이터(594장)에선
+        #     수백만 점이 3%로 깎여 점 간격이 eps 를 훨씬 넘고 연쇄가 전부 끊겨
+        #     뷰 간 병합이 전멸했다(핫스팟 5.3만 · avg views 1.1). 복셀 성분화는 상한이
+        #     필요 없어(전 구간 벡터화 O(N logN)) 규모와 무관하게 밀도·소속을 보존한다.)
+        B = np.int64(1) << 20                          # 좌표 오프셋(음수 방지) — 복셀 인덱스 ±2^20 여유
+        ix = np.floor(P / eps).astype(np.int64) + B
+        key = (ix[:, 0] << 42) | (ix[:, 1] << 21) | ix[:, 2]
+        uniq, vid = np.unique(key, return_inverse=True)          # 점 → 복셀 id
+        import scipy.sparse as _sp
+        rows = [np.arange(len(uniq))]; cols = [np.arange(len(uniq))]
+        offs = [(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)][14:]
+        for dx, dy, dz in offs:                        # 26-이웃 중 +방향 13개만(대칭이라 충분)
+            nb = uniq + ((np.int64(dx) << 42) + (np.int64(dy) << 21) + np.int64(dz))
+            pos = np.searchsorted(uniq, nb)
+            ok = (pos < len(uniq)) & (uniq[np.minimum(pos, len(uniq) - 1)] == nb)
+            rows.append(np.nonzero(ok)[0]); cols.append(pos[ok])
+        g = _sp.coo_matrix((np.ones(sum(len(r) for r in rows), np.int8),
+                            (np.concatenate(rows), np.concatenate(cols))), shape=(len(uniq), len(uniq)))
+        _, vlab = connected_components(g, directed=False)
+        labels = vlab[vid]                             # 점 → 군집 라벨(서브샘플 없음 → 노이즈 없음)
+        # 3) 핫스팟을 '자기 점들의 다수결 라벨' 군집에 배정
         clusters = {}
-        solo = 0
-        for hi in range(len(all_hotspots)):
-            labs = labels[owner == hi]
-            labs = labs[labs >= 0]
-            if len(labs):
-                vals, cnts = np.unique(labs, return_counts=True)
-                key = int(vals[cnts.argmax()])
-            else:
-                key = ("solo", solo); solo += 1
-            clusters.setdefault(key, []).append(hi)
+        order = np.argsort(owner, kind="stable")
+        so, sl = owner[order], labels[order]
+        bounds = np.flatnonzero(np.r_[True, so[1:] != so[:-1], True])
+        for bi in range(len(bounds) - 1):
+            a, b = bounds[bi], bounds[bi + 1]
+            vals, cnts = np.unique(sl[a:b], return_counts=True)
+            clusters.setdefault(int(vals[cnts.argmax()]), []).append(int(so[a]))
         # 4) 군집별 산출: 폭=2D 최대(유지) · 길이=군집 전체 기하의 그래프 최장경로 · views 합침
         for key, member_idxs in clusters.items():
             members = [all_hotspots[i] for i in member_idxs]
