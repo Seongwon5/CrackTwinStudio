@@ -354,7 +354,10 @@ const RIBBON_WIDTH_EXAG = 2.0;                    // 실폭 대비 과장 배율
 const RIBBON_MIN_R = 0.02, RIBBON_MAX_R = 0.5;    // 반경 하한/상한(m) — 얇아도 보이고, blob 폭주 방지
 const RIBBON_RADIAL = 6;
 const ribbonGroup = new THREE.Group(); scene.add(ribbonGroup);
-const ribbonMeshes = [];              // 레이캐스트(호버·클릭 피킹)용 튜브 메시 모음
+const ribbonMeshes = [];              // 보이는 튜브 메시 모음(렌더용)
+const ribbonHitLines = [];            // 크랙 히트박스(투명 라인) — 보이는 튜브보다 크게 호버/클릭 피킹
+const HIT_MAT = new THREE.LineBasicMaterial({visible:false});   // material.visible=false → 렌더 X, 레이캐스트는 O (객체 visible=false 로 두면 이 three 버전은 피킹에서 제외됨)
+const HITBOX_PX = 14;                 // 크랙 중심선 주변 화면상 여유 반경(px) — 이만큼 덜 갖다대도 잡힘
 const ribbonMats = [];                // 리본별 재질 — 인덱스=리본번호
 const ribbonBase = [];                // 리본 기본색(심각도 hex) — 호버/선택 해제 시 되돌릴 색
 const ribsByHot = {};                 // 핫스팟(hot) → 그에 속한 리본 인덱스들(크랙 하이라이트용)
@@ -408,12 +411,13 @@ function buildRibbon(h, i){
   const mat=new THREE.MeshBasicMaterial({color: base, polygonOffset:true, polygonOffsetFactor:-4, polygonOffsetUnits:-4});
   ribbonMats[i]=mat;
   if(hot>=0){ (ribsByHot[hot]=ribsByHot[hot]||[]).push(i); }        // 핫스팟→리본 역매핑
-  let run=[], rr=[];
+  let run=[], rr=[]; const hitPts=[];
   const flush=()=>{
     if(run.length>=2){
       const m=new THREE.Mesh(variableTube(run, rr, RIBBON_RADIAL), mat);
       m.userData={ri:i, hot};                                        // ri=리본, hot=소속 핫스팟
-      ribbonGroup.add(m); ribbonMeshes.push(m);                      // 피킹용 등록
+      ribbonGroup.add(m); ribbonMeshes.push(m);
+      for(let j=1;j<run.length;j++){ const a=run[j-1],b=run[j]; hitPts.push(a.x,a.y,a.z,b.x,b.y,b.z); }  // 히트박스용 중심선 세그먼트
     }
     run=[]; rr=[];
   };
@@ -422,6 +426,12 @@ function buildRibbon(h, i){
     run.push(pts[k]); rr.push(rad[k]);
   }
   flush();
+  if(hitPts.length){                                   // 보이는 튜브보다 큰 '히트박스'(투명 라인, 임계값으로 굵게 피킹)
+    const hg=new THREE.BufferGeometry();
+    hg.setAttribute('position', new THREE.Float32BufferAttribute(hitPts,3));
+    const hl=new THREE.LineSegments(hg, HIT_MAT); hl.userData={ri:i, hot};  // 객체는 visible(피킹 가능), 재질만 안 그려짐
+    ribbonGroup.add(hl); ribbonHitLines.push(hl);
+  }
 }
 
 const hud=document.getElementById('hud');
@@ -984,14 +994,34 @@ function setHoverHot(hot){
   const prev=hoverHot; hoverHot=hot;
   refreshRibbonColor(prev); refreshRibbonColor(hot);   // 이전 것 복원, 새 것 흰색
 }
+// 크랙 히트박스 피킹: 보이는 튜브보다 넉넉히 잡되 화면상 HITBOX_PX 안쪽만 유효.
+// 여러 크랙이 겹치면 커서에서 화면상 가장 가까운 크랙을 고른다. (ray 는 호출 전 setFromCamera 되어 있어야 함)
+function pickRibbonHot(){
+  if(!ribbonGroup.visible || !ribbonHitLines.length) return -1;
+  const saved = ray.params.Line.threshold;
+  ray.params.Line.threshold = (modelDiag||1)*0.03;    // 후보를 넉넉히 잡고 아래에서 화면거리로 거른다
+  const hits = ray.intersectObjects(ribbonHitLines,false);
+  ray.params.Line.threshold = saved;
+  if(!hits.length) return -1;
+  // Line 교차엔 distanceToRay 가 없다 → 교차점을 화면에 투영해 커서와의 픽셀 거리로 판정
+  const cx=(mouse.x*0.5+0.5)*innerWidth, cy=(-mouse.y*0.5+0.5)*innerHeight;
+  const v=new THREE.Vector3();
+  let bestHot=-1, bestPx=Infinity;
+  for(const h of hits){
+    v.copy(h.point).project(camera);
+    const sx=(v.x*0.5+0.5)*innerWidth, sy=(-v.y*0.5+0.5)*innerHeight;
+    const px=Math.hypot(sx-cx, sy-cy);                             // 커서~크랙(교차점) 화면상 거리(px)
+    if(px<=HITBOX_PX && px<bestPx){ bestPx=px; bestHot=h.object.userData.hot; }   // 14px 안쪽 · 화면상 가장 가까운 크랙
+  }
+  return bestHot;
+}
 function updateHover(){
   if(measureMode||!mIn){ renderer.domElement.style.cursor='default'; hoverIdx=-1; setHoverHot(-1); return; }
   ray.setFromCamera(mouse,camera);
   const c = camGroup.visible ? ray.intersectObjects(camMeshes,false) : [];
   let hot = -1;
   if(ribbonGroup.visible){                            // 리본 호버 → 리본의 '자기' 크랙(핫스팟)
-    const rb = ray.intersectObjects(ribbonMeshes,false);
-    if(rb.length) hot = rb[0].object.userData.hot;
+    hot = pickRibbonHot();                            // 히트박스 피킹(보이는 튜브보다 크게 · 겹치면 가장 가까운 크랙)
   }
   hoverIdx = hot;                                    // 말풍선(폭·길이) 표시
   setHoverHot(hot);                                  // 그 크랙의 리본 빨강
@@ -1015,11 +1045,8 @@ function handleClick(e){
   ray.setFromCamera(mouse,camera);
   // 클릭 대상은 '크랙(리본)'만. 핫스팟 레티클은 시각 마커·호버 하이라이트 전용(클릭 가로채기 제거).
   if(ribbonGroup.visible){
-    const rb = ray.intersectObjects(ribbonMeshes,false);
-    if(rb.length){
-      const hi = rb[0].object.userData.hot;
-      if(hi>=0){ selectHotspot(hi); showHotspotRep(DATA.hotspots[hi]); return; }
-    }
+    const hi = pickRibbonHot();                       // 호버와 동일한 히트박스 피킹
+    if(hi>=0){ selectHotspot(hi); showHotspotRep(DATA.hotspots[hi]); return; }
   }
   const camHit = camGroup.visible ? ray.intersectObjects(camMeshes,false) : [];
   if(camHit.length) selectCamera(camHit[0].object.userData.cam, false);
