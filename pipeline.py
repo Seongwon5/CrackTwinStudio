@@ -38,6 +38,7 @@ TEXTPOINT_MERGE_M = 0.02          # 크랙 점군 복셀 다운샘플 격자
 # eps 안으로 인접한 중심선은 '연속된 한 크랙'으로 병합 → 조각난/살짝 끊긴 크랙이 이어진다.
 DBSCAN_EPS_M = 0.02              # 병합·갭브리징 거리(m). "몇 mm 이내면 연결"의 그 거리(튜닝 노브)
 DBSCAN_MIN_SAMPLES = 2          # (dbscan 유틸용) 코어 최소 이웃 — 병합은 복셀 성분화로 대체됨
+PROB_CACHE_DIR = os.path.join(HERE, "cache", "prob")   # 추론(확률맵) 캐시 — 이미지·모델·타일 동일 시 GPU 스킵
 FUSE_VOXEL_M = 0.02             # 다시점 융합 복셀(m). 이 안의 여러 뷰 중심선점을 한 점으로 합침
 FULL_MAX_PX, FULL_JPEG_Q = 1920, 82   # 내장 원본 이미지 최대변/품질(용량 제어)
 THUMB_MAX_PX = 900                # 썸네일 최대변
@@ -729,6 +730,55 @@ def crack_length_3d(skeleton_mask, K, dist, R, C, mesh):
 
 
 # ==================================================================
+# 추론(확률맵) 캐시 — 같은 사진은 두 번 추론하지 않는다
+# ==================================================================
+# 병합·정량화·융합 파라미터만 바꾼 재실행에서 GPU 추론(전체 시간의 75~92%)을 통째로
+# 건너뛴다. 키는 이미지 내용(부분 해시)+방향+모델(best.pt)+타일 설정 — 어느 하나라도
+# 바뀌면 자동 미스. 값은 uint8(1/255) 양자화 PNG(장당 1~4MB). thr 는 확률맵과 무관하므로
+# 키에 넣지 않는다(마스크가 아니라 확률맵을 캐시). 캐시 실패는 전부 무해(추론으로 폴백).
+
+def _prob_cache_key(img_path, dw, dh, tile, overlap):
+    import hashlib
+    st = os.stat(img_path)
+    ms = os.stat(CRACK_WEIGHTS)
+    h = hashlib.sha1()
+    h.update(f"{os.path.basename(img_path)}|{st.st_size}|{dw}x{dh}|"
+             f"{ms.st_size}|{int(ms.st_mtime)}|t{tile}o{overlap}".encode())
+    with open(img_path, "rb") as f:                    # 내용 부분 해시(앞 256KB + 끝 64KB)
+        h.update(f.read(262144))
+        if st.st_size > 262144 + 65536:
+            f.seek(-65536, 2); h.update(f.read())
+    return h.hexdigest()
+
+
+def _prob_cache_load(key, shape):
+    try:
+        p = os.path.join(PROB_CACHE_DIR, key + ".png")
+        if not os.path.isfile(p):                      # 미스는 조용히(경고 없이)
+            return None
+        u8 = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+        if u8 is not None and u8.shape == tuple(shape[:2]):
+            return u8.astype(np.float32) / 255.0
+    except Exception:
+        pass
+    return None
+
+
+def _prob_cache_save(key, prob):
+    try:
+        os.makedirs(PROB_CACHE_DIR, exist_ok=True)
+        u8 = np.clip(np.rint(prob * 255.0), 0, 255).astype(np.uint8)
+        ok, buf = cv2.imencode(".png", u8, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+        if ok:
+            tmp = os.path.join(PROB_CACHE_DIR, key + ".tmp")
+            with open(tmp, "wb") as f:
+                f.write(buf.tobytes())
+            os.replace(tmp, os.path.join(PROB_CACHE_DIR, key + ".png"))   # 원자적 교체
+    except Exception:
+        pass
+
+
+# ==================================================================
 # 5. 보고서 생성
 # ==================================================================
 _segmenter = None
@@ -809,8 +859,12 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                     # 원본 JPEG 바이트. data-URI/base64 로 부풀리지 않는다(저장 시 zip 에 그대로).
                     "_thumb": encode_jpeg_bytes(disp, THUMB_MAX_PX, 75),
                     "_full": encode_jpeg_bytes(disp, FULL_MAX_PX, FULL_JPEG_Q)})
-        return {"n": n, "name": name, "K": K, "dist": dist, "R": R, "C": C,
-                "cam": cam, "disp": disp, "dh": dh, "dw": dw}
+        it = {"n": n, "name": name, "K": K, "dist": dist, "R": R, "C": C,
+              "cam": cam, "disp": disp, "dh": dh, "dw": dw}
+        if seg is not None:                            # 추론 캐시 조회(로드 스레드에서 — 메인 루프 비용 0)
+            it["ckey"] = _prob_cache_key(img_path, dw, dh, seg.tile, seg.overlap)
+            it["cprob"] = _prob_cache_load(it["ckey"], disp.shape)
+        return it
 
     def _post_one(it, prob, mask):
         """③후처리: 마스크 인코딩·역투영·스케일맵·정량화 — 결과는 메인에서 이미지 순서대로 수확."""
@@ -898,19 +952,23 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                 all_cameras.append(it["cam"])          # 메인 스레드에서 순서대로 append → id 순 유지
                 if detect:
                     disp = it.pop("disp")
-                    try:
-                        prob = seg.predict_prob_batched(disp, batch_size=CRACK_BATCH)
-                    except RuntimeError as e:
-                        import torch
-                        if "out of memory" in str(e).lower():
-                            torch.cuda.empty_cache()
-                        log(f"    (배치 추론 폴백: {e})"); prob = seg.predict_prob(disp)
+                    prob = it.pop("cprob", None)       # 추론 캐시 히트 시 GPU 스킵
+                    hitc = prob is not None
+                    if not hitc:
+                        try:
+                            prob = seg.predict_prob_batched(disp, batch_size=CRACK_BATCH)
+                        except RuntimeError as e:
+                            import torch
+                            if "out of memory" in str(e).lower():
+                                torch.cuda.empty_cache()
+                            log(f"    (배치 추론 폴백: {e})"); prob = seg.predict_prob(disp)
+                        loader.submit(_prob_cache_save, it["ckey"], prob)   # 비동기 저장(실패 무해)
                     del disp
                     mask = (prob >= thr).astype(np.uint8)
                     ncr = int(mask.sum())
                     if ncr > 0:                        # 후처리는 워커에 넘기고 다음 이미지 추론으로
                         post_futs.append((i, name, it["cam"], poster.submit(_post_one, it, prob, mask)))
-                    log(f"  [{i+1}/{len(pairs)}] {name}  crack_px={ncr}")
+                    log(f"  [{i+1}/{len(pairs)}] {name}  crack_px={ncr}" + (" (캐시)" if hitc else ""))
                 else:
                     log(f"  [{i+1}/{len(pairs)}] {name} (카메라만)")
             except Exception as e:
