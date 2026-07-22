@@ -1135,6 +1135,44 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         if len(fp) >= 2:
             all_ribbons.append({"poly": fp, "poly_w": fw, "poly_n": fn, "hot": mi})
     log(f"  리본: 뷰별 인스턴스 {len(all_hotspots)}개 → 크랙당 융합 {len(all_ribbons)}개(핫스팟 {len(merged)})")
+
+    # ---- 크랙 유형 분류 (크랙 / 조인트·시공선 / 실금 / 얼룩) ----
+    # 융합 중심선(기하) + 대표 뷰 이미지(겉모습)로 각 크랙에 type/type_conf 부여.
+    # 뷰어의 유형 필터가 사용. 모델 없거나 실패해도 무해(전부 'crack' 로 폴백).
+    try:
+        import cracktype as _ct
+        cam_by_src = {c["source"]: c for c in all_cameras}
+        rbh = {}
+        for r in all_ribbons: rbh.setdefault(r["hot"], []).append(r)
+        gcache = {}
+        def _gray(src):
+            if src not in gcache:
+                c = cam_by_src.get(src); buf = c.get("_full") if c else None
+                arr = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_GRAYSCALE) if buf else None
+                gcache[src] = arr.astype(np.float32) if arr is not None else None
+            return gcache[src]
+        tcnt = {}
+        for mi, h in enumerate(merged):
+            polys = rbh.get(mi); lab, conf = "crack", 0.0
+            if polys:
+                P = np.array([p for r in polys for p in r["poly"]], float)
+                best = None; bestext = -1
+                for vw in h.get("views", []):
+                    c = cam_by_src.get(vw["source"])
+                    if not c: continue
+                    uv, ok = _ct.project_to_cam(c, P); uv = uv[ok]
+                    if len(uv) < 4: continue
+                    ext = float(np.linalg.norm(uv.max(0) - uv.min(0)))
+                    if ext > bestext: bestext = ext; best = c
+                if best is not None:
+                    w = h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
+                    lab, conf = _ct.classify_crack(P, w, h.get("length_mm"), best, _gray(best["source"]))
+            h["type"] = lab; h["type_conf"] = round(float(conf), 3)
+            tcnt[lab] = tcnt.get(lab, 0) + 1
+        log(f"  크랙 유형 분류: {tcnt}")
+    except Exception as e:
+        log(f"  (유형 분류 건너뜀: {e})")
+
     return {"ply_path": ply_path, "text_points": crack_points, "ribbons": all_ribbons,
             "cameras": all_cameras, "hotspots": merged, "report_meta": report_meta}
 
