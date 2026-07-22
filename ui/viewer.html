@@ -958,6 +958,23 @@ function uvToThumbPx(cam, uv){
   const y = (TH - dh) / 2 + uv.v * dh;
   return (x < 0 || y < 0 || x > TW || y > TH) ? null : {x, y};   // 잘려나간 영역이면 표시 안 함
 }
+// 카메라 콘 클릭 → 우측 패널에 그 카메라의 이미지 한 장을 크게 표시(크랙 하이라이트 없음)
+function showCameraImage(c){
+  document.getElementById('imgTitle').textContent='카메라 이미지';
+  document.getElementById('imgReset').style.display='inline-block';
+  document.getElementById('imgHot').innerHTML='📷 '+c.source+
+    '<br><span style="color:#888">클릭: 이 카메라 시점으로 이동 · 우클릭: 원본 크게 보기</span>';
+  const items=document.getElementById('imgItems'); items.innerHTML='';
+  const box=document.createElement('div');
+  box.style.cssText='position:relative;width:100%;cursor:pointer;';
+  const im=new Image(); im.style.cssText='width:100%;border-radius:8px;display:block;';
+  im.src=imgUrl(c,'thumb');
+  box.appendChild(im);
+  box.title='클릭: 이 카메라 시점으로 이동 · 우클릭: 원본 크게 보기';
+  box.onclick=()=>flyToCamera(c);
+  box.oncontextmenu=e=>{ e.preventDefault(); openImageModal(c, null, null, true); };   // noHL
+  items.appendChild(box);
+}
 function renderImageList(cams, hotspot, uvmap, info){
   const items=document.getElementById('imgItems'); items.innerHTML='';
   document.getElementById('imgTitle').textContent = info ? '지점 연결 이미지' : (hotspot ? '핫스팟 이미지' : '전체 이미지');
@@ -1146,9 +1163,10 @@ function crackMarkerOpacity(){
   return 1 - (r - 2) / 6 * 0.95;
 }
 
-// kind='inspect' 면 지점 검사에서 온 표식(노랑), 아니면 검출된 크랙 위치(빨강).
-function openImageModal(c, markUV, kind){
-  modalCam=c; modalMark = markUV || null;
+// kind='inspect' 면 지점 검사에서 온 표식(노랑). noHL=true 면 크랙 하이라이트 억제(카메라 이미지 보기).
+let modalNoHL=false;
+function openImageModal(c, markUV, kind, noHL){
+  modalCam=c; modalMark = markUV || null; modalNoHL = !!noHL;
   document.getElementById('imTitle').textContent=c.source;
   document.getElementById('imMarker').style.display='none';
   const cm=document.getElementById('imCrackMarker');
@@ -1156,9 +1174,10 @@ function openImageModal(c, markUV, kind){
   cm.classList.toggle('inspect', kind==='inspect');
   document.getElementById('imCoord').textContent = (modalMark && kind==='inspect')
     ? '노란 원 = 클릭하신 지점 · 드래그: 이동 · 휠: 확대/축소'
-    : (crackSeenIn(c) ? '노란 발광 = 선택한 크랙 · 드래그: 이동 · 휠: 확대/축소'
-       : (selIdx>=0 ? '선택한 크랙은 이 사진에서 검출되지 않음 · 드래그: 이동 · 휠: 확대/축소'
-                    : '드래그: 이동 · 휠: 확대/축소'));
+    : (modalNoHL ? '드래그: 이동 · 휠: 확대/축소'
+       : (crackSeenIn(c) ? '노란 발광 = 선택한 크랙 · 드래그: 이동 · 휠: 확대/축소'
+          : (selIdx>=0 ? '선택한 크랙은 이 사진에서 검출되지 않음 · 드래그: 이동 · 휠: 확대/축소'
+                       : '드래그: 이동 · 휠: 확대/축소')));
   const img=document.getElementById('imImg');
   img.onload=()=>{ fitModal(); placeCrackMarker(); drawModalHL(); };
   img.src=imgUrl(c,'full');
@@ -1180,7 +1199,7 @@ function openImageModal(c, markUV, kind){
 // 모달 하이라이트: 선택 크랙의 중심선을 원본 해상도 캔버스에 노란 발광으로(줌·팬은 imStage transform 이 처리)
 function drawModalHL(){
   const cvs=document.getElementById('imHL'), img=document.getElementById('imImg');
-  if(!img.naturalWidth || selIdx<0 || !modalCam){ cvs.width=1; cvs.height=1; return; }
+  if(!img.naturalWidth || selIdx<0 || !modalCam || modalNoHL){ cvs.width=1; cvs.height=1; return; }
   cvs.width=img.naturalWidth; cvs.height=img.naturalHeight;
   drawCrackHL(modalCam, cvs.getContext('2d'),
     q=>[q.u*cvs.width, q.v*cvs.height], Math.max(1.5, cvs.width*0.0011));
@@ -1394,7 +1413,10 @@ function handleClick(e){
     if(hi>=0){ selectHotspot(hi); showHotspotRep(DATA.hotspots[hi]); return; }
   }
   const camHit = camGroup.visible ? ray.intersectObjects(camMeshes,false) : [];
-  if(camHit.length) selectCamera(camHit[0].object.userData.cam, false);
+  if(camHit.length){                                  // 카메라 콘 클릭 → 우측에 그 이미지 표시
+    const c=camHit[0].object.userData.cam;
+    selectCamera(c, false); showCameraImage(c);
+  }
 }
 
 // ---- FPS 입력: 좌드래그=시점 회전 · 짧은 탭=선택 · 우클릭 홀드=스코프 확대 ----
