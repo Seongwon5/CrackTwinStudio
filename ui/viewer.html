@@ -2,18 +2,38 @@
 <html><head><meta charset="utf-8"><title>원전 3D 텍스트/크랙 검증 뷰어</title>
 <style>
   body{margin:0;overflow:hidden;font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;background:#1a1a1a;}
-  #info{position:absolute;top:10px;left:10px;color:#eee;background:rgba(0,0,0,.75);
-        padding:15px;border-radius:10px;font-size:13px;line-height:1.8;max-width:320px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);
-        max-height:94vh; overflow-y:auto;}
-  #info .mbtn{flex:1; background:#333; color:#fff; border:1px solid #555; border-radius:6px; padding:6px 4px; cursor:pointer; font-size:12px;}
-  #info .mbtn:hover{background:#444;}
-  #info .mbtn.active{background:#00695c; border-color:#00e5ff; color:#fff; font-weight:bold;}
-  #info .mbtn.reset{background:#5a2d2d;}
-  #info .mbtn.reset:hover{background:#7a3d3d;}
-  #info b {font-size: 15px; color: #fff;}
-  #info label{display:flex; align-items: center; cursor:pointer; margin-top: 5px; margin-bottom: 5px;}
-  #info input[type="checkbox"] {margin-right: 8px; cursor: pointer;}
-  #info select {margin-left: 8px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 2px 5px;}
+  /* ===== 레이아웃 변수: 도크 폭(드래그로 조절, localStorage 저장) ===== */
+  :root{--topbarh:42px; --leftw:340px; --rightw:300px;}
+  /* ===== 상단 메뉴바 ===== */
+  #topbar{position:fixed;top:0;left:0;right:0;height:var(--topbarh);z-index:30;
+    display:flex;align-items:center;gap:4px;padding:0 10px;background:rgba(8,12,16,.95);
+    border-bottom:1px solid #2a3a48;box-shadow:0 2px 8px rgba(0,0,0,.5);}
+  #topbar .brand{color:#7fd6ff;font-weight:bold;font-size:14px;margin-right:10px;white-space:nowrap;}
+  #topbar .tmenu{background:transparent;color:#cde;border:1px solid transparent;border-radius:6px;
+    padding:6px 11px;cursor:pointer;font-size:13px;white-space:nowrap;}
+  #topbar .tmenu:hover{background:#1e2a34;border-color:#345;}
+  #topbar .tmenu.active{background:#00534a;border-color:#00e5ff;color:#fff;font-weight:bold;}
+  #topbarHint{margin-left:auto;font-size:11px;color:#567;white-space:nowrap;}
+  /* ===== 좌측 도크 ===== */
+  #leftdock{position:fixed;top:var(--topbarh);left:0;bottom:0;width:var(--leftw);z-index:20;
+    background:rgba(8,12,16,.92);border-right:1px solid #2a3a48;display:flex;box-shadow:2px 0 8px rgba(0,0,0,.4);}
+  .dockpane{flex:1;overflow-y:auto;padding:14px;display:none;color:#eee;font-size:13px;line-height:1.8;min-width:0;}
+  .dockpane b{font-size:15px;color:#fff;}
+  .dockpane .mbtn{flex:1;background:#333;color:#fff;border:1px solid #555;border-radius:6px;padding:6px 4px;cursor:pointer;font-size:12px;}
+  .dockpane .mbtn:hover{background:#444;}
+  .dockpane .mbtn.active{background:#00695c;border-color:#00e5ff;color:#fff;font-weight:bold;}
+  .dockpane .mbtn.reset{background:#5a2d2d;}
+  .dockpane .mbtn.reset:hover{background:#7a3d3d;}
+  .dockpane label{display:flex;align-items:center;cursor:pointer;margin-top:5px;margin-bottom:5px;}
+  .dockpane input[type="checkbox"]{margin-right:8px;cursor:pointer;}
+  .dockpane select{margin-left:8px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;padding:2px 5px;}
+  /* ===== 폭 조절 그립 ===== */
+  #leftgrip{position:fixed;top:var(--topbarh);bottom:0;left:calc(var(--leftw) - 2px);width:7px;
+    cursor:ew-resize;z-index:26;}
+  #leftgrip:hover, #leftgrip.drag{background:rgba(0,229,255,.25);}
+  #rightgrip{position:fixed;top:var(--topbarh);bottom:0;right:calc(var(--rightw) - 2px);width:7px;
+    cursor:ew-resize;z-index:26;}
+  #rightgrip:hover, #rightgrip.drag{background:rgba(48,192,255,.25);}
   #panel{position:absolute;top:10px;right:10px;width:340px;max-height:94vh;overflow:auto;
          background:rgba(0,0,0,.85);color:#eee;border-radius:10px;padding:15px;display:none;font-size:13px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);}
   #panel h3{margin:.2em 0;color:#ffdd33; border-bottom: 1px solid #444; padding-bottom: 5px;} 
@@ -21,9 +41,10 @@
   #panel .src{color:#9cf;word-break:break-all; font-weight: bold;} 
   #panel .close{float:right;cursor:pointer;color:#f88; font-weight: bold; background: #333; padding: 2px 6px; border-radius: 4px;}
   #panel .close:hover{background: #555;}
-  /* 우측 전체 이미지 리스트 */
-  #imglist{position:absolute;top:10px;right:10px;width:300px;max-height:94vh;display:flex;flex-direction:column;
-    background:rgba(0,0,0,.85);color:#eee;border-radius:10px;padding:12px;font-size:13px;box-shadow:0 4px 6px rgba(0,0,0,0.5);}
+  /* 우측 전체 이미지 리스트 (고정 도크 · 좌측 그립으로 폭 조절) */
+  #imglist{position:fixed;top:var(--topbarh);right:0;bottom:0;width:var(--rightw);display:flex;flex-direction:column;
+    background:rgba(8,12,16,.92);color:#eee;border-left:1px solid #2a3a48;padding:12px;font-size:13px;
+    box-shadow:-2px 0 8px rgba(0,0,0,.4);z-index:20;box-sizing:border-box;}
   #imglist h3{margin:.2em 0;color:#30c0ff;border-bottom:1px solid #444;padding-bottom:6px;
     display:flex;justify-content:space-between;align-items:center;font-size:15px;}
   #imglist .reset{font-size:11px;background:#333;border:1px solid #555;color:#9cf;border-radius:5px;padding:3px 7px;cursor:pointer;}
@@ -45,8 +66,8 @@
     border-radius:50%;box-shadow:0 0 6px #ffee00, inset 0 0 3px #ffee00;pointer-events:none;}
   .imgItem .uvdot::after{content:'';position:absolute;inset:4px;background:#ffee00;border-radius:50%;}
   /* 카메라 정보 패널 */
-  #caminfo{position:absolute;bottom:12px;left:12px;background:rgba(0,0,0,.88);color:#eee;border-radius:10px;
-    padding:12px 14px;font-size:13px;display:none;box-shadow:0 4px 6px rgba(0,0,0,0.5);min-width:220px;}
+  #caminfo{position:fixed;bottom:12px;left:calc(var(--leftw) + 14px);background:rgba(0,0,0,.88);color:#eee;border-radius:10px;
+    padding:12px 14px;font-size:13px;display:none;box-shadow:0 4px 6px rgba(0,0,0,0.5);min-width:220px;z-index:27;}
   #caminfo h3{margin:.1em 0 .5em;color:#ffee00;font-size:15px;}
   #caminfo .coord{font-family:Consolas,monospace;color:#9cf;line-height:1.7;font-size:14px;}
   #caminfo .clear{margin-top:10px;font-size:11px;background:#5a2d2d;border:1px solid #855;color:#fdd;border-radius:5px;padding:5px 9px;cursor:pointer;}
@@ -93,10 +114,8 @@
   .hud-marker.show .tag{opacity:1;transform:translateX(0);}
   .hud-marker.active .tag{border-color:#fff;color:#fff;box-shadow:0 0 12px rgba(255,255,255,.4);}
   .hud-marker.active .leader{background:#fff;box-shadow:0 0 6px #fff;}
-  /* ===== 크랙 목록 패널 ===== */
-  #cracklist{position:absolute;top:10px;left:352px;width:480px;max-height:92vh;display:none;flex-direction:column;
-    background:rgba(0,0,0,.9);color:#eee;border-radius:10px;padding:12px;font-size:12px;
-    box-shadow:0 4px 10px rgba(0,0,0,.55);z-index:20;}
+  /* ===== 크랙 목록 패널 (좌측 도크 안에서 세로 flex 로 채움) ===== */
+  #cracklist{display:none;flex-direction:column;color:#eee;font-size:12px;padding:12px;flex:1;min-width:0;overflow:hidden;}
   #cracklist h3{margin:.2em 0;color:#7fffd4;border-bottom:1px solid #444;padding-bottom:6px;
     display:flex;justify-content:space-between;align-items:center;font-size:15px;}
   #cracklist .close{font-size:12px;background:#5a2d2d;border:1px solid #855;color:#fdd;border-radius:5px;
@@ -116,7 +135,7 @@
   .sevchip{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle;}
   #clFoot{font-size:11px;color:#789;margin-top:6px;}
   /* 성능 계측 오버레이 (F2 로 토글) */
-  #stats{position:fixed;left:12px;top:12px;z-index:60;background:rgba(6,10,14,.9);border:1px solid #2a3a48;
+  #stats{position:fixed;left:12px;top:calc(var(--topbarh) + 8px);z-index:60;background:rgba(6,10,14,.9);border:1px solid #2a3a48;
     border-radius:8px;padding:8px 11px;font:11px/1.55 Consolas,monospace;color:#7fffd4;white-space:pre;
     pointer-events:none;display:none;box-shadow:0 3px 10px rgba(0,0,0,.6);}
   /* 보고서 로딩/오류 표시 (메시가 GB 급이면 수 초 걸린다) */
@@ -127,108 +146,130 @@
 <div id="boot"><span id="bootMsg">보고서 여는 중...</span></div>
 <div id="stats"></div>
 <div id="hud"></div>
-<div id="info">
-  <b>원전 환경 디지털 트윈 분석</b><br>
-  <span style="color:#aaa" id="hdrCounts">분석 이미지: — · 검출 포인트: —</span>
-  <div id="reportMeta" style="font-size:11px;color:#7a8a99;line-height:1.6;margin-top:4px;"></div>
-  <div id="scaleWarn" style="display:none;font-size:11px;color:#ffb84d;background:rgba(80,50,10,.35);
-    border:1px solid #6a4a1a;border-radius:6px;padding:6px 9px;margin-top:6px;line-height:1.5;"></div>
-  <!-- 심각도 색 범례: 색이 무엇을 뜻하는지 항상 보이게 -->
-  <div id="sevLegend" style="margin-top:8px;font-size:11px;color:#bbb;">
-    <div style="height:9px;border-radius:5px;margin-bottom:3px;
-      background:linear-gradient(90deg,rgb(38,235,89),rgb(179,255,31),rgb(255,229,0),rgb(255,107,0),rgb(255,15,10));"></div>
-  </div>
-  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-
-  <label><input type="checkbox" id="ckHot" checked> 💬 크랙 정보 말풍선(호버 시 평균 폭·총 길이) 표시</label>
-  <label><input type="checkbox" id="ckRibbon" checked> 🎗️ 크랙 형상(표면 위·실폭 반영) 표시</label>
-  <div style="display:flex; gap:6px; margin:8px 0;">
-    <button id="btnCrackList" class="mbtn">📋 크랙 목록 (정렬·필터·CSV)</button>
-  </div>
-
-  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-  <label><input type="checkbox" id="ckGrid" checked> 🌐 좌표축 및 바닥 그리드 표시</label>
-  <label><input type="checkbox" id="ckDarkMesh"> 🌙 구조물 어둡게 보기 (픽셀 강조)</label>
-  <label><input type="checkbox" id="ckCam" checked> 📷 카메라 위치(파란색) 표시</label>
-
-  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-  <b style="font-size:14px;">🔎 지점 검사</b>
-  <div style="display:flex; gap:6px; margin:8px 0;">
-    <button id="btnInspect" class="mbtn">지점 검사 모드</button>
-  </div>
-  <div id="inspectMsg" style="font-size:11px;color:#888;margin-bottom:4px;">끄면 일반 조작으로 돌아갑니다.</div>
-
-  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-  <b style="font-size:14px;">📏 측정 도구 <span style="font-size:11px; color:#888; font-weight:normal;">(1 단위 = 1 m)</span></b>
-  <div style="display:flex; gap:6px; margin:8px 0;">
-    <button id="btnDist" class="mbtn">거리 측정</button>
-    <button id="btnRad" class="mbtn">반경 측정</button>
-    <button id="btnReset" class="mbtn reset">초기화</button>
-  </div>
-  <label style="font-size:12px; color:#ccc;">표시 단위:
-    <select id="unitSelect">
-      <option value="mm" selected>mm</option>
-      <option value="cm">cm</option>
-      <option value="m">m</option>
-      <option value="auto">자동</option>
-    </select>
-  </label>
-  <div id="measResult" style="margin-top:8px; font-size:12px; color:#eee; background:#222; padding:8px; border-radius:6px; line-height:1.5;">측정 모드를 선택하세요.</div>
-
-  <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-  <b style="font-size:14px;">🎯 스케일 캘리브레이션</b>
-  <div style="display:flex; gap:6px; margin:8px 0;">
-    <button id="btnCalib" class="mbtn">기준 거리 지정</button>
-    <button id="btnCalibClear" class="mbtn reset" style="display:none;">해제</button>
-  </div>
-  <div id="calibForm" style="display:none; margin:6px 0; background:#222; padding:8px; border-radius:6px; font-size:12px;">
-    측정된 거리: <span id="calibMeasured" style="color:#b388ff;font-weight:bold;"></span>
-    <div style="display:flex;gap:6px;align-items:center;margin-top:6px;">
-      실제
-      <input id="calibReal" type="number" min="0" step="any"
-        style="width:74px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;">
-      <select id="calibUnit" style="margin-left:0;">
-        <option value="1">mm</option><option value="10">cm</option><option value="1000" selected>m</option>
-      </select>
-      <button id="btnCalibApply" class="mbtn" style="flex:0 0 auto;">적용</button>
-    </div>
-  </div>
-  <div id="calibStatus" style="font-size:11px;color:#888;margin-bottom:4px;">
-    실측 길이를 아는 두 점(표척·조인트 등)을 클릭해 모든 mm 수치를 보정합니다.</div>
-
-  <div style="margin-top: 10px; font-size: 11px; color:#888; background: #222; padding: 8px; border-radius: 6px;">
-    [조작법]<br>드래그: 회전 · 휠: 확대/축소 · 우클릭: 이동<br>
-    <b style="color:#aac">WASD 이동 · Space 상승 · Ctrl 하강 · Shift 가속</b><br>
-    · 노란 핫스팟 클릭 → 우측 목록이 해당 이미지들로 필터<br>
-    · 파란 카메라 클릭 → 노랑 강조 + 위치 좌표<br>
-    · 우측 이미지 클릭 → 그 카메라 시점으로 이동 (우클릭 → 원본 크게 보기)
-  </div>
+<!-- ===== 상단 메뉴바: 클릭한 도구가 좌측 도크에 열린다 ===== -->
+<div id="topbar">
+  <span class="brand">🧭 CrackTwinStudio</span>
+  <button class="tmenu active" data-pane="pane-info">ℹ️ 개요</button>
+  <button class="tmenu" data-pane="pane-view">👁️ 표시</button>
+  <button class="tmenu" data-pane="cracklist">📋 크랙 목록</button>
+  <button class="tmenu" data-pane="pane-inspect">🔎 지점 검사</button>
+  <button class="tmenu" data-pane="pane-measure">📏 측정 도구</button>
+  <button class="tmenu" data-pane="pane-calib">🎯 캘리브레이션</button>
+  <span id="topbarHint">메뉴를 다시 누르면 패널이 닫힙니다</span>
 </div>
 
+<!-- ===== 좌측 도크: 상단 메뉴에서 선택한 패널 하나를 표시 (우측 가장자리 드래그로 폭 조절) ===== -->
+<div id="leftdock">
+  <div class="dockpane" id="pane-info" style="display:block;">
+    <b>원전 환경 디지털 트윈 분석</b><br>
+    <span style="color:#aaa" id="hdrCounts">분석 이미지: — · 검출 포인트: —</span>
+    <div id="reportMeta" style="font-size:11px;color:#7a8a99;line-height:1.6;margin-top:4px;"></div>
+    <div id="scaleWarn" style="display:none;font-size:11px;color:#ffb84d;background:rgba(80,50,10,.35);
+      border:1px solid #6a4a1a;border-radius:6px;padding:6px 9px;margin-top:6px;line-height:1.5;"></div>
+    <!-- 심각도 색 범례 -->
+    <div id="sevLegend" style="margin-top:8px;font-size:11px;color:#bbb;">
+      <div style="height:9px;border-radius:5px;margin-bottom:3px;
+        background:linear-gradient(90deg,rgb(38,235,89),rgb(179,255,31),rgb(255,229,0),rgb(255,107,0),rgb(255,15,10));"></div>
+    </div>
+    <div style="margin-top:12px; font-size:11px; color:#888; background:#222; padding:8px; border-radius:6px;">
+      [조작법]<br>드래그: 회전 · 휠: 확대/축소 · 우클릭: 이동<br>
+      <b style="color:#aac">WASD 이동 · Space 상승 · Ctrl 하강 · Shift 가속</b><br>
+      · 크랙(형상) 클릭 → 우측에 대표 이미지·수치<br>
+      · 파란 카메라 클릭 → 노랑 강조 + 위치 좌표<br>
+      · 우측 이미지 클릭 → 그 카메라 시점으로 이동 (우클릭 → 원본 크게 보기)<br>
+      · 상단 메뉴로 도구 열기 · 패널 가장자리 드래그로 폭 조절
+    </div>
+  </div>
+
+  <div class="dockpane" id="pane-view">
+    <b style="font-size:14px;">👁️ 표시 옵션</b>
+    <hr style="border:0;border-top:1px solid #444;margin:10px 0;">
+    <label><input type="checkbox" id="ckHot" checked> 💬 크랙 정보 말풍선(호버 시 평균 폭·총 길이) 표시</label>
+    <label><input type="checkbox" id="ckRibbon" checked> 🎗️ 크랙 형상(표면 위·실폭 반영) 표시</label>
+    <label><input type="checkbox" id="ckGrid" checked> 🌐 좌표축 및 바닥 그리드 표시</label>
+    <label><input type="checkbox" id="ckDarkMesh"> 🌙 구조물 어둡게 보기 (픽셀 강조)</label>
+    <label><input type="checkbox" id="ckCam" checked> 📷 카메라 위치(파란색) 표시</label>
+  </div>
+
+  <div class="dockpane" id="cracklist">
+    <h3><span>📋 크랙 목록 <span id="clCount" style="font-size:11px;color:#9cf;font-weight:normal;"></span></span>
+        <button class="close" id="clClose">✕ 닫기</button></h3>
+    <div class="ctr">
+      정렬 <select id="clSort">
+        <option value="wmax">최대 폭 ↓</option><option value="wmed">평균 폭 ↓</option>
+        <option value="len">길이 ↓</option><option value="views">뷰 수 ↓</option><option value="conf">신뢰도 ↓</option>
+      </select>
+      폭≥ <input id="clMinW" type="number" min="0" step="any" placeholder="mm">
+      길이≥ <input id="clMinL" type="number" min="0" step="any" placeholder="mm">
+      <button id="clCsv">⬇ CSV</button>
+      <button id="clCopy">📋 복사</button>
+    </div>
+    <div id="clHead"><span>ID</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
+    <div id="clRows"></div>
+    <div id="clFoot"></div>
+  </div>
+
+  <div class="dockpane" id="pane-inspect">
+    <b style="font-size:14px;">🔎 지점 검사</b>
+    <hr style="border:0;border-top:1px solid #444;margin:10px 0;">
+    <div style="display:flex; gap:6px; margin:8px 0;">
+      <button id="btnInspect" class="mbtn">지점 검사 모드</button>
+    </div>
+    <div id="inspectMsg" style="font-size:11px;color:#888;margin-bottom:4px;">끄면 일반 조작으로 돌아갑니다.</div>
+  </div>
+
+  <div class="dockpane" id="pane-measure">
+    <b style="font-size:14px;">📏 측정 도구 <span style="font-size:11px; color:#888; font-weight:normal;">(1 단위 = 1 m)</span></b>
+    <hr style="border:0;border-top:1px solid #444;margin:10px 0;">
+    <div style="display:flex; gap:6px; margin:8px 0;">
+      <button id="btnDist" class="mbtn">거리 측정</button>
+      <button id="btnRad" class="mbtn">반경 측정</button>
+      <button id="btnReset" class="mbtn reset">초기화</button>
+    </div>
+    <label style="font-size:12px; color:#ccc;">표시 단위:
+      <select id="unitSelect">
+        <option value="mm" selected>mm</option>
+        <option value="cm">cm</option>
+        <option value="m">m</option>
+        <option value="auto">자동</option>
+      </select>
+    </label>
+    <div id="measResult" style="margin-top:8px; font-size:12px; color:#eee; background:#222; padding:8px; border-radius:6px; line-height:1.5;">측정 모드를 선택하세요.</div>
+  </div>
+
+  <div class="dockpane" id="pane-calib">
+    <b style="font-size:14px;">🎯 스케일 캘리브레이션</b>
+    <hr style="border:0;border-top:1px solid #444;margin:10px 0;">
+    <div style="display:flex; gap:6px; margin:8px 0;">
+      <button id="btnCalib" class="mbtn">기준 거리 지정</button>
+      <button id="btnCalibClear" class="mbtn reset" style="display:none;">해제</button>
+    </div>
+    <div id="calibForm" style="display:none; margin:6px 0; background:#222; padding:8px; border-radius:6px; font-size:12px;">
+      측정된 거리: <span id="calibMeasured" style="color:#b388ff;font-weight:bold;"></span>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:6px;">
+        실제
+        <input id="calibReal" type="number" min="0" step="any"
+          style="width:74px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;">
+        <select id="calibUnit" style="margin-left:0;">
+          <option value="1">mm</option><option value="10">cm</option><option value="1000" selected>m</option>
+        </select>
+        <button id="btnCalibApply" class="mbtn" style="flex:0 0 auto;">적용</button>
+      </div>
+    </div>
+    <div id="calibStatus" style="font-size:11px;color:#888;margin-bottom:4px;">
+      실측 길이를 아는 두 점(표척·조인트 등)을 클릭해 모든 mm 수치를 보정합니다.</div>
+  </div>
+</div>
+<div id="leftgrip" title="드래그로 폭 조절"></div>
+
+<!-- ===== 우측: 이미지 패널 (좌측 가장자리 드래그로 폭 조절) ===== -->
 <div id="imglist">
   <h3><span id="imgTitle">전체 이미지</span>
       <button class="reset" id="imgReset" style="display:none">전체 보기</button></h3>
   <div id="imgHot"></div>
   <div id="imgItems"></div>
 </div>
-
-<div id="cracklist">
-  <h3><span>📋 크랙 목록 <span id="clCount" style="font-size:11px;color:#9cf;font-weight:normal;"></span></span>
-      <button class="close" id="clClose">✕ 닫기</button></h3>
-  <div class="ctr">
-    정렬 <select id="clSort">
-      <option value="wmax">최대 폭 ↓</option><option value="wmed">평균 폭 ↓</option>
-      <option value="len">길이 ↓</option><option value="views">뷰 수 ↓</option><option value="conf">신뢰도 ↓</option>
-    </select>
-    폭≥ <input id="clMinW" type="number" min="0" step="any" placeholder="mm">
-    길이≥ <input id="clMinL" type="number" min="0" step="any" placeholder="mm">
-    <button id="clCsv">⬇ CSV</button>
-    <button id="clCopy">📋 복사</button>
-  </div>
-  <div id="clHead"><span>ID</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
-  <div id="clRows"></div>
-  <div id="clFoot"></div>
-</div>
+<div id="rightgrip" title="드래그로 폭 조절"></div>
 
 <div id="caminfo">
   <h3>📷 카메라 정보</h3>
@@ -1602,11 +1643,45 @@ clRowsEl.addEventListener('scroll',()=>{
   if(clRowsEl.scrollTop+clRowsEl.clientHeight > clRowsEl.scrollHeight-200 && clShown<clData.length) clRenderMore();
 });
 ['clSort','clMinW','clMinL'].forEach(id=>document.getElementById(id).addEventListener('input',clRefresh));
-document.getElementById('btnCrackList').onclick=()=>{
-  const on=clPanel.style.display!=='flex';
-  clPanel.style.display=on?'flex':'none'; if(on) clRefresh();
-};
-document.getElementById('clClose').onclick=()=>{ clPanel.style.display='none'; };
+document.getElementById('clClose').onclick=()=>showPane(null);
+
+// ================= 상단 메뉴 ↔ 좌측 도크 (같은 메뉴 재클릭 = 닫기) =================
+const PANES=['pane-info','pane-view','cracklist','pane-inspect','pane-measure','pane-calib'];
+let activePane='pane-info';
+function showPane(id){
+  activePane = (id!=null && activePane!==id) ? id : null;
+  for(const p of PANES){ const el=document.getElementById(p);
+    if(el) el.style.display = (p===activePane) ? (p==='cracklist'?'flex':'block') : 'none'; }
+  document.getElementById('leftdock').style.display = activePane ? 'flex' : 'none';
+  document.getElementById('leftgrip').style.display = activePane ? 'block' : 'none';
+  document.querySelectorAll('#topbar .tmenu').forEach(b=>b.classList.toggle('active', b.dataset.pane===activePane));
+  if(activePane==='cracklist') clRefresh();
+}
+document.querySelectorAll('#topbar .tmenu').forEach(b=>b.onclick=()=>showPane(b.dataset.pane));
+
+// ================= 도크 폭 조절(그립 드래그 · localStorage 기억) =================
+(function(){
+  const root=document.documentElement;
+  try{ const s=JSON.parse(localStorage.getItem('ctw_dockw')||'{}');
+    if(s.l) root.style.setProperty('--leftw', s.l+'px');
+    if(s.r) root.style.setProperty('--rightw', s.r+'px'); }catch(e){}
+  const curL=()=>parseInt(getComputedStyle(root).getPropertyValue('--leftw'))||340;
+  const curR=()=>parseInt(getComputedStyle(root).getPropertyValue('--rightw'))||300;
+  function grip(el, apply){
+    el.addEventListener('pointerdown', e=>{
+      e.preventDefault(); el.classList.add('drag');
+      const move=ev=>apply(ev.clientX);
+      const up=()=>{ el.classList.remove('drag');
+        removeEventListener('pointermove',move); removeEventListener('pointerup',up);
+        try{ localStorage.setItem('ctw_dockw', JSON.stringify({l:curL(), r:curR()})); }catch(err){} };
+      addEventListener('pointermove',move); addEventListener('pointerup',up);
+    });
+  }
+  grip(document.getElementById('leftgrip'),
+       x=>root.style.setProperty('--leftw', Math.max(240, Math.min(innerWidth*0.6, x))+'px'));
+  grip(document.getElementById('rightgrip'),
+       x=>root.style.setProperty('--rightw', Math.max(200, Math.min(innerWidth*0.6, innerWidth-x))+'px'));
+})();
 
 // 행 클릭 → 크랙 앞으로 비행(현 시선 유지, 크랙 크기에 비례한 거리) + 선택·상세 표시
 function flyToCrack(i){
