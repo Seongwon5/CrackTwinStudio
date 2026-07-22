@@ -2022,7 +2022,7 @@ renderer.domElement.addEventListener('wheel', e=>{
   cancelAnim();                                   // 진행 중 비행 취소
   const dir=camera.getWorldDirection(new THREE.Vector3());
   const sprint=(e.shiftKey?4:1);
-  const step=(modelDiag||1)*0.04*sprint*(e.deltaY<0?1:-1);   // 모델 크기 비례 · 노치당 일정
+  const step=(modelDiag||1)*0.004*sprint*(e.deltaY<0?1:-1);   // 모델 크기 비례 · 노치당 일정
   camera.position.addScaledVector(dir, step);
 }, {passive:false});
 document.getElementById('boot').style.display='none';   // 씬 구성 완료 → 로딩 표시 제거
