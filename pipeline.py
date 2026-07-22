@@ -325,17 +325,17 @@ def fuse_points(pts, ws, ns, voxel):
     N = np.asarray(ns, float) if haveN else np.zeros((len(P), 3))
     if len(P) == 0:
         return [], [], []
-    # ① 복셀 병합
+    # ① 복셀 병합 — 폭은 복셀 내 '중앙값'(과거 최대값은 겹친 뷰 중 최대 오검출 폭을 채택해 부풀렸다)
     vox = {}
     for i in range(len(P)):
         k = (int(np.floor(P[i, 0] / voxel)), int(np.floor(P[i, 1] / voxel)), int(np.floor(P[i, 2] / voxel)))
         v = vox.get(k)
         if v is None:
-            vox[k] = [P[i].copy(), float(W[i]), N[i].copy(), 1]
+            vox[k] = [P[i].copy(), [float(W[i])], N[i].copy(), 1]
         else:
-            v[0] += P[i]; v[1] = max(v[1], float(W[i])); v[2] += N[i]; v[3] += 1
+            v[0] += P[i]; v[1].append(float(W[i])); v[2] += N[i]; v[3] += 1
     vp = np.array([v[0] / v[3] for v in vox.values()])
-    vw = np.array([v[1] for v in vox.values()])
+    vw = np.array([float(np.median(v[1])) for v in vox.values()])
     vn = np.array([v[2] / v[3] for v in vox.values()])
     nl = np.linalg.norm(vn, axis=1, keepdims=True); nl[nl < 1e-9] = 1.0; vn = vn / nl
     n = len(vp)
@@ -351,6 +351,16 @@ def fuse_points(pts, ws, ns, voxel):
     adj = [[] for _ in range(n)]
     for a, b in zip(mst.row.tolist(), mst.col.tolist()):
         adj[a].append(b); adj[b].append(a)
+    # ②-b 라플라시안 스무딩: 각 정점을 MST 이웃 평균 쪽으로 당겨 정합 오차로 생긴 측면 지그재그를
+    #     접는다(뷰 간 수십 cm 어긋남이 리본을 실폭보다 뚱뚱하게 만들던 원인). 그래프 기반이라
+    #     순서·분기와 무관하고, 크랙의 완만한 곡률(저주파)은 보존한다.
+    LAM, ITER = 0.5, 6
+    for _ in range(ITER):
+        acc = np.zeros_like(vp)
+        for i in range(n):
+            nb = adj[i]
+            acc[i] = vp[nb].mean(0) if nb else vp[i]
+        vp = vp * (1.0 - LAM) + acc * LAM
     start = next((i for i in range(n) if len(adj[i]) == 1), 0)   # 끝점(leaf)에서 시작
     order = [start]; seen = [False] * n; seen[start] = True; stack = [start]
     while stack:
