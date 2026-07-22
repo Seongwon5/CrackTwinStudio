@@ -1200,7 +1200,10 @@ function makeCrop(container, cam, u, v, cropFrac){
     const CW=box.clientWidth||280, CH=box.clientHeight||210;
     const s=CW/(im.naturalWidth*cropFrac);
     const w=im.naturalWidth*s, hh=im.naturalHeight*s;
-    const L=(CW/2 - u*w), T=(CH/2 - v*hh);
+    // 크랙을 중앙에 두되, 가장자리 크랙에서 이미지가 박스 밖으로 밀려 검은 배경이 보이지 않게 클램프
+    let L=(CW/2 - u*w), T=(CH/2 - v*hh);
+    L = (w<=CW) ? (CW-w)/2 : Math.min(0, Math.max(CW-w, L));
+    T = (hh<=CH) ? (CH-hh)/2 : Math.min(0, Math.max(CH-hh, T));
     im.style.width=w+'px'; im.style.height=hh+'px'; im.style.left=L+'px'; im.style.top=T+'px';
     if(mask){ mask.style.width=w+'px'; mask.style.height=hh+'px'; mask.style.left=L+'px'; mask.style.top=T+'px'; }
     hlv.width=CW; hlv.height=CH;                    // 선택된 크랙만 노란 발광(멤버 뷰 한정 + 마스크 스냅)
