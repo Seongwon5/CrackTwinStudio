@@ -855,6 +855,9 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         dh, dw = disp.shape[:2]
         C = pick_center(K, R, T)
         cam = camera_pose(K, R, T, dw, dh)
+        # 왜곡계수(k1,k2,p1,p2,k3)도 저장 — 뷰어가 3D→이미지 되투영 시 왜곡을 적용해야
+        # 원본(왜곡된) 사진 위에 정확히 얹힌다(핀홀만 쓰면 가장자리에서 수십 px 어긋남).
+        cam["dist"] = [float(x) for x in dist]
         cam.update({"id": n, "source": name,
                     # 원본 JPEG 바이트. data-URI/base64 로 부풀리지 않는다(저장 시 zip 에 그대로).
                     "_thumb": encode_jpeg_bytes(disp, THUMB_MAX_PX, 75),

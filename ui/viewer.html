@@ -676,6 +676,16 @@ const allCams = DATA.cameras || [];
 const camDataBySource = {}; allCams.forEach(c => camDataBySource[c.source] = c);
 
 // 3D 점을 카메라 이미지 평면에 투영 → 정규화 픽셀(0~1). 화면 밖/뒤면 null.
+// 렌즈 왜곡(Brown–Conrady) 순방향 적용: 정규화 (x,y) → 왜곡 (xd,yd).
+// 3D 중심선은 왜곡 '보정된' 광선으로 만들어졌으므로, 원본(왜곡된) 사진에 되투영할 땐
+// 왜곡을 다시 적용해야 정확히 얹힌다(실측: 핀홀만 쓰면 중앙값 33px, 적용 시 0.2px).
+function distortXY(cam, x, y){
+  const d=cam.dist; if(!d || !d.length) return [x, y];      // 구버전 .twin: 왜곡계수 없음 → 핀홀
+  const k1=d[0]||0, k2=d[1]||0, p1=d[2]||0, p2=d[3]||0, k3=d[4]||0;
+  const r2=x*x+y*y, rad=1 + k1*r2 + k2*r2*r2 + k3*r2*r2*r2;
+  return [x*rad + 2*p1*x*y + p2*(r2+2*x*x),
+          y*rad + p1*(r2+2*y*y) + 2*p2*x*y];
+}
 function projectToCam(cam, X){
   if(cam.fx === undefined) return null;
   const rx=X[0]-cam.pos[0], ry=X[1]-cam.pos[1], rz=X[2]-cam.pos[2];
@@ -683,8 +693,9 @@ function projectToCam(cam, X){
   if(Zc <= 1e-6) return null;
   const Xc = rx*cam.right[0]+ry*cam.right[1]+rz*cam.right[2];
   const Yc = -(rx*cam.up[0]+ry*cam.up[1]+rz*cam.up[2]);
-  const u = (cam.fx*Xc/Zc + cam.cx)/cam.w;
-  const v = (cam.fy*Yc/Zc + cam.cy)/cam.h;
+  const [xd, yd] = distortXY(cam, Xc/Zc, Yc/Zc);
+  const u = (cam.fx*xd + cam.cx)/cam.w;
+  const v = (cam.fy*yd + cam.cy)/cam.h;
   if(u<0||u>1||v<0||v>1) return null;
   return {u, v};
 }
@@ -697,7 +708,8 @@ function projCamRaw(cam, X){                        // projectToCam 과 동일�
   if(Zc <= 1e-6) return null;
   const Xc = rx*cam.right[0]+ry*cam.right[1]+rz*cam.right[2];
   const Yc = -(rx*cam.up[0]+ry*cam.up[1]+rz*cam.up[2]);
-  return {u:(cam.fx*Xc/Zc + cam.cx)/cam.w, v:(cam.fy*Yc/Zc + cam.cy)/cam.h};
+  const [xd, yd] = distortXY(cam, Xc/Zc, Yc/Zc);    // 왜곡 적용(원본 사진 좌표계)
+  return {u:(cam.fx*xd + cam.cx)/cam.w, v:(cam.fy*yd + cam.cy)/cam.h};
 }
 function crackPathsInCam(hot, cam){                 // hot 크랙의 중심선 → 이 카메라의 uv 폴리라인들
   const paths=[];
