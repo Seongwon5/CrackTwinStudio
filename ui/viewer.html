@@ -168,12 +168,14 @@
   #cracklist .ctr button{display:inline-flex;align-items:center;gap:5px;background:var(--surface-3);color:var(--tx-2);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:5px 9px;cursor:pointer;font-size:var(--fs-cap);font-family:inherit;}
   #cracklist .ctr button:hover{background:#222d37;border-color:var(--accent);color:var(--accent);}
   #cracklist .ctr button .ic{width:13px;height:13px;}
-  #clHead{display:grid;grid-template-columns:66px 1fr 1fr 1fr 34px;gap:4px;padding:7px 8px;color:var(--tx-3);
+  #clHead{display:grid;grid-template-columns:60px 46px 1fr 1fr 1fr 30px;gap:4px;padding:7px 8px;color:var(--tx-3);
     background:var(--surface-2);border-radius:var(--r-sm) var(--r-sm) 0 0;font-weight:600;font-size:10.5px;
     text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;}
   #clRows{overflow-y:auto;flex:1;min-height:120px;border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-sm) var(--r-sm);}
-  .clRow{display:grid;grid-template-columns:66px 1fr 1fr 1fr 34px;gap:4px;padding:6px 8px;cursor:pointer;
+  .clRow{display:grid;grid-template-columns:60px 46px 1fr 1fr 1fr 30px;gap:4px;padding:6px 8px;cursor:pointer;
     border-left:2px solid transparent;font-family:Consolas,monospace;font-size:var(--fs-cap);color:var(--tx);}
+  .tychip{display:inline-block;padding:1px 5px;border-radius:8px;font-size:9.5px;font-family:'Segoe UI',sans-serif;
+    border:1px solid currentColor;white-space:nowrap;}
   .clRow:nth-child(odd){background:rgba(255,255,255,.018);}
   .clRow:hover{background:var(--surface-3);}
   .clRow.sel{background:var(--accent-dim);border-left-color:var(--accent);}
@@ -273,6 +275,11 @@
     <label><input type="checkbox" id="ckGrid" checked><svg class="ic"><use href="#i-grid"/></svg>좌표축 및 바닥 그리드</label>
     <label><input type="checkbox" id="ckDarkMesh"><svg class="ic"><use href="#i-moon"/></svg>구조물 어둡게 보기(픽셀 강조)</label>
     <label><input type="checkbox" id="ckCam" checked><svg class="ic"><use href="#i-camera"/></svg>카메라 위치 표시</label>
+    <hr>
+    <div style="font-weight:600;font-size:var(--fs-body);margin-bottom:4px;">크랙 유형 필터</div>
+    <label><input type="checkbox" id="tfAll" checked>전체 보기</label>
+    <div id="typeFilter" style="margin-top:2px;"></div>
+    <div style="font-size:var(--fs-cap);color:var(--tx-3);margin-top:6px;">유형별로 켜고 끄면 3D·목록에서 함께 걸러집니다.</div>
   </div>
 
   <div class="dockpane" id="cracklist">
@@ -288,7 +295,7 @@
       <button id="clCsv"><svg class="ic"><use href="#i-download"/></svg>CSV</button>
       <button id="clCopy"><svg class="ic"><use href="#i-copy"/></svg>복사</button>
     </div>
-    <div id="clHead"><span>ID</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
+    <div id="clHead"><span>ID</span><span>유형</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
     <div id="clRows"></div>
     <div id="clFoot"></div>
   </div>
@@ -617,16 +624,22 @@ function radiusOf(wmm){                            // 폭(mm) → 반경(m): 실
 // ---- 병합 렌더: 수만 개 리본을 메시 1개(드로우콜 1회)로 — 대규모 데이터 FPS 의 핵심 ----
 // 리본마다 Mesh 를 만들면 1.7만 드로우콜 + 씬그래프 순회로 6fps 가 된다. 정점색으로 심각도를
 // 굽고 전부 한 버퍼에 병합한다. 호버/선택 하이라이트는 그 크랙만 흰 오버레이 튜브로 따로 그린다.
-const ribGeo = {pos:[], col:[], idx:[], vbase:0};
+// ---- 유형(크랙/조인트/실금/얼룩): 유형별 병합 버퍼로 나눠 필터 시 통째로 on/off ----
+const CRACK_TYPES=['crack','joint','craze','blob'];
+const TYPE_LABEL={crack:'크랙',joint:'조인트·시공선',craze:'실금',blob:'얼룩'};
+const TYPE_COLOR={crack:'#d0a000',joint:'#e05050',craze:'#3aaf5a',blob:'#b98cff'};
+function hotType(hot){ const h=(hot>=0?DATA.hotspots[hot]:null); const t=h&&h.type; return CRACK_TYPES.indexOf(t)>=0?t:'crack'; }
+const ribGeoByType={}; CRACK_TYPES.forEach(t=>ribGeoByType[t]={pos:[],col:[],idx:[],vbase:0});
+const ribType=[];                                    // ri → 유형
 const ribRuns = [];                                  // ri → [{pts,rr}] 하이라이트 오버레이 재생성용
-function tubeInto(pts, radii, radialSeg, color){     // variableTube 와 동일 기하를 병합 버퍼에 축적
+function tubeInto(G, pts, radii, radialSeg, color){  // variableTube 와 동일 기하를 유형별 버퍼 G 에 축적
   const N=pts.length;
   const tan=pts.map((p,i)=>new THREE.Vector3().subVectors(pts[Math.min(N-1,i+1)], pts[Math.max(0,i-1)]).normalize());
   let nrm=new THREE.Vector3(0,0,1);
   if(Math.abs(tan[0].dot(nrm))>0.9) nrm.set(0,1,0);
   nrm.crossVectors(tan[0], nrm).normalize();
   const bin=new THREE.Vector3(), v=new THREE.Vector3();
-  const b0=ribGeo.vbase;
+  const b0=G.vbase;
   for(let i=0;i<N;i++){
     nrm.addScaledVector(tan[i], -nrm.dot(tan[i])).normalize();
     bin.crossVectors(tan[i], nrm).normalize();
@@ -634,15 +647,15 @@ function tubeInto(pts, radii, radialSeg, color){     // variableTube 와 동일 
     for(let j=0;j<radialSeg;j++){
       const a=j/radialSeg*Math.PI*2, cs=Math.cos(a)*r, sn=Math.sin(a)*r;
       v.copy(pts[i]).addScaledVector(nrm, cs).addScaledVector(bin, sn);
-      ribGeo.pos.push(v.x, v.y, v.z); ribGeo.col.push(color.r, color.g, color.b);
+      G.pos.push(v.x, v.y, v.z); G.col.push(color.r, color.g, color.b);
     }
   }
   for(let i=0;i<N-1;i++) for(let j=0;j<radialSeg;j++){
     const a=b0+i*radialSeg+j, b=b0+i*radialSeg+(j+1)%radialSeg,
           c=b0+(i+1)*radialSeg+j, d=b0+(i+1)*radialSeg+(j+1)%radialSeg;
-    ribGeo.idx.push(a,c,b, b,c,d);
+    G.idx.push(a,c,b, b,c,d);
   }
-  ribGeo.vbase += N*radialSeg;
+  G.vbase += N*radialSeg;
 }
 function buildRibbon(h, i){
   const poly=h.poly, pn=h.poly_n, pw=h.poly_w||[];
@@ -653,6 +666,7 @@ function buildRibbon(h, i){
   });
   const rad=poly.map((p,k)=>radiusOf(pw[k]));
   const hot=(h.hot!=null?h.hot:-1);
+  const type=hotType(hot); ribType[i]=type; const G=ribGeoByType[type];   // 유형별 버퍼로 라우팅
   // 크랙 형상 색 = 심각도(상대 순위 색) — 정점색으로 병합 버퍼에 굽는다.
   const base=(hot>=0 ? rankColor(rankFrac(hot)) : new THREE.Color(RIBBON_COLOR));
   ribbonBase[i]=base.getHex();
@@ -660,7 +674,7 @@ function buildRibbon(h, i){
   let run=[], rr=[]; const hitPts=[]; const runs=[];
   const flush=()=>{
     if(run.length>=2){
-      tubeInto(run, rr, RIBBON_RADIAL, base);
+      tubeInto(G, run, rr, RIBBON_RADIAL, base);
       runs.push({pts:run, rr});                                      // 오버레이용 원본 경로 보존
       for(let j=1;j<run.length;j++){ const a=run[j-1],b=run[j]; hitPts.push(a.x,a.y,a.z,b.x,b.y,b.z); }  // 히트박스용 중심선 세그먼트
     }
@@ -742,18 +756,51 @@ function ensureMarkerEl(i){
 // (구버전 .twin 은 ribbons 가 없으니 hotspots 의 poly 로 폴백)
 const _ribs = DATA.ribbons || DATA.hotspots.filter(h=>h.poly);
 _ribs.forEach((rb,ri)=>buildRibbon(rb, ri));
-// 병합 버퍼 → 단일 메시(드로우콜 1회). polygonOffset 으로 표면 위에 그린다.
-(function buildMergedRibbonMesh(){
-  if(!ribGeo.pos.length) return;
-  const g=new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(ribGeo.pos,3));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(ribGeo.col,3));
-  g.setIndex(ribGeo.idx);
-  const m=new THREE.Mesh(g, new THREE.MeshBasicMaterial({vertexColors:true,
-    polygonOffset:true, polygonOffsetFactor:-4, polygonOffsetUnits:-4}));
-  m.matrixAutoUpdate=false;
-  ribbonGroup.add(m);
-  ribGeo.pos=ribGeo.col=ribGeo.idx=null;             // 병합 후 원본 배열 해제(메모리)
+// 유형별 병합 메시(드로우콜 ≤4). 필터는 각 메시의 visible 토글로 즉시 반영.
+const ribMeshByType={};
+(function buildMergedRibbonMeshes(){
+  for(const t of CRACK_TYPES){
+    const G=ribGeoByType[t];
+    if(!G.pos.length){ ribMeshByType[t]=null; continue; }
+    const g=new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(G.pos,3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(G.col,3));
+    g.setIndex(G.idx);
+    const m=new THREE.Mesh(g, new THREE.MeshBasicMaterial({vertexColors:true,
+      polygonOffset:true, polygonOffsetFactor:-4, polygonOffsetUnits:-4}));
+    m.matrixAutoUpdate=false; ribbonGroup.add(m); ribMeshByType[t]=m;
+    G.pos=G.col=G.idx=null;                           // 병합 후 원본 배열 해제(메모리)
+  }
+})();
+// 유형 표시 상태 + 필터 적용(리본 메시·히트라인·핫스팟·목록 모두 반영)
+const typeVisible={crack:true,joint:true,craze:true,blob:true};
+const _typeCount={crack:0,joint:0,craze:0,blob:0};
+DATA.hotspots.forEach((h,i)=>{ _typeCount[hotType(i)]++; });
+function applyTypeFilter(){
+  for(const t of CRACK_TYPES){ if(ribMeshByType[t]) ribMeshByType[t].visible=typeVisible[t]; }
+  for(const hl of ribbonHitLines){ hl.visible = typeVisible[ribType[hl.userData.ri]]!==false; }
+  // 숨긴 유형의 호버/선택 해제
+  if(selIdx>=0 && !typeVisible[hotType(selIdx)]) deselectHotspot();
+  if(hoverHot>=0 && !typeVisible[hotType(hoverHot)]) setHoverHot(-1);
+  updateHUD();
+  if(typeof clRefresh==='function' && document.getElementById('cracklist').style.display==='flex') clRefresh();
+}
+function _syncAllToggle(){ document.getElementById('tfAll').checked = CRACK_TYPES.every(t=>typeVisible[t]); }
+(function buildTypeFilterUI(){
+  const box=document.getElementById('typeFilter');
+  for(const t of CRACK_TYPES){
+    const lb=document.createElement('label');
+    lb.innerHTML='<input type="checkbox" checked>'
+      +'<span class="tychip" style="color:'+TYPE_COLOR[t]+'">'+TYPE_LABEL[t]+'</span>'
+      +'<span style="margin-left:auto;color:var(--tx-3);font-family:Consolas,monospace">'+_typeCount[t].toLocaleString()+'</span>';
+    box.appendChild(lb);
+    lb.querySelector('input').onchange=e=>{ typeVisible[t]=e.target.checked; _syncAllToggle(); applyTypeFilter(); };
+  }
+  document.getElementById('tfAll').onchange=e=>{
+    box.querySelectorAll('input').forEach(inp=>inp.checked=e.target.checked);
+    for(const t of CRACK_TYPES) typeVisible[t]=e.target.checked;
+    applyTypeFilter();
+  };
 })();
 // 호버/선택 하이라이트: 그 크랙의 리본만 흰 튜브로 위에 겹쳐 그린다(병합 버퍼는 불변).
 const hlGroup=new THREE.Group(); ribbonGroup.add(hlGroup);
@@ -779,7 +826,7 @@ function updateHUD(){
   if(hud.style.display==='none') return;
   const W=innerWidth,H=innerHeight, v=new THREE.Vector3();
   const act=new Set();
-  for(const i of [hoverIdx,selIdx,hoverTag]) if(i!=null && i>=0) act.add(i);
+  for(const i of [hoverIdx,selIdx,hoverTag]) if(i!=null && i>=0 && typeVisible[hotType(i)]!==false) act.add(i);
   for(const i of _hudShown) if(!act.has(i)){ const el=hudMarkers[i] && hudMarkers[i].el; if(el) el.style.display='none'; }
   for(const i of act){
     const m=hudMarkers[i]; if(!m) continue;
@@ -1458,6 +1505,7 @@ function pickRibbonHot(){
     v.copy(h.point).project(camera);
     const sx=(v.x*0.5+0.5)*innerWidth, sy=(-v.y*0.5+0.5)*innerHeight;
     const px=Math.hypot(sx-cx, sy-cy);                             // 커서~크랙(교차점) 화면상 거리(px)
+    if(typeVisible[ribType[h.object.userData.ri]]===false) continue;   // 숨긴 유형은 피킹 제외
     if(px<=HITBOX_PX && px<bestPx){ bestPx=px; bestHot=h.object.userData.hot; }   // 14px 안쪽 · 화면상 가장 가까운 크랙
   }
   return bestHot;
@@ -1796,6 +1844,7 @@ function clFilterSort(){
             }[document.getElementById('clSort').value];
   clData=[];
   DATA.hotspots.forEach((h,i)=>{
+    if(typeVisible[hotType(i)]===false) return;                // 숨긴 유형 제외
     if(cmm(h.width_mm_max??h.width_mm??0) < minW) return;      // 필터는 보정된 mm 기준
     if(cmm(h.length_mm??0) < minL) return;
     clData.push([i,h]);
@@ -1807,7 +1856,9 @@ function clRow(i,h){
   const c=rankColor(rankFrac(i));
   const rgb='rgb('+Math.round(c.r*255)+','+Math.round(c.g*255)+','+Math.round(c.b*255)+')';
   const wmed=cmm(h.width_mm_median??h.width_mm_max), wmax=cmm(h.width_mm_max??h.width_mm), L=cmm(h.length_mm);
+  const ty=hotType(i);
   el.innerHTML='<span><span class="sevchip" style="background:'+rgb+'"></span>C-'+String(i+1).padStart(4,'0')+'</span>'
+    +'<span><span class="tychip" style="color:'+TYPE_COLOR[ty]+'">'+TYPE_LABEL[ty].slice(0,2)+'</span></span>'
     +'<span>'+(wmed!=null?wmed.toFixed(2):'?')+'</span>'
     +'<span>'+(wmax!=null?wmax.toFixed(2):'?')+'</span>'
     +'<span>'+(L!=null?Math.round(L).toLocaleString():'?')+'</span>'
