@@ -248,9 +248,9 @@
     <button class="close" id="imClose">✕ 닫기</button>
   </div>
   <div id="imView">
-    <div id="imStage"><img id="imImg" alt=""><img id="imMask" alt=""><div id="imCrackMarker"></div><div id="imMarker"></div></div>
+    <div id="imStage"><img id="imImg" alt=""><img id="imMask" alt=""><canvas id="imHL" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas><div id="imCrackMarker"></div><div id="imMarker"></div></div>
   </div>
-  <div id="imCoord">이미지의 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.</div>
+  <div id="imCoord">드래그: 이동 · 휠: 확대/축소</div>
 </div>
 
 
@@ -688,6 +688,45 @@ function projectToCam(cam, X){
   if(u<0||u>1||v<0||v>1) return null;
   return {u, v};
 }
+// ---- 선택 크랙 하이라이트(2D): 크랙의 3D 중심선을 사진에 투영해 노란 발광 폴리라인으로 ----
+// 마스크 PNG 는 모든 크랙이 한 장에 구워져 있어 크랙별 분리가 불가 → 기하(poly)로 그린다.
+function projCamRaw(cam, X){                        // projectToCam 과 동일하되 화면 밖도 반환(선이 잘리지 않게)
+  if(cam.fx === undefined) return null;
+  const rx=X[0]-cam.pos[0], ry=X[1]-cam.pos[1], rz=X[2]-cam.pos[2];
+  const Zc = rx*cam.fwd[0]+ry*cam.fwd[1]+rz*cam.fwd[2];
+  if(Zc <= 1e-6) return null;
+  const Xc = rx*cam.right[0]+ry*cam.right[1]+rz*cam.right[2];
+  const Yc = -(rx*cam.up[0]+ry*cam.up[1]+rz*cam.up[2]);
+  return {u:(cam.fx*Xc/Zc + cam.cx)/cam.w, v:(cam.fy*Yc/Zc + cam.cy)/cam.h};
+}
+function crackPathsInCam(hot, cam){                 // hot 크랙의 중심선 → 이 카메라의 uv 폴리라인들
+  const paths=[];
+  for(const ri of (ribsByHot[hot]||[])){
+    const poly=(_ribs[ri] && _ribs[ri].poly) || [];
+    let cur=[], prev=null;
+    for(const p of poly){
+      const pr=projCamRaw(cam, p);
+      const jump = (pr && prev) ? (Math.abs(pr.u-prev.u)+Math.abs(pr.v-prev.v)) > 0.2 : false;
+      if(!pr || jump){ if(cur.length>1) paths.push(cur); cur=[]; }
+      if(pr) cur.push(pr);
+      prev=pr;
+    }
+    if(cur.length>1) paths.push(cur);
+  }
+  return paths;
+}
+function drawCrackPaths(ctx, paths, mapUV, lw){     // 노란 발광(두 번 그려 더 밝게)
+  if(!paths.length) return;
+  ctx.strokeStyle='#ffee00'; ctx.lineWidth=lw; ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.shadowColor='#ffee00'; ctx.shadowBlur=lw*2.5;
+  ctx.beginPath();
+  for(const path of paths){
+    let first=true;
+    for(const q of path){ const xy=mapUV(q); if(!xy) continue;
+      if(first){ ctx.moveTo(xy[0],xy[1]); first=false; } else ctx.lineTo(xy[0],xy[1]); }
+  }
+  ctx.stroke(); ctx.stroke();
+}
 // 핫스팟의 대표 뷰: views(신뢰도순) 중 크랙이 화면 안에 들어오는 첫 뷰
 function pickRepView(h){
   let fb = null;
@@ -806,7 +845,7 @@ function renderImageList(cams, hotspot, uvmap, info){
       + (px ? '<div class="uvdot" style="left:'+px.x.toFixed(1)+'px;top:'+px.y.toFixed(1)+'px"></div>' : '')
       + '</div><span class="nm">'+c.source+'</span>';
     el.title = uv ? '클릭: 카메라 시점으로 이동 · 우클릭: 원본에서 이 지점(노란 원) 크게 보기'
-                  : '클릭: 카메라 시점으로 이동 · 우클릭: 원본 크게 보기(3D 좌표 측정)';
+                  : '클릭: 카메라 시점으로 이동 · 우클릭: 원본 크게 보기';
     el.onclick=()=>selectCamera(c, true);
     el.oncontextmenu=(ev)=>{ ev.preventDefault(); openImageModal(c, uv || null, uv ? 'inspect' : null); };
     items.appendChild(el);
@@ -874,6 +913,8 @@ function makeCrop(container, cam, u, v, cropFrac){
   // 검출 마스크를 원본과 똑같이 정렬해 겹쳐 → 대표 뷰에서 크랙이 보이게(마스크는 원본과 동일 해상도)
   const mask = cam.has_mask ? new Image() : null;
   if(mask) mask.style.cssText='position:absolute;left:0;top:0;max-width:none;pointer-events:none;';
+  const hlv=document.createElement('canvas');       // 선택 크랙 노란 하이라이트 오버레이
+  hlv.style.cssText='position:absolute;left:0;top:0;pointer-events:none;';
   function layout(){
     const CW=box.clientWidth||280, CH=box.clientHeight||210;
     const s=CW/(im.naturalWidth*cropFrac);
@@ -881,11 +922,15 @@ function makeCrop(container, cam, u, v, cropFrac){
     const L=(CW/2 - u*w), T=(CH/2 - v*hh);
     im.style.width=w+'px'; im.style.height=hh+'px'; im.style.left=L+'px'; im.style.top=T+'px';
     if(mask){ mask.style.width=w+'px'; mask.style.height=hh+'px'; mask.style.left=L+'px'; mask.style.top=T+'px'; }
+    hlv.width=CW; hlv.height=CH;                    // 선택된 크랙만 노란 발광으로
+    if(selIdx>=0) drawCrackPaths(hlv.getContext('2d'), crackPathsInCam(selIdx, cam),
+                                 q=>[L+q.u*w, T+q.v*hh], 3);
   }
   im.onload=layout;
   im.src=imgUrl(cam,'full');
   box.appendChild(im);
   if(mask){ mask.onload=layout; mask.src=imgUrl(cam,'mask'); box.appendChild(mask); }
+  box.appendChild(hlv);
   box.title='좌클릭: 카메라 시점으로 이동 · 우클릭: 자세히 보기(원본)';
   box.onclick=()=>selectCamera(cam, true);                                   // 좌클릭 → 시점 이동
   box.oncontextmenu=(e)=>{ e.preventDefault(); openImageModal(cam, {u:u, v:v}); };  // 우클릭 → 자세히
@@ -926,7 +971,13 @@ function showHotspotRep(h){
       const cam=camDataBySource[vw.source]; if(!cam) return;
       const im=document.createElement('div'); im.className='twmini'; im.style.cursor='pointer';
       im.innerHTML='<img src="'+imgUrl(cam,'thumb')+'">'
-        + (cam.has_mask ? '<img class="mk" src="'+imgUrl(cam,'mask')+'">' : '');
+        + (cam.has_mask ? '<img class="mk" src="'+imgUrl(cam,'mask')+'">' : '')
+        + '<canvas class="mk" width="58" height="44"></canvas>';
+      if(selIdx>=0){                                 // 선택 크랙만 노란 발광(cover 크롭 좌표계로 매핑)
+        const a=cam.w/cam.h, b=58/44, dw=(a>b)?44*a:58, dh=(a>b)?44:58/a;
+        drawCrackPaths(im.querySelector('canvas').getContext('2d'), crackPathsInCam(selIdx, cam),
+          q=>[(58-dw)/2+q.u*dw, (44-dh)/2+q.v*dh], 2);
+      }
       im.title=cam.source+' — 좌클릭: 시점 이동+대표교체 · 우클릭: 자세히';
       im.onclick=()=>{ selectCamera(cam, true);                                   // 좌클릭 → 시점 이동
         const pr=projectToCam(cam,h.xyz)||{u:0.5,v:0.5};
@@ -974,10 +1025,11 @@ function openImageModal(c, markUV, kind){
   cm.style.display='none';
   cm.classList.toggle('inspect', kind==='inspect');
   document.getElementById('imCoord').textContent = (modalMark && kind==='inspect')
-    ? '노란 원 = 클릭하신 지점 · 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.'
-    : '이미지의 한 점을 클릭하면 그 지점의 3D 좌표를 계산합니다.';   // 크랙은 검출 마스크로 표시(빨간 원 제거)
+    ? '노란 원 = 클릭하신 지점 · 드래그: 이동 · 휠: 확대/축소'
+    : (selIdx>=0 ? '노란 발광 = 선택한 크랙 · 드래그: 이동 · 휠: 확대/축소'
+                 : '드래그: 이동 · 휠: 확대/축소');
   const img=document.getElementById('imImg');
-  img.onload=()=>{ fitModal(); placeCrackMarker(); };
+  img.onload=()=>{ fitModal(); placeCrackMarker(); drawModalHL(); };
   img.src=imgUrl(c,'full');
   // 검출 마스크 오버레이: 해당 이미지에 마스크가 있을 때만 토글 노출·로드
   const maskImg=document.getElementById('imMask'), tog=document.getElementById('imMaskToggle');
@@ -991,6 +1043,14 @@ function openImageModal(c, markUV, kind){
     maskImg.removeAttribute('src'); maskImg.style.display='none';
   }
   document.getElementById('imgmodal').style.display='flex';
+}
+// 모달 하이라이트: 선택 크랙의 중심선을 원본 해상도 캔버스에 노란 발광으로(줌·팬은 imStage transform 이 처리)
+function drawModalHL(){
+  const cvs=document.getElementById('imHL'), img=document.getElementById('imImg');
+  if(!img.naturalWidth || selIdx<0 || !modalCam){ cvs.width=1; cvs.height=1; return; }
+  cvs.width=img.naturalWidth; cvs.height=img.naturalHeight;
+  drawCrackPaths(cvs.getContext('2d'), crackPathsInCam(selIdx, modalCam),
+    q=>[q.u*cvs.width, q.v*cvs.height], Math.max(3, cvs.width*0.0025));
 }
 function placeCrackMarker(){
   const mk=document.getElementById('imCrackMarker'), img=document.getElementById('imImg');
@@ -1043,28 +1103,14 @@ function placeWorldMarker(p){
   worldMarker.visible=true; worldMarker.position.copy(p);
   worldMarker.scale.setScalar(MARK_PX*worldPerPixel(camera.position.distanceTo(p)));
 }
-function onModalClick(e){
-  if(!modalCam) return;
-  const img=document.getElementById('imImg'), rect=img.getBoundingClientRect();
-  const nx=(e.clientX-rect.left)/rect.width, ny=(e.clientY-rect.top)/rect.height;
-  if(nx<0||ny<0||nx>1||ny>1) return;
-  const mk=document.getElementById('imMarker');
-  mk.style.left=(nx*img.naturalWidth)+'px'; mk.style.top=(ny*img.naturalHeight)+'px'; mk.style.display='block';
-  const w=imageToWorld(modalCam, nx, ny);
-  if(w){
-    document.getElementById('imCoord').innerHTML=
-      '📍 3D 좌표 &nbsp; X <b>'+w.x.toFixed(3)+'</b> &nbsp; Y <b>'+w.y.toFixed(3)+'</b> &nbsp; Z <b>'+w.z.toFixed(3)+'</b> &nbsp;(단위 m · 자홍색 마커는 3D 화면에도 표시)';
-    placeWorldMarker(w);
-  } else {
-    document.getElementById('imCoord').textContent='이 점은 3D 모델 표면과 만나지 않습니다 (배경/빈 공간).';
-  }
-}
+// (제거됨) 모달에서 점 클릭 → 3D 좌표 계산 기능 — 지점 검사는 3D 화면의 '지점 검사 모드'로 수행.
+// imageToWorld/placeWorldMarker 는 지점 검사 등 다른 경로에서 계속 사용한다.
 (function(){
   const view=document.getElementById('imView');
   view.addEventListener('pointerdown', e=>{ mDrag={x:e.clientX,y:e.clientY,tx:mv.tx,ty:mv.ty}; mMoved=false; view.setPointerCapture(e.pointerId); });
   view.addEventListener('pointermove', e=>{ if(!mDrag)return; const dx=e.clientX-mDrag.x, dy=e.clientY-mDrag.y;
     if(Math.abs(dx)+Math.abs(dy)>3) mMoved=true; mv.tx=mDrag.tx+dx; mv.ty=mDrag.ty+dy; applyModal(); });
-  view.addEventListener('pointerup', e=>{ const dragged=mMoved; mDrag=null; if(!dragged) onModalClick(e); });
+  view.addEventListener('pointerup', ()=>{ mDrag=null; });
   view.addEventListener('wheel', e=>{ e.preventDefault(); const r=view.getBoundingClientRect();
     zoomModal(e.clientX-r.left, e.clientY-r.top, e.deltaY<0?1.15:1/1.15); }, {passive:false});
   document.getElementById('imClose').onclick=closeModal;
