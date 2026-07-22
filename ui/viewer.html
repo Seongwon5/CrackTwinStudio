@@ -770,6 +770,12 @@ function ensureMarkerEl(i){
   el.innerHTML='<div class="leader"></div><div class="tag">'+fmtWL(m.h)+'</div>';
   el.addEventListener('mouseenter',()=>{ hoverTag=i; });
   el.addEventListener('mouseleave',()=>{ if(hoverTag===i) hoverTag=-1; });
+  // 말풍선 위에서 시작하는 좌드래그도 시점 회전이 되도록 캔버스 드래그를 시작시킨다.
+  // (mousemove/up 은 window 라 시작만 하면 태그 위에서도 계속된다. 짧은 탭이면 아래 click 이 선택)
+  el.addEventListener('mousedown',ev=>{
+    if(ev.button!==0) return;
+    Object.assign(_drag, {down:true, look:false, sx:ev.clientX, sy:ev.clientY, lx:ev.clientX, ly:ev.clientY, t:performance.now()});
+  });
   el.addEventListener('click',ev=>{ ev.stopPropagation(); selectHotspot(i); showHotspotRep(m.h); });
   hud.appendChild(el); m.el=el; return el;
 }
