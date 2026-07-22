@@ -272,11 +272,15 @@
     <div id="reportMeta" style="font-size:var(--fs-cap);color:var(--tx-3);line-height:1.65;margin-top:6px;"></div>
     <div id="scaleWarn" style="display:none;font-size:var(--fs-cap);color:var(--warn);background:rgba(80,50,10,.3);
       border:1px solid #5a4420;border-radius:var(--r-sm);padding:8px 10px;margin-top:8px;line-height:1.55;"></div>
-    <!-- 심각도 색 범례 -->
+    <!-- 심각도 색 범례: 실제 방식(길이×폭의 상대 순위)을 반영 -->
     <div id="sevLegend" style="margin-top:12px;font-size:var(--fs-cap);color:var(--tx-2);">
-      <div style="margin-bottom:5px;color:var(--tx-3)">심각도</div>
+      <div style="margin-bottom:5px;color:var(--tx-3)">심각도 <span style="color:var(--tx-3)">— 길이 × 폭의 상대 순위</span></div>
       <div style="height:8px;border-radius:5px;
         background:linear-gradient(90deg,rgb(38,235,89),rgb(179,255,31),rgb(255,229,0),rgb(255,107,0),rgb(255,15,10));"></div>
+      <div style="display:flex;justify-content:space-between;margin-top:3px;color:var(--tx-3);">
+        <span>경미(하위)</span><span>심각(상위)</span></div>
+      <div style="margin-top:5px;color:var(--tx-3);line-height:1.45;">
+        전체 크랙을 (길이 × 폭)으로 정렬한 순위 색 — 절대 mm 아님(스케일 미보정 대비 상대 비교).</div>
     </div>
     <div style="margin-top:14px;font-size:var(--fs-cap);color:var(--tx-2);background:var(--surface-2);padding:11px;border-radius:var(--r-sm);line-height:1.75;">
       <div style="color:var(--tx-3);margin-bottom:4px;">조작</div>
