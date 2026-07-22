@@ -15,10 +15,14 @@ MODEL_PATH = os.path.join(HERE, "model", "crack_type.json")
 # 특징 순서(학습·추론 공통) · 로그 변환 대상
 # circ_resid/turn_consist/curv_cv: 직선뿐 아니라 '원호형' 조인트(매끄러운 규칙 곡선)를
 # 불규칙 크랙과 구분하기 위한 곡률-규칙성 특징.
+# par_neigh(L2, 장면 수준): 근방에서 방향이 평행한 이웃의 비율. 거푸집 판선 같은 시공선은
+# 대규모 평행 가족을 이뤄 값이 높고(중앙 검증 조인트≈평행 다수), 크랙은 제멋대로라 낮다.
 FEATS = ["w", "straight", "bend", "axl",
-         "circ_resid", "turn_consist", "curv_cv",
+         "circ_resid", "turn_consist", "curv_cv", "par_neigh",
          "ap_depth", "ap_depth_p90", "ap_sharp", "ap_fwhm", "ap_val", "ap_contrast", "ap_consist", "ap_aspect"]
 LOG_FEATS = {"w", "straight", "circ_resid"}
+PAR_ANG_DEG = 12.0     # 평행 판정 각도
+PAR_NEAR_FRAC = 0.15   # 근방 거리 = 메시 대각선의 15%
 CLASSES = ["crack", "joint", "craze", "blob"]
 _PROF_R = 11   # 단면 표본 반폭(px, full 해상도 기준)
 
@@ -98,9 +102,9 @@ def appearance_features(gray, uv_px):
                 ap_consist=float((depth > 6).mean()))
 
 
-def feature_vector(poly, width_mm, length_mm, gray, uv_px):
-    """전체 특징 dict → FEATS 순서 벡터. 겉모습 실패 시 None."""
-    f = dict(w=float(width_mm or 1.0))
+def feature_vector(poly, width_mm, length_mm, gray, uv_px, par_neigh=0.0):
+    """전체 특징 dict → FEATS 순서 벡터. par_neigh(L2)는 장면 문맥에서 계산해 주입. 겉모습 실패 시 None."""
+    f = dict(w=float(width_mm or 1.0), par_neigh=float(par_neigh))
     f.update(geom_features(poly))
     ap = appearance_features(gray, uv_px)
     if ap is None:
@@ -112,6 +116,36 @@ def feature_vector(poly, width_mm, length_mm, gray, uv_px):
         if k in LOG_FEATS:
             x[j] = np.log10(max(x[j], 1e-6))
     return x
+
+
+def principal_axis(poly):
+    """중심선(Nx3) → (주축 단위벡터, 중심점)."""
+    P = np.asarray(poly, float)
+    c = P.mean(0)
+    if len(P) < 2:
+        return np.array([1.0, 0.0, 0.0]), c
+    _, _, Vt = np.linalg.svd(P - c, full_matrices=False)
+    return Vt[0], c
+
+
+def parallel_fraction(centroids, axes, near, ang_deg=PAR_ANG_DEG):
+    """각 후보에 대해 '근방 이웃 중 방향이 평행한 비율'(L2). 시공선 가족은 높고 크랙은 낮음.
+    cKDTree 로 근방만 추려 O(N²) 회피."""
+    from scipy.spatial import cKDTree
+    C = np.asarray(centroids, float); A = np.asarray(axes, float); n = len(C)
+    out = np.zeros(n)
+    if n < 3 or near <= 0:
+        return out
+    tree = cKDTree(C); cm = float(np.cos(np.radians(ang_deg)))
+    nb = tree.query_ball_point(C, near)
+    for i in range(n):
+        idx = [j for j in nb[i] if j != i]
+        if not idx:
+            continue
+        ai = A[i]
+        par = sum(1 for j in idx if abs(float(ai @ A[j])) >= cm)
+        out[i] = par / len(idx)
+    return out
 
 
 # ---------------- 순수 파이썬 랜덤포레스트 평가 ----------------
@@ -158,13 +192,13 @@ def project_to_cam(cam, P):
     return np.column_stack([cam["fx"] * xd + cam["cx"], cam["fy"] * yd + cam["cy"]]), ok
 
 
-def classify_crack(poly, width_mm, length_mm, cam, gray):
-    """크랙 중심선(3D) + 대표 카메라 + 그 카메라 grayscale → (type, conf).
+def classify_crack(poly, width_mm, length_mm, cam, gray, par_neigh=0.0):
+    """크랙 중심선(3D) + 대표 카메라 + 그 카메라 grayscale (+ L2 par_neigh) → (type, conf).
     gray 는 full 이미지(≤1920) grayscale, cam.w 는 원본폭 → 스케일 보정."""
     P = np.asarray(poly, float)
     if len(P) < 4 or gray is None:
         return "crack", 0.0
     uv, ok = project_to_cam(cam, P)
     uv = uv[ok] * (gray.shape[1] / cam["w"])
-    x = feature_vector(P, width_mm, length_mm, gray, uv)
+    x = feature_vector(P, width_mm, length_mm, gray, uv, par_neigh)
     return classify(x)

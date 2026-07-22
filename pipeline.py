@@ -1161,11 +1161,19 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                 arr = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_GRAYSCALE) if buf else None
                 gcache[src] = arr.astype(np.float32) if arr is not None else None
             return gcache[src]
+        # 크랙별 융합 중심선 + L2 par_neigh(장면 전체의 평행 이웃 비율 — 시공선 가족 신호)
+        polym = {mi: np.array([p for r in rbh[mi] for p in r["poly"]], float) for mi in rbh}
+        cents = []; axes = []; midx = []
+        for mi in range(len(merged)):
+            P = polym.get(mi)
+            if P is None or len(P) < 2: continue
+            ax, c = _ct.principal_axis(P); axes.append(ax); cents.append(c); midx.append(mi)
+        par = _ct.parallel_fraction(cents, axes, near=diag * _ct.PAR_NEAR_FRAC) if cents else []
+        par_of = {midx[k]: float(par[k]) for k in range(len(midx))}
         tcnt = {}
         for mi, h in enumerate(merged):
-            polys = rbh.get(mi); lab, conf = "crack", 0.0
-            if polys:
-                P = np.array([p for r in polys for p in r["poly"]], float)
+            P = polym.get(mi); lab, conf = "crack", 0.0
+            if P is not None and len(P) >= 2:
                 best = None; bestext = -1
                 for vw in h.get("views", []):
                     c = cam_by_src.get(vw["source"])
@@ -1176,7 +1184,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                     if ext > bestext: bestext = ext; best = c
                 if best is not None:
                     w = h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
-                    lab, conf = _ct.classify_crack(P, w, h.get("length_mm"), best, _gray(best["source"]))
+                    lab, conf = _ct.classify_crack(P, w, h.get("length_mm"), best, _gray(best["source"]), par_of.get(mi, 0.0))
             h["type"] = lab; h["type_conf"] = round(float(conf), 3)
             tcnt[lab] = tcnt.get(lab, 0) + 1
         log(f"  크랙 유형 분류: {tcnt}")
