@@ -768,17 +768,17 @@ function crackPathsInCam(hot, cam){                 // hot 크랙의 중심선 �
   }
   return paths;
 }
-function drawCrackPaths(ctx, paths, mapUV, lw){     // 노란 발광(두 번 그려 더 밝게)
+function drawCrackPaths(ctx, paths, mapUV, lw){     // 노란 발광(가는 선 + 은은한 글로우)
   if(!paths.length) return;
   ctx.strokeStyle='#ffee00'; ctx.lineWidth=lw; ctx.lineCap='round'; ctx.lineJoin='round';
-  ctx.shadowColor='#ffee00'; ctx.shadowBlur=lw*2.5;
+  ctx.shadowColor='#ffee00'; ctx.shadowBlur=lw*1.5;
   ctx.beginPath();
   for(const path of paths){
     let first=true;
     for(const q of path){ const xy=mapUV(q); if(!xy) continue;
       if(first){ ctx.moveTo(xy[0],xy[1]); first=false; } else ctx.lineTo(xy[0],xy[1]); }
   }
-  ctx.stroke(); ctx.stroke();
+  ctx.stroke();
 }
 // ---- 투영만 믿지 않는다: 멤버 뷰 확인 + 검출 마스크 스냅 ----
 // 문제(실측): ① 크랙이 안 보이는(가려진·반대편) 사진에도 투영선이 그려짐
@@ -1043,7 +1043,7 @@ function makeCrop(container, cam, u, v, cropFrac){
     im.style.width=w+'px'; im.style.height=hh+'px'; im.style.left=L+'px'; im.style.top=T+'px';
     if(mask){ mask.style.width=w+'px'; mask.style.height=hh+'px'; mask.style.left=L+'px'; mask.style.top=T+'px'; }
     hlv.width=CW; hlv.height=CH;                    // 선택된 크랙만 노란 발광(멤버 뷰 한정 + 마스크 스냅)
-    drawCrackHL(cam, hlv.getContext('2d'), q=>[L+q.u*w, T+q.v*hh], 3);
+    drawCrackHL(cam, hlv.getContext('2d'), q=>[L+q.u*w, T+q.v*hh], 1.6);
   }
   im.onload=layout;
   im.src=imgUrl(cam,'full');
@@ -1095,7 +1095,7 @@ function showHotspotRep(h){
       {                                              // 선택 크랙만 노란 발광(멤버 뷰 한정 + 마스크 스냅)
         const a=cam.w/cam.h, b=58/44, dw=(a>b)?44*a:58, dh=(a>b)?44:58/a;
         drawCrackHL(cam, im.querySelector('canvas').getContext('2d'),
-          q=>[(58-dw)/2+q.u*dw, (44-dh)/2+q.v*dh], 2);
+          q=>[(58-dw)/2+q.u*dw, (44-dh)/2+q.v*dh], 1.2);
       }
       im.title=cam.source+' — 좌클릭: 시점 이동+대표교체 · 우클릭: 자세히';
       im.onclick=()=>{ selectCamera(cam, true);                                   // 좌클릭 → 시점 이동
@@ -1170,7 +1170,7 @@ function drawModalHL(){
   if(!img.naturalWidth || selIdx<0 || !modalCam){ cvs.width=1; cvs.height=1; return; }
   cvs.width=img.naturalWidth; cvs.height=img.naturalHeight;
   drawCrackHL(modalCam, cvs.getContext('2d'),
-    q=>[q.u*cvs.width, q.v*cvs.height], Math.max(3, cvs.width*0.0025));
+    q=>[q.u*cvs.width, q.v*cvs.height], Math.max(1.5, cvs.width*0.0011));
 }
 function placeCrackMarker(){
   const mk=document.getElementById('imCrackMarker'), img=document.getElementById('imImg');
