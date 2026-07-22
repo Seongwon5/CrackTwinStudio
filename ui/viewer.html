@@ -1,39 +1,72 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>원전 3D 텍스트/크랙 검증 뷰어</title>
 <style>
-  body{margin:0;overflow:hidden;font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;background:#1a1a1a;}
-  /* ===== 레이아웃 변수: 도크 폭(드래그로 조절, localStorage 저장) ===== */
-  :root{--topbarh:42px; --leftw:340px; --rightw:300px;}
+  /* ============ 디자인 토큰 ============ */
+  :root{
+    --topbarh:46px; --leftw:340px; --rightw:300px;
+    /* 표면·선(중립 회청색조) */
+    --bg:#0e1319; --surface:rgba(15,20,27,.95); --surface-2:#151d25; --surface-3:#1c262f;
+    --line:#26323d; --line-2:#334352;
+    /* 텍스트 3단계 */
+    --tx:#e7edf3; --tx-2:#9db0bf; --tx-3:#64788a;
+    /* 단일 액센트 + 의미색(측정/반경/캘리브/선택/경고) */
+    --accent:#12b5cc; --accent-2:#0a3a42; --accent-dim:rgba(18,181,204,.14);
+    --measure:#12b5cc; --radius:#ff9d3c; --calib:#b98cff; --select:#ffd21e; --warn:#ffb454;
+    /* 타입 스케일 4단계 · 굵기 2단계 */
+    --fs-cap:11px; --fs-body:12.5px; --fs-head:14px; --fs-title:17px;
+    --r:9px; --r-sm:6px;
+  }
+  body{margin:0;overflow:hidden;background:var(--bg);color:var(--tx);
+    font-family:'Segoe UI','Malgun Gothic',system-ui,sans-serif;font-size:var(--fs-body);
+    -webkit-font-smoothing:antialiased;}
+  .ic{width:1em;height:1em;stroke:currentColor;stroke-width:1.75;fill:none;
+    stroke-linecap:round;stroke-linejoin:round;vertical-align:-0.15em;flex:0 0 auto;}
   /* ===== 상단 메뉴바 ===== */
   #topbar{position:fixed;top:0;left:0;right:0;height:var(--topbarh);z-index:30;
-    display:flex;align-items:center;gap:4px;padding:0 10px;background:rgba(8,12,16,.95);
-    border-bottom:1px solid #2a3a48;box-shadow:0 2px 8px rgba(0,0,0,.5);}
-  #topbar .brand{color:#7fd6ff;font-weight:bold;font-size:14px;margin-right:10px;white-space:nowrap;}
-  #topbar .tmenu{background:transparent;color:#cde;border:1px solid transparent;border-radius:6px;
-    padding:6px 11px;cursor:pointer;font-size:13px;white-space:nowrap;}
-  #topbar .tmenu:hover{background:#1e2a34;border-color:#345;}
-  #topbar .tmenu.active{background:#00534a;border-color:#00e5ff;color:#fff;font-weight:bold;}
-  #topbarHint{margin-left:auto;font-size:11px;color:#567;white-space:nowrap;}
+    display:flex;align-items:center;gap:3px;padding:0 12px;background:var(--surface);
+    border-bottom:1px solid var(--line);box-shadow:0 1px 0 rgba(255,255,255,.02),0 2px 10px rgba(0,0,0,.5);
+    backdrop-filter:blur(8px);}
+  #topbar .brand{display:flex;align-items:center;gap:7px;color:var(--tx);font-weight:600;
+    font-size:var(--fs-head);letter-spacing:.2px;margin-right:14px;white-space:nowrap;}
+  #topbar .brand .ic{width:19px;height:19px;color:var(--accent);}
+  #topbar .tmenu{display:flex;align-items:center;gap:6px;background:transparent;color:var(--tx-2);
+    border:1px solid transparent;border-radius:var(--r-sm);padding:7px 11px;cursor:pointer;
+    font-size:var(--fs-body);font-family:inherit;white-space:nowrap;transition:background .12s,color .12s;}
+  #topbar .tmenu .ic{width:16px;height:16px;}
+  #topbar .tmenu:hover{background:var(--surface-3);color:var(--tx);}
+  #topbar .tmenu.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent);font-weight:600;}
+  #topbarHint{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:var(--fs-cap);
+    color:var(--tx-3);white-space:nowrap;}
   /* ===== 좌측 도크 ===== */
   #leftdock{position:fixed;top:var(--topbarh);left:0;bottom:0;width:var(--leftw);z-index:20;
-    background:rgba(8,12,16,.92);border-right:1px solid #2a3a48;display:flex;box-shadow:2px 0 8px rgba(0,0,0,.4);}
-  .dockpane{flex:1;overflow-y:auto;padding:14px;display:none;color:#eee;font-size:13px;line-height:1.8;min-width:0;}
-  .dockpane b{font-size:15px;color:#fff;}
-  .dockpane .mbtn{flex:1;background:#333;color:#fff;border:1px solid #555;border-radius:6px;padding:6px 4px;cursor:pointer;font-size:12px;}
-  .dockpane .mbtn:hover{background:#444;}
-  .dockpane .mbtn.active{background:#00695c;border-color:#00e5ff;color:#fff;font-weight:bold;}
-  .dockpane .mbtn.reset{background:#5a2d2d;}
-  .dockpane .mbtn.reset:hover{background:#7a3d3d;}
-  .dockpane label{display:flex;align-items:center;cursor:pointer;margin-top:5px;margin-bottom:5px;}
-  .dockpane input[type="checkbox"]{margin-right:8px;cursor:pointer;}
-  .dockpane select{margin-left:8px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;padding:2px 5px;}
+    background:var(--surface);border-right:1px solid var(--line);display:flex;box-shadow:2px 0 12px rgba(0,0,0,.35);}
+  .dockpane{flex:1;overflow-y:auto;padding:16px;display:none;color:var(--tx);font-size:var(--fs-body);line-height:1.65;min-width:0;}
+  .dockpane b{font-size:var(--fs-head);font-weight:600;color:var(--tx);}
+  /* 패널 헤더 통일 */
+  .panehd{display:flex;align-items:center;gap:8px;font-size:var(--fs-head);font-weight:600;color:var(--tx);
+    padding-bottom:10px;margin-bottom:12px;border-bottom:1px solid var(--line);}
+  .panehd .ic{width:17px;height:17px;color:var(--accent);}
+  .panehd .sp{margin-left:auto;}
+  .dockpane .mbtn{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);
+    padding:8px 6px;cursor:pointer;font-size:var(--fs-body);font-family:inherit;transition:background .12s,border-color .12s;}
+  .dockpane .mbtn .ic{width:15px;height:15px;}
+  .dockpane .mbtn:hover{background:#222d37;border-color:var(--accent);}
+  .dockpane .mbtn.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent);font-weight:600;}
+  .dockpane .mbtn.reset{background:transparent;border-color:var(--line-2);color:var(--tx-2);}
+  .dockpane .mbtn.reset:hover{background:#2a1f22;border-color:#8a4b4b;color:#e6b0b0;}
+  .dockpane label{display:flex;align-items:center;gap:9px;cursor:pointer;padding:6px 0;color:var(--tx);}
+  .dockpane label .ic{width:16px;height:16px;color:var(--tx-2);}
+  .dockpane input[type="checkbox"]{margin:0;cursor:pointer;accent-color:var(--accent);width:15px;height:15px;}
+  .dockpane select{background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 6px;font-family:inherit;}
+  .dockpane hr{border:0;border-top:1px solid var(--line);margin:14px 0;}
   /* ===== 폭 조절 그립 ===== */
   #leftgrip{position:fixed;top:var(--topbarh);bottom:0;left:calc(var(--leftw) - 2px);width:7px;
-    cursor:ew-resize;z-index:26;}
-  #leftgrip:hover, #leftgrip.drag{background:rgba(0,229,255,.25);}
+    cursor:ew-resize;z-index:26;transition:background .12s;}
+  #leftgrip:hover, #leftgrip.drag{background:var(--accent-dim);}
   #rightgrip{position:fixed;top:var(--topbarh);bottom:0;right:calc(var(--rightw) - 2px);width:7px;
-    cursor:ew-resize;z-index:26;}
-  #rightgrip:hover, #rightgrip.drag{background:rgba(48,192,255,.25);}
+    cursor:ew-resize;z-index:26;transition:background .12s;}
+  #rightgrip:hover, #rightgrip.drag{background:var(--accent-dim);}
   #panel{position:absolute;top:10px;right:10px;width:340px;max-height:94vh;overflow:auto;
          background:rgba(0,0,0,.85);color:#eee;border-radius:10px;padding:15px;display:none;font-size:13px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);}
   #panel h3{margin:.2em 0;color:#ffdd33; border-bottom: 1px solid #444; padding-bottom: 5px;} 
@@ -43,19 +76,21 @@
   #panel .close:hover{background: #555;}
   /* 우측 전체 이미지 리스트 (고정 도크 · 좌측 그립으로 폭 조절) */
   #imglist{position:fixed;top:var(--topbarh);right:0;bottom:0;width:var(--rightw);display:flex;flex-direction:column;
-    background:rgba(8,12,16,.92);color:#eee;border-left:1px solid #2a3a48;padding:12px;font-size:13px;
-    box-shadow:-2px 0 8px rgba(0,0,0,.4);z-index:20;box-sizing:border-box;}
-  #imglist h3{margin:.2em 0;color:#30c0ff;border-bottom:1px solid #444;padding-bottom:6px;
-    display:flex;justify-content:space-between;align-items:center;font-size:15px;}
-  #imglist .reset{font-size:11px;background:#333;border:1px solid #555;color:#9cf;border-radius:5px;padding:3px 7px;cursor:pointer;}
-  #imglist .reset:hover{background:#444;}
-  #imgHot{font-size:12px;color:#ffdd33;margin:5px 0;line-height:1.5;}
+    background:var(--surface);color:var(--tx);border-left:1px solid var(--line);padding:16px;font-size:var(--fs-body);
+    box-shadow:-2px 0 12px rgba(0,0,0,.35);z-index:20;box-sizing:border-box;}
+  #imglist h3{margin:0;color:var(--tx);border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:6px;
+    display:flex;justify-content:space-between;align-items:center;font-size:var(--fs-head);font-weight:600;gap:8px;}
+  #imglist h3 .ic{width:17px;height:17px;color:var(--accent);}
+  #imglist h3 span{display:flex;align-items:center;gap:8px;}
+  #imglist .reset{font-size:var(--fs-cap);background:var(--surface-3);border:1px solid var(--line-2);color:var(--tx-2);border-radius:var(--r-sm);padding:4px 9px;cursor:pointer;font-family:inherit;}
+  #imglist .reset:hover{background:#222d37;border-color:var(--accent);color:var(--accent);}
+  #imgHot{font-size:var(--fs-cap);color:var(--tx-2);margin:8px 0;line-height:1.55;}
   #imgItems{overflow-y:auto;flex:1;margin-top:6px;}
-  .imgItem{display:flex;gap:8px;align-items:center;padding:5px;border-radius:6px;cursor:pointer;border:1px solid transparent;margin-bottom:2px;}
-  .imgItem:hover{background:#1e2630;border-color:#30c0ff;}
-  .imgItem.active{background:#2a2a10;border-color:#ffee00;}
-  .imgItem img{width:70px;height:50px;object-fit:cover;border-radius:4px;background:#000;flex-shrink:0;}
-  .imgItem .nm{font-size:11px;word-break:break-all;color:#cde;}
+  .imgItem{display:flex;gap:9px;align-items:center;padding:6px;border-radius:var(--r-sm);cursor:pointer;border:1px solid transparent;margin-bottom:3px;transition:background .1s;}
+  .imgItem:hover{background:var(--surface-3);border-color:var(--line-2);}
+  .imgItem.active{background:var(--accent-dim);border-color:var(--accent);}
+  .imgItem img{width:70px;height:50px;object-fit:cover;border-radius:5px;background:#000;flex-shrink:0;}
+  .imgItem .nm{font-size:var(--fs-cap);word-break:break-all;color:var(--tx-2);}
   /* 지점 검사: 클릭한 3D 점을 각 사진에 투영한 위치(노란 원) */
   .imgItem .tw{position:relative;width:70px;height:50px;flex-shrink:0;}
   .imgItem .tw .mk{position:absolute;inset:0;width:70px;height:50px;object-fit:cover;border-radius:4px;pointer-events:none;background:transparent!important;}
@@ -66,19 +101,23 @@
     border-radius:50%;box-shadow:0 0 6px #ffee00, inset 0 0 3px #ffee00;pointer-events:none;}
   .imgItem .uvdot::after{content:'';position:absolute;inset:4px;background:#ffee00;border-radius:50%;}
   /* 카메라 정보 패널 */
-  #caminfo{position:fixed;bottom:12px;left:calc(var(--leftw) + 14px);background:rgba(0,0,0,.88);color:#eee;border-radius:10px;
-    padding:12px 14px;font-size:13px;display:none;box-shadow:0 4px 6px rgba(0,0,0,0.5);min-width:220px;z-index:27;}
-  #caminfo h3{margin:.1em 0 .5em;color:#ffee00;font-size:15px;}
-  #caminfo .coord{font-family:Consolas,monospace;color:#9cf;line-height:1.7;font-size:14px;}
-  #caminfo .clear{margin-top:10px;font-size:11px;background:#5a2d2d;border:1px solid #855;color:#fdd;border-radius:5px;padding:5px 9px;cursor:pointer;}
-  #caminfo .clear:hover{background:#7a3d3d;}
+  #caminfo{position:fixed;bottom:14px;left:calc(var(--leftw) + 16px);background:var(--surface);color:var(--tx);border:1px solid var(--line);border-radius:var(--r);
+    padding:13px 15px;font-size:var(--fs-body);display:none;box-shadow:0 6px 18px rgba(0,0,0,.5);min-width:220px;z-index:27;backdrop-filter:blur(8px);}
+  #caminfo h3{margin:0 0 8px;color:var(--tx);font-size:var(--fs-head);font-weight:600;display:flex;align-items:center;gap:7px;}
+  #caminfo h3 .ic{width:16px;height:16px;color:var(--accent);}
+  #caminfo .coord{font-family:Consolas,monospace;color:var(--accent);line-height:1.7;font-size:13px;}
+  #caminfo .clear{margin-top:11px;font-size:var(--fs-cap);background:transparent;border:1px solid var(--line-2);color:var(--tx-2);border-radius:var(--r-sm);padding:6px 10px;cursor:pointer;font-family:inherit;}
+  #caminfo .clear:hover{background:#2a1f22;border-color:#8a4b4b;color:#e6b0b0;}
   /* 원본 크게 보기 모달 (앱 내부 GUI) */
   #imgmodal{position:absolute;inset:0;z-index:60;background:rgba(0,0,0,.92);display:none;flex-direction:column;}
-  #imgmodal .bar{height:48px;display:flex;align-items:center;gap:8px;padding:0 14px;background:#111;border-bottom:1px solid #000;}
-  #imgmodal .bar .title{font-weight:bold;color:#30c0ff;margin-right:auto;word-break:break-all;font-size:14px;}
-  #imgmodal .bar button{background:#2b2b34;color:#eee;border:1px solid #3a3a46;border-radius:6px;padding:6px 11px;cursor:pointer;font-size:13px;}
-  #imgmodal .bar button:hover{background:#3a3a46;}
-  #imgmodal .bar .close{background:#5a2d2d;border-color:#855;}
+  #imgmodal .bar{height:50px;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line);}
+  #imgmodal .bar .title{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--tx);margin-right:auto;word-break:break-all;font-size:var(--fs-head);}
+  #imgmodal .bar .title .ic{width:16px;height:16px;color:var(--accent);}
+  #imgmodal .bar button{display:inline-flex;align-items:center;gap:6px;background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:7px 11px;cursor:pointer;font-size:var(--fs-body);font-family:inherit;}
+  #imgmodal .bar button:hover{background:#222d37;border-color:var(--accent);}
+  #imgmodal .bar button .ic{width:15px;height:15px;}
+  #imgmodal .bar .close{background:transparent;border-color:var(--line-2);color:var(--tx-2);}
+  #imgmodal .bar .close:hover{background:#2a1f22;border-color:#8a4b4b;color:#e6b0b0;}
   #imView{flex:1;overflow:hidden;position:relative;cursor:crosshair;background:#0a0a0d;}
   /* will-change: 확대 후 패닝(translate)을 컴포지터 레이어 이동으로 만든다. 없으면 매 프레임
      '확대된 1920px 이미지'를 메인 스레드에서 재래스터화해 줌인할수록 느려진다(측정: JS 는 0.002ms,
@@ -94,8 +133,8 @@
     box-shadow:0 0 12px #ff2d2d, inset 0 0 8px rgba(255,45,45,.6);pointer-events:none;display:none;}
   /* 지점 검사에서 온 표식은 노랑 — 검출된 크랙(빨강)과 구분한다 */
   #imCrackMarker.inspect{border-color:#ffee00;box-shadow:0 0 12px #ffee00, inset 0 0 8px rgba(255,238,0,.6);}
-  #imCoord{position:absolute;bottom:14px;left:14px;background:rgba(0,0,0,.82);color:#9cf;padding:9px 13px;border-radius:8px;
-    font-family:Consolas,monospace;font-size:14px;box-shadow:0 3px 6px rgba(0,0,0,.5);}
+  #imCoord{position:absolute;bottom:14px;left:14px;background:var(--surface);color:var(--tx-2);padding:9px 13px;border-radius:var(--r-sm);
+    border:1px solid var(--line);font-size:var(--fs-body);box-shadow:0 3px 8px rgba(0,0,0,.5);}
   /* ===== 크랙 HUD 콜아웃 마커 (사이버네틱) ===== */
   #hud{position:fixed;inset:0;z-index:5;pointer-events:none;overflow:hidden;}
   .hud-marker{position:absolute;left:0;top:0;pointer-events:none;}
@@ -115,85 +154,130 @@
   .hud-marker.active .tag{border-color:#fff;color:#fff;box-shadow:0 0 12px rgba(255,255,255,.4);}
   .hud-marker.active .leader{background:#fff;box-shadow:0 0 6px #fff;}
   /* ===== 크랙 목록 패널 (좌측 도크 안에서 세로 flex 로 채움) ===== */
-  #cracklist{display:none;flex-direction:column;color:#eee;font-size:12px;padding:12px;flex:1;min-width:0;overflow:hidden;}
-  #cracklist h3{margin:.2em 0;color:#7fffd4;border-bottom:1px solid #444;padding-bottom:6px;
-    display:flex;justify-content:space-between;align-items:center;font-size:15px;}
-  #cracklist .close{font-size:12px;background:#5a2d2d;border:1px solid #855;color:#fdd;border-radius:5px;
-    padding:3px 9px;cursor:pointer;}
-  #cracklist .ctr{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0;font-size:11.5px;color:#bbb;}
-  #cracklist .ctr input{width:64px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;}
-  #cracklist .ctr select{background:#333;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;}
-  #cracklist .ctr button{background:#2b3a4a;color:#cde;border:1px solid #456;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;}
-  #cracklist .ctr button:hover{background:#3b4a5a;}
-  #clHead{display:grid;grid-template-columns:62px 1fr 1fr 1fr 40px;gap:4px;padding:4px 6px;color:#8fb;
-    border-bottom:1px solid #333;font-weight:bold;font-size:11px;}
-  #clRows{overflow-y:auto;flex:1;min-height:120px;}
-  .clRow{display:grid;grid-template-columns:62px 1fr 1fr 1fr 40px;gap:4px;padding:4px 6px;cursor:pointer;
-    border-radius:4px;border:1px solid transparent;font-family:Consolas,monospace;font-size:11.5px;color:#dde;}
-  .clRow:hover{background:#1e2a30;border-color:#2a6;}
-  .clRow.sel{background:#233010;border-color:#ffee00;}
-  .sevchip{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle;}
-  #clFoot{font-size:11px;color:#789;margin-top:6px;}
+  #cracklist{display:none;flex-direction:column;color:var(--tx);font-size:var(--fs-body);padding:16px;flex:1;min-width:0;overflow:hidden;}
+  #cracklist h3{margin:0;color:var(--tx);border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px;
+    display:flex;justify-content:space-between;align-items:center;font-size:var(--fs-head);font-weight:600;gap:8px;}
+  #cracklist h3 span{display:flex;align-items:center;gap:8px;}
+  #cracklist h3 .ic{width:17px;height:17px;color:var(--accent);}
+  #cracklist .close{display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-cap);background:transparent;border:1px solid var(--line-2);color:var(--tx-2);border-radius:var(--r-sm);
+    padding:4px 9px;cursor:pointer;font-family:inherit;}
+  #cracklist .close:hover{background:#2a1f22;border-color:#8a4b4b;color:#e6b0b0;}
+  #cracklist .ctr{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 10px;font-size:var(--fs-cap);color:var(--tx-2);}
+  #cracklist .ctr input{width:62px;background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 6px;font-family:inherit;}
+  #cracklist .ctr select{background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 6px;font-family:inherit;}
+  #cracklist .ctr button{display:inline-flex;align-items:center;gap:5px;background:var(--surface-3);color:var(--tx-2);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:5px 9px;cursor:pointer;font-size:var(--fs-cap);font-family:inherit;}
+  #cracklist .ctr button:hover{background:#222d37;border-color:var(--accent);color:var(--accent);}
+  #cracklist .ctr button .ic{width:13px;height:13px;}
+  #clHead{display:grid;grid-template-columns:66px 1fr 1fr 1fr 34px;gap:4px;padding:7px 8px;color:var(--tx-3);
+    background:var(--surface-2);border-radius:var(--r-sm) var(--r-sm) 0 0;font-weight:600;font-size:10.5px;
+    text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;}
+  #clRows{overflow-y:auto;flex:1;min-height:120px;border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-sm) var(--r-sm);}
+  .clRow{display:grid;grid-template-columns:66px 1fr 1fr 1fr 34px;gap:4px;padding:6px 8px;cursor:pointer;
+    border-left:2px solid transparent;font-family:Consolas,monospace;font-size:var(--fs-cap);color:var(--tx);}
+  .clRow:nth-child(odd){background:rgba(255,255,255,.018);}
+  .clRow:hover{background:var(--surface-3);}
+  .clRow.sel{background:var(--accent-dim);border-left-color:var(--accent);}
+  .sevchip{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle;}
+  #clFoot{font-size:var(--fs-cap);color:var(--tx-3);margin-top:8px;}
+  /* ===== 방향 기즈모(우하단) ===== */
+  #gizmo{position:fixed;right:calc(var(--rightw) + 16px);bottom:16px;width:88px;height:88px;z-index:28;
+    cursor:pointer;user-select:none;}
+  #gizmo svg{width:100%;height:100%;overflow:visible;}
+  #gizmo .gzl{font:600 11px 'Segoe UI',sans-serif;cursor:pointer;}
+  #gizmo .gzhit{fill:transparent;cursor:pointer;}
+  /* ===== 토스트 알림(우하단) ===== */
+  #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);z-index:70;
+    background:var(--surface);border:1px solid var(--line-2);border-left:3px solid var(--accent);
+    color:var(--tx);padding:11px 16px;border-radius:var(--r-sm);font-size:var(--fs-body);
+    box-shadow:0 8px 24px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;
+    display:flex;align-items:center;gap:9px;max-width:60vw;backdrop-filter:blur(8px);}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+  #toast .ic{width:16px;height:16px;color:var(--accent);}
   /* 성능 계측 오버레이 (F2 로 토글) */
-  #stats{position:fixed;left:12px;top:calc(var(--topbarh) + 8px);z-index:60;background:rgba(6,10,14,.9);border:1px solid #2a3a48;
-    border-radius:8px;padding:8px 11px;font:11px/1.55 Consolas,monospace;color:#7fffd4;white-space:pre;
-    pointer-events:none;display:none;box-shadow:0 3px 10px rgba(0,0,0,.6);}
+  #stats{position:fixed;left:calc(var(--leftw) + 16px);top:calc(var(--topbarh) + 12px);z-index:60;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--r-sm);padding:9px 12px;font:11px/1.55 Consolas,monospace;color:var(--accent);white-space:pre;
+    pointer-events:none;display:none;box-shadow:0 3px 12px rgba(0,0,0,.6);}
   /* 보고서 로딩/오류 표시 (메시가 GB 급이면 수 초 걸린다) */
   #boot{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:50;
-    background:rgba(10,14,18,.92);border:1px solid #2a3a48;border-radius:10px;padding:18px 26px;
-    font:14px Consolas,monospace;color:#9cf;box-shadow:0 6px 24px rgba(0,0,0,.6);max-width:80vw;}
+    background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r);padding:18px 26px;
+    font:14px Consolas,monospace;color:var(--tx-2);box-shadow:0 6px 24px rgba(0,0,0,.6);max-width:80vw;}
 </style></head><body>
+<!-- ===== 아이콘 스프라이트(Lucide 스타일 라인 아이콘, 오프라인 인라인) ===== -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><defs>
+  <symbol id="i-cube" viewBox="0 0 24 24"><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+  <symbol id="i-crosshair" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M22 12h-4M6 12H2M12 6V2M12 22v-4"/></symbol>
+  <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.4 2.4 0 0 1 0-3.4l2.6-2.6a2.4 2.4 0 0 1 3.4 0z"/><path d="m14.5 12.5 2-2M11.5 9.5l2-2M8.5 6.5l2-2M17.5 15.5l2-2"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12h4l3 9 6-18 3 9h4"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-zoomin" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M11 8v6M8 11h6"/></symbol>
+  <symbol id="i-zoomout" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M16 21h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+</defs></svg>
 <div id="boot"><span id="bootMsg">보고서 여는 중...</span></div>
 <div id="stats"></div>
 <div id="hud"></div>
 <!-- ===== 상단 메뉴바: 클릭한 도구가 좌측 도크에 열린다 ===== -->
 <div id="topbar">
-  <span class="brand">🧭 CrackTwinStudio</span>
-  <button class="tmenu active" data-pane="pane-info">ℹ️ 개요</button>
-  <button class="tmenu" data-pane="pane-view">👁️ 표시</button>
-  <button class="tmenu" data-pane="cracklist">📋 크랙 목록</button>
-  <button class="tmenu" data-pane="pane-inspect">🔎 지점 검사</button>
-  <button class="tmenu" data-pane="pane-measure">📏 측정 도구</button>
-  <button class="tmenu" data-pane="pane-calib">🎯 캘리브레이션</button>
+  <span class="brand"><svg class="ic"><use href="#i-cube"/></svg>CrackTwinStudio</span>
+  <button class="tmenu active" data-pane="pane-info"><svg class="ic"><use href="#i-info"/></svg>개요</button>
+  <button class="tmenu" data-pane="pane-view"><svg class="ic"><use href="#i-eye"/></svg>표시</button>
+  <button class="tmenu" data-pane="cracklist"><svg class="ic"><use href="#i-list"/></svg>크랙 목록</button>
+  <button class="tmenu" data-pane="pane-inspect"><svg class="ic"><use href="#i-crosshair"/></svg>지점 검사</button>
+  <button class="tmenu" data-pane="pane-measure"><svg class="ic"><use href="#i-ruler"/></svg>측정 도구</button>
+  <button class="tmenu" data-pane="pane-calib"><svg class="ic"><use href="#i-target"/></svg>캘리브레이션</button>
   <span id="topbarHint">메뉴를 다시 누르면 패널이 닫힙니다</span>
 </div>
 
 <!-- ===== 좌측 도크: 상단 메뉴에서 선택한 패널 하나를 표시 (우측 가장자리 드래그로 폭 조절) ===== -->
 <div id="leftdock">
   <div class="dockpane" id="pane-info" style="display:block;">
-    <b>원전 환경 디지털 트윈 분석</b><br>
-    <span style="color:#aaa" id="hdrCounts">분석 이미지: — · 검출 포인트: —</span>
-    <div id="reportMeta" style="font-size:11px;color:#7a8a99;line-height:1.6;margin-top:4px;"></div>
-    <div id="scaleWarn" style="display:none;font-size:11px;color:#ffb84d;background:rgba(80,50,10,.35);
-      border:1px solid #6a4a1a;border-radius:6px;padding:6px 9px;margin-top:6px;line-height:1.5;"></div>
+    <div class="panehd"><svg class="ic"><use href="#i-info"/></svg>개요</div>
+    <b>콘크리트 균열 디지털 트윈</b><br>
+    <span style="color:var(--tx-2)" id="hdrCounts">분석 이미지: — · 검출 포인트: —</span>
+    <div id="reportMeta" style="font-size:var(--fs-cap);color:var(--tx-3);line-height:1.65;margin-top:6px;"></div>
+    <div id="scaleWarn" style="display:none;font-size:var(--fs-cap);color:var(--warn);background:rgba(80,50,10,.3);
+      border:1px solid #5a4420;border-radius:var(--r-sm);padding:8px 10px;margin-top:8px;line-height:1.55;"></div>
     <!-- 심각도 색 범례 -->
-    <div id="sevLegend" style="margin-top:8px;font-size:11px;color:#bbb;">
-      <div style="height:9px;border-radius:5px;margin-bottom:3px;
+    <div id="sevLegend" style="margin-top:12px;font-size:var(--fs-cap);color:var(--tx-2);">
+      <div style="margin-bottom:5px;color:var(--tx-3)">심각도</div>
+      <div style="height:8px;border-radius:5px;
         background:linear-gradient(90deg,rgb(38,235,89),rgb(179,255,31),rgb(255,229,0),rgb(255,107,0),rgb(255,15,10));"></div>
     </div>
-    <div style="margin-top:12px; font-size:11px; color:#888; background:#222; padding:8px; border-radius:6px;">
-      [조작법]<br>드래그: 회전 · 휠: 확대/축소 · 우클릭: 이동<br>
-      <b style="color:#aac">WASD 이동 · Space 상승 · Ctrl 하강 · Shift 가속</b><br>
-      · 크랙(형상) 클릭 → 우측에 대표 이미지·수치<br>
-      · 파란 카메라 클릭 → 노랑 강조 + 위치 좌표<br>
-      · 우측 이미지 클릭 → 그 카메라 시점으로 이동 (우클릭 → 원본 크게 보기)<br>
-      · 상단 메뉴로 도구 열기 · 패널 가장자리 드래그로 폭 조절
+    <div style="margin-top:14px;font-size:var(--fs-cap);color:var(--tx-2);background:var(--surface-2);padding:11px;border-radius:var(--r-sm);line-height:1.75;">
+      <div style="color:var(--tx-3);margin-bottom:4px;">조작</div>
+      드래그 회전 · 휠 확대 · 우클릭 이동<br>
+      <span style="color:var(--accent)">WASD 이동 · Space↑ · Ctrl↓ · Shift 가속</span><br>
+      · 크랙 클릭 → 우측 대표 이미지·수치<br>
+      · 카메라 클릭 → 그 사진 표시 + 좌표<br>
+      · 우측 이미지 클릭 → 시점 이동 (우클릭 원본)<br>
+      · 상단 메뉴로 도구 열기 · 가장자리 드래그로 폭 조절
     </div>
   </div>
 
   <div class="dockpane" id="pane-view">
-    <b style="font-size:14px;">👁️ 표시 옵션</b>
-    <hr style="border:0;border-top:1px solid #444;margin:10px 0;">
-    <label><input type="checkbox" id="ckHot" checked> 💬 크랙 정보 말풍선(호버 시 평균 폭·총 길이) 표시</label>
-    <label><input type="checkbox" id="ckRibbon" checked> 🎗️ 크랙 형상(표면 위·실폭 반영) 표시</label>
-    <label><input type="checkbox" id="ckGrid" checked> 🌐 좌표축 및 바닥 그리드 표시</label>
-    <label><input type="checkbox" id="ckDarkMesh"> 🌙 구조물 어둡게 보기 (픽셀 강조)</label>
-    <label><input type="checkbox" id="ckCam" checked> 📷 카메라 위치(파란색) 표시</label>
+    <div class="panehd"><svg class="ic"><use href="#i-eye"/></svg>표시 옵션</div>
+    <label><input type="checkbox" id="ckHot" checked><svg class="ic"><use href="#i-message"/></svg>크랙 정보 말풍선(호버 시 폭·길이)</label>
+    <label><input type="checkbox" id="ckRibbon" checked><svg class="ic"><use href="#i-wave"/></svg>크랙 형상(표면 위·실폭 반영)</label>
+    <label><input type="checkbox" id="ckGrid" checked><svg class="ic"><use href="#i-grid"/></svg>좌표축 및 바닥 그리드</label>
+    <label><input type="checkbox" id="ckDarkMesh"><svg class="ic"><use href="#i-moon"/></svg>구조물 어둡게 보기(픽셀 강조)</label>
+    <label><input type="checkbox" id="ckCam" checked><svg class="ic"><use href="#i-camera"/></svg>카메라 위치 표시</label>
   </div>
 
   <div class="dockpane" id="cracklist">
-    <h3><span>📋 크랙 목록 <span id="clCount" style="font-size:11px;color:#9cf;font-weight:normal;"></span></span>
-        <button class="close" id="clClose">✕ 닫기</button></h3>
+    <h3><span><svg class="ic"><use href="#i-list"/></svg>크랙 목록 <span id="clCount" style="font-size:var(--fs-cap);color:var(--tx-3);font-weight:400;"></span></span>
+        <button class="close" id="clClose"><svg class="ic"><use href="#i-x"/></svg>닫기</button></h3>
     <div class="ctr">
       정렬 <select id="clSort">
         <option value="wmax">최대 폭 ↓</option><option value="wmed">평균 폭 ↓</option>
@@ -201,8 +285,8 @@
       </select>
       폭≥ <input id="clMinW" type="number" min="0" step="any" placeholder="mm">
       길이≥ <input id="clMinL" type="number" min="0" step="any" placeholder="mm">
-      <button id="clCsv">⬇ CSV</button>
-      <button id="clCopy">📋 복사</button>
+      <button id="clCsv"><svg class="ic"><use href="#i-download"/></svg>CSV</button>
+      <button id="clCopy"><svg class="ic"><use href="#i-copy"/></svg>복사</button>
     </div>
     <div id="clHead"><span>ID</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
     <div id="clRows"></div>
@@ -210,53 +294,50 @@
   </div>
 
   <div class="dockpane" id="pane-inspect">
-    <b style="font-size:14px;">🔎 지점 검사</b>
-    <hr style="border:0;border-top:1px solid #444;margin:10px 0;">
+    <div class="panehd"><svg class="ic"><use href="#i-crosshair"/></svg>지점 검사</div>
     <div style="display:flex; gap:6px; margin:8px 0;">
-      <button id="btnInspect" class="mbtn">지점 검사 모드</button>
+      <button id="btnInspect" class="mbtn"><svg class="ic"><use href="#i-crosshair"/></svg>지점 검사 모드</button>
     </div>
-    <div id="inspectMsg" style="font-size:11px;color:#888;margin-bottom:4px;">끄면 일반 조작으로 돌아갑니다.</div>
+    <div id="inspectMsg" style="font-size:var(--fs-cap);color:var(--tx-3);margin-bottom:4px;">끄면 일반 조작으로 돌아갑니다.</div>
   </div>
 
   <div class="dockpane" id="pane-measure">
-    <b style="font-size:14px;">📏 측정 도구 <span style="font-size:11px; color:#888; font-weight:normal;">(1 단위 = 1 m)</span></b>
-    <hr style="border:0;border-top:1px solid #444;margin:10px 0;">
+    <div class="panehd"><svg class="ic"><use href="#i-ruler"/></svg>측정 도구<span class="sp" style="font-size:var(--fs-cap);color:var(--tx-3);font-weight:400;">1 단위 = 1 m</span></div>
     <div style="display:flex; gap:6px; margin:8px 0;">
       <button id="btnDist" class="mbtn">거리 측정</button>
       <button id="btnRad" class="mbtn">반경 측정</button>
       <button id="btnReset" class="mbtn reset">초기화</button>
     </div>
-    <label style="font-size:12px; color:#ccc;">표시 단위:
-      <select id="unitSelect">
+    <label style="font-size:var(--fs-body);color:var(--tx-2);gap:8px;">표시 단위
+      <select id="unitSelect" style="margin-left:auto;">
         <option value="mm" selected>mm</option>
         <option value="cm">cm</option>
         <option value="m">m</option>
         <option value="auto">자동</option>
       </select>
     </label>
-    <div id="measResult" style="margin-top:8px; font-size:12px; color:#eee; background:#222; padding:8px; border-radius:6px; line-height:1.5;">측정 모드를 선택하세요.</div>
+    <div id="measResult" style="margin-top:10px;font-size:var(--fs-body);color:var(--tx);background:var(--surface-2);padding:11px;border-radius:var(--r-sm);line-height:1.55;">측정 모드를 선택하세요.</div>
   </div>
 
   <div class="dockpane" id="pane-calib">
-    <b style="font-size:14px;">🎯 스케일 캘리브레이션</b>
-    <hr style="border:0;border-top:1px solid #444;margin:10px 0;">
+    <div class="panehd"><svg class="ic"><use href="#i-target"/></svg>스케일 캘리브레이션</div>
     <div style="display:flex; gap:6px; margin:8px 0;">
       <button id="btnCalib" class="mbtn">기준 거리 지정</button>
       <button id="btnCalibClear" class="mbtn reset" style="display:none;">해제</button>
     </div>
-    <div id="calibForm" style="display:none; margin:6px 0; background:#222; padding:8px; border-radius:6px; font-size:12px;">
-      측정된 거리: <span id="calibMeasured" style="color:#b388ff;font-weight:bold;"></span>
-      <div style="display:flex;gap:6px;align-items:center;margin-top:6px;">
+    <div id="calibForm" style="display:none; margin:8px 0; background:var(--surface-2); padding:11px; border-radius:var(--r-sm); font-size:var(--fs-body);">
+      측정된 거리: <span id="calibMeasured" style="color:var(--calib);font-weight:600;"></span>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:8px;">
         실제
         <input id="calibReal" type="number" min="0" step="any"
-          style="width:74px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;">
+          style="width:74px;background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 6px;">
         <select id="calibUnit" style="margin-left:0;">
           <option value="1">mm</option><option value="10">cm</option><option value="1000" selected>m</option>
         </select>
         <button id="btnCalibApply" class="mbtn" style="flex:0 0 auto;">적용</button>
       </div>
     </div>
-    <div id="calibStatus" style="font-size:11px;color:#888;margin-bottom:4px;">
+    <div id="calibStatus" style="font-size:var(--fs-cap);color:var(--tx-3);margin-bottom:4px;">
       실측 길이를 아는 두 점(표척·조인트 등)을 클릭해 모든 mm 수치를 보정합니다.</div>
   </div>
 </div>
@@ -264,16 +345,21 @@
 
 <!-- ===== 우측: 이미지 패널 (좌측 가장자리 드래그로 폭 조절) ===== -->
 <div id="imglist">
-  <h3><span id="imgTitle">전체 이미지</span>
+  <h3><span><svg class="ic"><use href="#i-camera"/></svg><span id="imgTitle">전체 이미지</span></span>
       <button class="reset" id="imgReset" style="display:none">전체 보기</button></h3>
   <div id="imgHot"></div>
   <div id="imgItems"></div>
 </div>
 <div id="rightgrip" title="드래그로 폭 조절"></div>
 
+<!-- 방향 기즈모 -->
+<div id="gizmo" title="축 클릭 = 정면/상단/측면 뷰"></div>
+<!-- 토스트 알림 -->
+<div id="toast"></div>
+
 <div id="caminfo">
-  <h3>📷 카메라 정보</h3>
-  <div id="camName" style="color:#cde;margin-bottom:6px;word-break:break-all;"></div>
+  <h3><svg class="ic"><use href="#i-camera"/></svg>카메라 정보</h3>
+  <div id="camName" style="color:var(--tx-2);margin-bottom:6px;word-break:break-all;"></div>
   <div class="coord" id="camCoord"></div>
   <button class="clear" id="camClear">선택 해제 / 오버레이 끄기</button>
 </div>
@@ -281,12 +367,12 @@
 <div id="imgmodal">
   <div class="bar">
     <span class="title" id="imTitle"></span>
-    <button id="imZoomOut">➖ 축소</button>
-    <button id="imZoomReset">맞춤</button>
-    <button id="imZoomIn">➕ 확대</button>
-    <label id="imMaskLabel" style="display:none;align-items:center;gap:5px;color:#eee;font-size:13px;cursor:pointer;margin-left:6px;">
-      <input type="checkbox" id="imMaskToggle"> 🎭 검출 마스크</label>
-    <button class="close" id="imClose">✕ 닫기</button>
+    <button id="imZoomOut"><svg class="ic"><use href="#i-zoomout"/></svg>축소</button>
+    <button id="imZoomReset"><svg class="ic"><use href="#i-fit"/></svg>맞춤</button>
+    <button id="imZoomIn"><svg class="ic"><use href="#i-zoomin"/></svg>확대</button>
+    <label id="imMaskLabel" style="display:none;align-items:center;gap:6px;color:var(--tx);font-size:var(--fs-body);cursor:pointer;margin-left:6px;">
+      <input type="checkbox" id="imMaskToggle" style="accent-color:var(--accent);"> <svg class="ic"><use href="#i-layers"/></svg>검출 마스크</label>
+    <button class="close" id="imClose"><svg class="ic"><use href="#i-x"/></svg>닫기</button>
   </div>
   <div id="imView">
     <div id="imStage"><img id="imImg" alt=""><img id="imMask" alt=""><canvas id="imHL" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas><div id="imCrackMarker"></div><div id="imMarker"></div></div>
@@ -303,7 +389,7 @@
 import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 
-const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1a1a1a);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0e1319);
 // Z축을 위(UP)로 설정 (일반적인 드론/사진 측량 좌표계)
 THREE.Object3D.DEFAULT_UP = new THREE.Vector3(0,0,1);
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 1000000);
@@ -1687,7 +1773,8 @@ document.getElementById('btnCalibApply').onclick=()=>{
   try{ localStorage.setItem(CALIB_KEY, JSON.stringify(calibInfo)); }catch(e){}
   document.getElementById('calibForm').style.display='none';
   setMode(null); resetMeasure(true); refreshCalibUI();
-  setMeasResult('✔ 스케일 보정 적용: <b style="color:#7fffd4">×'+calibScale.toFixed(4)+'</b>');
+  setMeasResult('스케일 보정 적용: <b style="color:var(--accent)">×'+calibScale.toFixed(4)+'</b>');
+  toast('스케일 보정 적용됨 · ×'+calibScale.toFixed(4));
 };
 document.getElementById('btnCalibClear').onclick=()=>{
   calibScale=1.0; calibInfo=null; calibPending=null;
@@ -1823,10 +1910,12 @@ document.getElementById('clCsv').onclick=()=>{
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(a.href), 3000);
   document.getElementById('clFoot').textContent='CSV 다운로드: '+clData.length.toLocaleString()+'행';
+  toast('CSV 내보내기 · '+clData.length.toLocaleString()+'행');
 };
 document.getElementById('clCopy').onclick=async()=>{
   try{ await navigator.clipboard.writeText(clCsvText());
-       document.getElementById('clFoot').textContent='클립보드에 복사됨 ('+clData.length.toLocaleString()+'행) — Excel 에 붙여넣기 가능'; }
+       document.getElementById('clFoot').textContent='클립보드에 복사됨 ('+clData.length.toLocaleString()+'행) — Excel 에 붙여넣기 가능';
+       toast('클립보드에 복사됨 · '+clData.length.toLocaleString()+'행'); }
   catch(e){ document.getElementById('clFoot').textContent='복사 실패: '+e; }
 };
 
@@ -1909,6 +1998,73 @@ function updateFly(dt){
   camera.position.add(_move);                     // 위치만 이동(방향은 applyLook 이 유지)
 }
 
+// ================= 토스트 알림 =================
+let _toastT=null;
+function toast(msg, ms=2200){
+  const el=document.getElementById('toast');
+  el.innerHTML='<svg class="ic"><use href="#i-check"/></svg><span></span>';
+  el.querySelector('span').textContent=msg;
+  el.classList.add('show');
+  clearTimeout(_toastT); _toastT=setTimeout(()=>el.classList.remove('show'), ms);
+}
+
+// ================= 방향 기즈모(우하단) =================
+// 카메라 회전에 따라 XYZ 축이 도는 미니 위젯. 각 축 라벨 클릭 → 그 방향에서 모델 중심을 보는 뷰로.
+const GZ = (function(){
+  const host=document.getElementById('gizmo'), C=44, R=30;
+  const AX=[ {k:'x',v:new THREE.Vector3(1,0,0),col:'#ff5a72',lab:'X'},
+             {k:'y',v:new THREE.Vector3(0,1,0),col:'#5ad46a',lab:'Y'},
+             {k:'z',v:new THREE.Vector3(0,0,1),col:'#4aa8ff',lab:'Z'} ];
+  const NS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(NS,'svg'); svg.setAttribute('viewBox','0 0 88 88'); host.appendChild(svg);
+  const els=[];
+  function mk(t,a){ const e=document.createElementNS(NS,t); for(const k in a) e.setAttribute(k,a[k]); return e; }
+  // 각 축마다 +/- 두 방향 노드(양=채움 라벨, 음=빈 원)
+  const nodes=[];
+  for(const ax of AX){
+    for(const s of [1,-1]){
+      const line = s>0 ? mk('line',{stroke:ax.col,'stroke-width':2,'stroke-linecap':'round'}) : null;
+      if(line) svg.appendChild(line);
+      const g=mk('g',{class:'gzl',cursor:'pointer'});
+      const circ=mk('circle',{r:9, fill:s>0?ax.col:'#0e1319', stroke:ax.col, 'stroke-width':1.5});
+      const txt=mk('text',{'text-anchor':'middle','dominant-baseline':'central',
+        'font-size':11,'font-weight':600, fill:s>0?'#0e1319':ax.col});
+      txt.textContent = (s<0?'-':'')+ax.lab;
+      g.appendChild(circ); g.appendChild(txt); svg.appendChild(g);
+      g.addEventListener('click', e=>{ e.stopPropagation(); snapView(ax.v.clone().multiplyScalar(s)); });
+      nodes.push({ax,s,line,g,circ,txt});
+    }
+  }
+  function update(){
+    const q=camera.quaternion.clone().invert();      // 월드축 → 카메라(뷰) 좌표
+    const proj=nodes.map(n=>{ const p=n.ax.v.clone().multiplyScalar(n.s).applyQuaternion(q);
+      return {n, x:C+p.x*R, y:C-p.y*R, z:p.z}; });
+    proj.sort((a,b)=>a.z-b.z);                        // 뒤(z작음) 먼저 그려 앞이 위로
+    for(const p of proj){
+      const n=p.n;
+      if(n.line){
+        svg.appendChild(n.line);                     // z순으로 재정렬(appendChild=이동)
+        n.line.setAttribute('x1',C); n.line.setAttribute('y1',C);
+        n.line.setAttribute('x2',p.x); n.line.setAttribute('y2',p.y);
+        n.line.setAttribute('opacity', p.z>0?1:0.4);
+      }
+      svg.appendChild(n.g);
+      n.g.setAttribute('transform',`translate(${p.x},${p.y})`);
+      n.g.setAttribute('opacity', p.z>0?1:0.55);
+      n.circ.setAttribute('r', n.s>0?9:7);
+    }
+  }
+  return {update};
+})();
+function snapView(dirWorld){                          // 모델 중심을 dirWorld 쪽에서 바라보는 뷰로 비행
+  const d=(modelDiag||10)*0.6;
+  const from=sceneCenter.clone().addScaledVector(dirWorld.normalize(), d);
+  const f=sceneCenter.clone().sub(from).normalize();
+  anim={t:0, dur:0.6, p0:camera.position.clone(), p1:from,
+        yaw0:camYaw, yaw1:Math.atan2(f.y,f.x),
+        pitch0:camPitch, pitch1:clampPitch(Math.atan2(f.z,Math.hypot(f.x,f.y)))};
+}
+
 const _clock=new THREE.Clock();
 (function loop(){
   requestAnimationFrame(loop);
@@ -1921,6 +2077,7 @@ const _clock=new THREE.Clock();
     if(Math.abs(camera.fov-fovT) > 0.05){ camera.fov += (fovT-camera.fov)*Math.min(1,_dt*12); camera.updateProjectionMatrix(); }
   }
   applyLook();                          // yaw/pitch(+이동된 위치)를 카메라에 반영 · up 항상 Z
+  GZ.update();                          // 방향 기즈모 회전 동기화
   let t = _st.on ? _now() : 0;
   updateHover();                       if(_st.on){ _st.acc.hover += _now()-t; t = _now(); }
   keepConstantSize(); if(_st.on){ _st.acc.retic += _now()-t; t = _now(); }
