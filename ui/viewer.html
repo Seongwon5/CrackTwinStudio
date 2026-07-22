@@ -2015,7 +2015,16 @@ document.getElementById('clCopy').onclick=async()=>{
 };
 
 addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);});
-renderer.domElement.addEventListener('wheel', e=>e.preventDefault(), {passive:false});  // 휠 줌 제거(페이지 스크롤 방지)
+// 휠 줌: 현 이동 방식(WASD·드래그·스코프)은 그대로 두고, 휠은 '시선 방향 전진/후진'으로 줌.
+// 위로 굴리면 전진(줌인), 아래로 후진. Shift 로 가속. 방향은 그대로(applyLook 이 유지).
+renderer.domElement.addEventListener('wheel', e=>{
+  e.preventDefault();
+  cancelAnim();                                   // 진행 중 비행 취소
+  const dir=camera.getWorldDirection(new THREE.Vector3());
+  const sprint=(e.shiftKey?4:1);
+  const step=(modelDiag||1)*0.04*sprint*(e.deltaY<0?1:-1);   // 모델 크기 비례 · 노치당 일정
+  camera.position.addScaledVector(dir, step);
+}, {passive:false});
 document.getElementById('boot').style.display='none';   // 씬 구성 완료 → 로딩 표시 제거
 
 // ================= 성능 계측 (F2) =================
