@@ -780,6 +780,73 @@ function drawCrackPaths(ctx, paths, mapUV, lw){     // 노란 발광(두 번 그
   }
   ctx.stroke(); ctx.stroke();
 }
+// ---- 투영만 믿지 않는다: 멤버 뷰 확인 + 검출 마스크 스냅 ----
+// 문제(실측): ① 크랙이 안 보이는(가려진·반대편) 사진에도 투영선이 그려짐
+// ② 다른 뷰에서 만든 융합 기하는 뷰 간 정합 오차로 50~500px 어긋나는 쌍이 존재(전수 감사).
+// 해법: 그 크랙이 '검출된' 뷰에서만 그리고, 투영점을 그 사진의 마스크 최근접 크랙 픽셀로
+// 스냅(반경 제한). 스냅 성공률이 낮으면 그 뷰에선 그리지 않는다(오도 방지).
+const _maskData={};                                  // cam.id → {on,W,H} | null(없음/실패)
+function withMaskData(cam, cb){
+  const key=cam.id;
+  if(key in _maskData){ cb(_maskData[key]); return; }
+  if(!cam.has_mask){ _maskData[key]=null; cb(null); return; }
+  const im=new Image();
+  im.onload=()=>{
+    try{
+      const c=document.createElement('canvas'); c.width=im.naturalWidth; c.height=im.naturalHeight;
+      const x=c.getContext('2d'); x.drawImage(im,0,0);
+      const a=x.getImageData(0,0,c.width,c.height).data;
+      const W=c.width,H=c.height, on=new Uint8Array(W*H);
+      for(let i=3,p=0;i<a.length;i+=4,p++) if(a[i]>0) on[p]=1;
+      _maskData[key]={on,W,H};
+    }catch(e){ _maskData[key]=null; }
+    cb(_maskData[key]);
+  };
+  im.onerror=()=>{ _maskData[key]=null; cb(null); };
+  im.src=imgUrl(cam,'mask');
+}
+function _nearestOn(md, x, y, R){
+  const {on,W,H}=md;
+  if(x>=0&&y>=0&&x<W&&y<H&&on[y*W+x]) return [x,y];
+  for(let r=1;r<=R;r++){
+    for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
+      if(Math.max(Math.abs(dx),Math.abs(dy))!==r) continue;
+      const nx=x+dx, ny=y+dy;
+      if(nx>=0&&ny>=0&&nx<W&&ny<H&&on[ny*W+nx]) return [nx,ny];
+    }
+  }
+  return null;
+}
+function snapPaths(paths, md){
+  const {W,H}=md, R=Math.max(10, Math.round(W*0.02));   // 스냅 반경 ≈ 폭의 2% (1920px 기준 38px)
+  let tot=0, hit=0;
+  const out=[];
+  for(const path of paths){
+    const np=[];
+    for(const q of path){
+      tot++;
+      const s=_nearestOn(md, Math.round(q.u*W), Math.round(q.v*H), R);
+      if(s){ hit++; np.push({u:s[0]/W, v:s[1]/H}); }
+    }
+    if(np.length>1) out.push(np);
+  }
+  return (hit>=4 && hit/Math.max(tot,1)>=0.35) ? out : null;   // 다수가 못 붙으면 정합 실패
+}
+function crackSeenIn(cam){                           // 이 카메라가 선택 크랙을 실제로 검출했는가
+  if(selIdx<0) return false;
+  const h=DATA.hotspots[selIdx];
+  return (h.views||[]).some(v=>v.source===cam.source);
+}
+function drawCrackHL(cam, ctx, mapUV, lw){           // 하이라이트 공통 진입점(비동기: 마스크 로드 후)
+  if(selIdx<0 || !crackSeenIn(cam)) return;          // 멤버 뷰가 아니면 그리지 않음(가림·오도 방지)
+  const hot=selIdx, paths=crackPathsInCam(hot, cam);
+  if(!paths.length) return;
+  withMaskData(cam, md=>{
+    if(selIdx!==hot) return;                         // 그 사이 선택이 바뀌면 무시
+    if(md){ const sp=snapPaths(paths, md); if(sp===null) return; drawCrackPaths(ctx, sp, mapUV, lw); }
+    else drawCrackPaths(ctx, paths, mapUV, lw);      // 마스크 로드 실패 시 원시 투영 폴백
+  });
+}
 // 핫스팟의 대표 뷰: views(신뢰도순) 중 크랙이 화면 안에 들어오는 첫 뷰
 function pickRepView(h){
   let fb = null;
@@ -975,9 +1042,8 @@ function makeCrop(container, cam, u, v, cropFrac){
     const L=(CW/2 - u*w), T=(CH/2 - v*hh);
     im.style.width=w+'px'; im.style.height=hh+'px'; im.style.left=L+'px'; im.style.top=T+'px';
     if(mask){ mask.style.width=w+'px'; mask.style.height=hh+'px'; mask.style.left=L+'px'; mask.style.top=T+'px'; }
-    hlv.width=CW; hlv.height=CH;                    // 선택된 크랙만 노란 발광으로
-    if(selIdx>=0) drawCrackPaths(hlv.getContext('2d'), crackPathsInCam(selIdx, cam),
-                                 q=>[L+q.u*w, T+q.v*hh], 3);
+    hlv.width=CW; hlv.height=CH;                    // 선택된 크랙만 노란 발광(멤버 뷰 한정 + 마스크 스냅)
+    drawCrackHL(cam, hlv.getContext('2d'), q=>[L+q.u*w, T+q.v*hh], 3);
   }
   im.onload=layout;
   im.src=imgUrl(cam,'full');
@@ -1026,9 +1092,9 @@ function showHotspotRep(h){
       im.innerHTML='<img src="'+imgUrl(cam,'thumb')+'">'
         + (cam.has_mask ? '<img class="mk" src="'+imgUrl(cam,'mask')+'">' : '')
         + '<canvas class="mk" width="58" height="44"></canvas>';
-      if(selIdx>=0){                                 // 선택 크랙만 노란 발광(cover 크롭 좌표계로 매핑)
+      {                                              // 선택 크랙만 노란 발광(멤버 뷰 한정 + 마스크 스냅)
         const a=cam.w/cam.h, b=58/44, dw=(a>b)?44*a:58, dh=(a>b)?44:58/a;
-        drawCrackPaths(im.querySelector('canvas').getContext('2d'), crackPathsInCam(selIdx, cam),
+        drawCrackHL(cam, im.querySelector('canvas').getContext('2d'),
           q=>[(58-dw)/2+q.u*dw, (44-dh)/2+q.v*dh], 2);
       }
       im.title=cam.source+' — 좌클릭: 시점 이동+대표교체 · 우클릭: 자세히';
@@ -1079,8 +1145,9 @@ function openImageModal(c, markUV, kind){
   cm.classList.toggle('inspect', kind==='inspect');
   document.getElementById('imCoord').textContent = (modalMark && kind==='inspect')
     ? '노란 원 = 클릭하신 지점 · 드래그: 이동 · 휠: 확대/축소'
-    : (selIdx>=0 ? '노란 발광 = 선택한 크랙 · 드래그: 이동 · 휠: 확대/축소'
-                 : '드래그: 이동 · 휠: 확대/축소');
+    : (crackSeenIn(c) ? '노란 발광 = 선택한 크랙 · 드래그: 이동 · 휠: 확대/축소'
+       : (selIdx>=0 ? '선택한 크랙은 이 사진에서 검출되지 않음 · 드래그: 이동 · 휠: 확대/축소'
+                    : '드래그: 이동 · 휠: 확대/축소'));
   const img=document.getElementById('imImg');
   img.onload=()=>{ fitModal(); placeCrackMarker(); drawModalHL(); };
   img.src=imgUrl(c,'full');
@@ -1102,7 +1169,7 @@ function drawModalHL(){
   const cvs=document.getElementById('imHL'), img=document.getElementById('imImg');
   if(!img.naturalWidth || selIdx<0 || !modalCam){ cvs.width=1; cvs.height=1; return; }
   cvs.width=img.naturalWidth; cvs.height=img.naturalHeight;
-  drawCrackPaths(cvs.getContext('2d'), crackPathsInCam(selIdx, modalCam),
+  drawCrackHL(modalCam, cvs.getContext('2d'),
     q=>[q.u*cvs.width, q.v*cvs.height], Math.max(3, cvs.width*0.0025));
 }
 function placeCrackMarker(){
