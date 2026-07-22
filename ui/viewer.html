@@ -3,7 +3,7 @@
 <style>
   /* ============ 디자인 토큰 ============ */
   :root{
-    --topbarh:46px; --leftw:340px; --rightw:300px;
+    --topbarh:46px; --typebarh:40px; --toph:86px; --leftw:340px; --rightw:300px;
     /* 표면·선(중립 회청색조) */
     --bg:#0e1319; --surface:rgba(15,20,27,.95); --surface-2:#151d25; --surface-3:#1c262f;
     --line:#26323d; --line-2:#334352;
@@ -38,7 +38,21 @@
   #topbarHint{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:var(--fs-cap);
     color:var(--tx-3);white-space:nowrap;}
   /* ===== 좌측 도크 ===== */
-  #leftdock{position:fixed;top:var(--topbarh);left:0;bottom:0;width:var(--leftw);z-index:20;
+  /* ===== 유형 필터 상단 고정 바 ===== */
+  #typebar{position:fixed;top:var(--topbarh);left:0;right:0;height:var(--typebarh);z-index:29;
+    display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--surface-2);
+    border-bottom:1px solid var(--line);}
+  #typebar .lb{color:var(--tx-3);font-size:var(--fs-cap);white-space:nowrap;display:flex;align-items:center;gap:6px;}
+  #typebar .tychip2{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-2);
+    border-radius:14px;padding:4px 11px;cursor:pointer;font-size:var(--fs-body);color:var(--tx-2);
+    background:transparent;user-select:none;transition:all .12s;}
+  #typebar .tychip2 .dot{width:9px;height:9px;border-radius:3px;}
+  #typebar .tychip2 .cnt{font-family:Consolas,monospace;color:var(--tx-3);font-size:var(--fs-cap);}
+  #typebar .tychip2.on{color:var(--tx);border-color:currentColor;background:rgba(255,255,255,.04);}
+  #typebar .tychip2.off{opacity:.45;}
+  #typebar .tychip2:hover{background:rgba(255,255,255,.06);}
+  #typebar #tbAll{border-color:var(--accent);color:var(--accent);}
+  #leftdock{position:fixed;top:var(--toph);left:0;bottom:0;width:var(--leftw);z-index:20;
     background:var(--surface);border-right:1px solid var(--line);display:flex;box-shadow:2px 0 12px rgba(0,0,0,.35);}
   .dockpane{flex:1;overflow-y:auto;padding:16px;display:none;color:var(--tx);font-size:var(--fs-body);line-height:1.65;min-width:0;}
   .dockpane b{font-size:var(--fs-head);font-weight:600;color:var(--tx);}
@@ -61,10 +75,10 @@
   .dockpane select{background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 6px;font-family:inherit;}
   .dockpane hr{border:0;border-top:1px solid var(--line);margin:14px 0;}
   /* ===== 폭 조절 그립 ===== */
-  #leftgrip{position:fixed;top:var(--topbarh);bottom:0;left:calc(var(--leftw) - 2px);width:7px;
+  #leftgrip{position:fixed;top:var(--toph);bottom:0;left:calc(var(--leftw) - 2px);width:7px;
     cursor:ew-resize;z-index:26;transition:background .12s;}
   #leftgrip:hover, #leftgrip.drag{background:var(--accent-dim);}
-  #rightgrip{position:fixed;top:var(--topbarh);bottom:0;right:calc(var(--rightw) - 2px);width:7px;
+  #rightgrip{position:fixed;top:var(--toph);bottom:0;right:calc(var(--rightw) - 2px);width:7px;
     cursor:ew-resize;z-index:26;transition:background .12s;}
   #rightgrip:hover, #rightgrip.drag{background:var(--accent-dim);}
   #panel{position:absolute;top:10px;right:10px;width:340px;max-height:94vh;overflow:auto;
@@ -75,7 +89,7 @@
   #panel .close{float:right;cursor:pointer;color:#f88; font-weight: bold; background: #333; padding: 2px 6px; border-radius: 4px;}
   #panel .close:hover{background: #555;}
   /* 우측 전체 이미지 리스트 (고정 도크 · 좌측 그립으로 폭 조절) */
-  #imglist{position:fixed;top:var(--topbarh);right:0;bottom:0;width:var(--rightw);display:flex;flex-direction:column;
+  #imglist{position:fixed;top:var(--toph);right:0;bottom:0;width:var(--rightw);display:flex;flex-direction:column;
     background:var(--surface);color:var(--tx);border-left:1px solid var(--line);padding:16px;font-size:var(--fs-body);
     box-shadow:-2px 0 12px rgba(0,0,0,.35);z-index:20;box-sizing:border-box;}
   #imglist h3{margin:0;color:var(--tx);border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:6px;
@@ -196,7 +210,7 @@
   #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
   #toast .ic{width:16px;height:16px;color:var(--accent);}
   /* 성능 계측 오버레이 (F2 로 토글) */
-  #stats{position:fixed;left:calc(var(--leftw) + 16px);top:calc(var(--topbarh) + 12px);z-index:60;background:var(--surface);border:1px solid var(--line);
+  #stats{position:fixed;left:calc(var(--leftw) + 16px);top:calc(var(--toph) + 12px);z-index:60;background:var(--surface);border:1px solid var(--line);
     border-radius:var(--r-sm);padding:9px 12px;font:11px/1.55 Consolas,monospace;color:var(--accent);white-space:pre;
     pointer-events:none;display:none;box-shadow:0 3px 12px rgba(0,0,0,.6);}
   /* 보고서 로딩/오류 표시 (메시가 GB 급이면 수 초 걸린다) */
@@ -242,6 +256,13 @@
   <span id="topbarHint">메뉴를 다시 누르면 패널이 닫힙니다</span>
 </div>
 
+<!-- ===== 유형 필터 상단 고정 바(항상 표시) ===== -->
+<div id="typebar">
+  <span class="lb"><svg class="ic" style="width:14px;height:14px"><use href="#i-list"/></svg>크랙 유형</span>
+  <span class="tychip2 on" id="tbAll">전체</span>
+  <span id="typeChips" style="display:flex;gap:8px;align-items:center;"></span>
+</div>
+
 <!-- ===== 좌측 도크: 상단 메뉴에서 선택한 패널 하나를 표시 (우측 가장자리 드래그로 폭 조절) ===== -->
 <div id="leftdock">
   <div class="dockpane" id="pane-info" style="display:block;">
@@ -275,11 +296,7 @@
     <label><input type="checkbox" id="ckGrid" checked><svg class="ic"><use href="#i-grid"/></svg>좌표축 및 바닥 그리드</label>
     <label><input type="checkbox" id="ckDarkMesh"><svg class="ic"><use href="#i-moon"/></svg>구조물 어둡게 보기(픽셀 강조)</label>
     <label><input type="checkbox" id="ckCam" checked><svg class="ic"><use href="#i-camera"/></svg>카메라 위치 표시</label>
-    <hr>
-    <div style="font-weight:600;font-size:var(--fs-body);margin-bottom:4px;">크랙 유형 필터</div>
-    <label><input type="checkbox" id="tfAll" checked>전체 보기</label>
-    <div id="typeFilter" style="margin-top:2px;"></div>
-    <div style="font-size:var(--fs-cap);color:var(--tx-3);margin-top:6px;">유형별로 켜고 끄면 3D·목록에서 함께 걸러집니다.</div>
+    <div style="font-size:var(--fs-cap);color:var(--tx-3);margin-top:10px;">크랙 유형 필터는 상단 바에 항상 표시됩니다.</div>
   </div>
 
   <div class="dockpane" id="cracklist">
@@ -785,22 +802,28 @@ function applyTypeFilter(){
   updateHUD();
   if(typeof clRefresh==='function' && document.getElementById('cracklist').style.display==='flex') clRefresh();
 }
-function _syncAllToggle(){ document.getElementById('tfAll').checked = CRACK_TYPES.every(t=>typeVisible[t]); }
+// 상단 유형 필터 바(항상 표시): 유형별 칩 토글 + 전체
+const _typeChipEl={};
+function _syncTypeChips(){
+  for(const t of CRACK_TYPES) _typeChipEl[t].classList.toggle('on', typeVisible[t]), _typeChipEl[t].classList.toggle('off', !typeVisible[t]);
+  document.getElementById('tbAll').classList.toggle('on', CRACK_TYPES.every(t=>typeVisible[t]));
+}
 (function buildTypeFilterUI(){
-  const box=document.getElementById('typeFilter');
+  const box=document.getElementById('typeChips');
   for(const t of CRACK_TYPES){
-    const lb=document.createElement('label');
-    lb.innerHTML='<input type="checkbox" checked>'
-      +'<span class="tychip" style="color:'+TYPE_COLOR[t]+'">'+TYPE_LABEL[t]+'</span>'
-      +'<span style="margin-left:auto;color:var(--tx-3);font-family:Consolas,monospace">'+_typeCount[t].toLocaleString()+'</span>';
-    box.appendChild(lb);
-    lb.querySelector('input').onchange=e=>{ typeVisible[t]=e.target.checked; _syncAllToggle(); applyTypeFilter(); };
+    const el=document.createElement('span'); el.className='tychip2 on';
+    el.innerHTML='<span class="dot" style="background:'+TYPE_COLOR[t]+'"></span>'+TYPE_LABEL[t]
+      +' <span class="cnt">'+_typeCount[t].toLocaleString()+'</span>';
+    el.style.color=TYPE_COLOR[t];
+    box.appendChild(el); _typeChipEl[t]=el;
+    el.onclick=()=>{ typeVisible[t]=!typeVisible[t]; _syncTypeChips(); applyTypeFilter(); };
   }
-  document.getElementById('tfAll').onchange=e=>{
-    box.querySelectorAll('input').forEach(inp=>inp.checked=e.target.checked);
-    for(const t of CRACK_TYPES) typeVisible[t]=e.target.checked;
-    applyTypeFilter();
+  document.getElementById('tbAll').onclick=()=>{
+    const anyOff=CRACK_TYPES.some(t=>!typeVisible[t]);   // 하나라도 꺼져 있으면 전체 켜기, 아니면 전체 끄기
+    for(const t of CRACK_TYPES) typeVisible[t]=anyOff;
+    _syncTypeChips(); applyTypeFilter();
   };
+  _syncTypeChips();
 })();
 // 호버/선택 하이라이트: 그 크랙의 리본만 흰 튜브로 위에 겹쳐 그린다(병합 버퍼는 불변).
 const hlGroup=new THREE.Group(); ribbonGroup.add(hlGroup);
@@ -1104,7 +1127,7 @@ function showCameraImage(c){
   im.src=imgUrl(c,'thumb');
   box.appendChild(im);
   box.title='클릭: 이 카메라 시점으로 이동 · 우클릭: 원본 크게 보기';
-  box.onclick=()=>flyToCamera(c);
+  box.onclick=()=>selectCamera(c, true);              // 시점 이동 + 카메라 정보 갱신
   box.oncontextmenu=e=>{ e.preventDefault(); openImageModal(c, null, null, true); };   // noHL
   items.appendChild(box);
 }
