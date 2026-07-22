@@ -1158,9 +1158,11 @@ function openImageModal(c, markUV, kind){
     tog.checked = true;                             // 이미지 클릭 시 기본으로 마스크 씌워 보여줌
     maskImg.src=imgUrl(c,'mask');
     maskImg.style.display = 'block';
+    document.getElementById('imHL').style.display='block';   // 하이라이트도 토글 상태와 동기화
   } else {
     document.getElementById('imMaskLabel').style.display='none';
     maskImg.removeAttribute('src'); maskImg.style.display='none';
+    document.getElementById('imHL').style.display='none';
   }
   document.getElementById('imgmodal').style.display='flex';
 }
@@ -1240,6 +1242,8 @@ function placeWorldMarker(p){
   document.getElementById('imMaskToggle').onchange=e=>{               // 검출 마스크 on/off
     const mk=document.getElementById('imMask');
     mk.style.display=(e.target.checked && mk.getAttribute('src'))?'block':'none';
+    // 선택 크랙 노란 하이라이트도 마스크와 함께 켜고 끈다(마스크 없이 선만 뜨면 혼란)
+    document.getElementById('imHL').style.display=e.target.checked?'block':'none';
   };
   window.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
 })();
