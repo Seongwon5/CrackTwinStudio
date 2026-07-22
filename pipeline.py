@@ -9,6 +9,7 @@ pipeline.py  ―  크랙 디지털 트윈 분석 파이프라인 (통합 모듈)
 import os
 import sys
 import json
+import time
 import zipfile
 import numpy as np
 import cv2
@@ -1137,8 +1138,10 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
 
     crack_points = []
     if all_crack_pts:
+        log(f"  텍스트 포인트 군집화: 점 {len(all_crack_pts)}개 …")
         tcenters, _ = cluster_voxel(np.array(all_crack_pts), txt_radius)
         crack_points = [[round(float(c[0]), 5), round(float(c[1]), 5), round(float(c[2]), 5)] for c in tcenters]
+        log(f"  텍스트 포인트: {len(crack_points)}개 라벨 위치")
 
     import datetime
     widths = [h["width_mm_max"] for h in merged] if merged else []
@@ -1162,8 +1165,10 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
     hot2insts = {}
     for hi, mi in inst2hot.items():
         hot2insts.setdefault(mi, []).append(hi)
+    log(f"  리본 융합 시작: 크랙 {len(merged)}개(가상 대표곡선 투영) …")
     all_ribbons = []
-    for mi in range(len(merged)):
+    _t_fuse = time.time(); _nfuse = len(merged)
+    for mi in range(_nfuse):
         pts, ws, ns = [], [], []
         for hi in hot2insts.get(mi, []):
             h = all_hotspots[hi]
@@ -1174,7 +1179,10 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         fp, fw, fn = fuse_points(pts, ws, ns, FUSE_VOXEL_M)
         if len(fp) >= 2:
             all_ribbons.append({"poly": fp, "poly_w": fw, "poly_n": fn, "hot": mi})
-    log(f"  리본: 뷰별 인스턴스 {len(all_hotspots)}개 → 크랙당 융합 {len(all_ribbons)}개(핫스팟 {len(merged)})")
+        if _nfuse >= 2000 and (mi + 1) % 2000 == 0:
+            log(f"    융합 {mi + 1}/{_nfuse} ({(mi + 1) / _nfuse * 100:.0f}%) · {time.time() - _t_fuse:.0f}s")
+    log(f"  리본: 뷰별 인스턴스 {len(all_hotspots)}개 → 크랙당 융합 {len(all_ribbons)}개"
+        f"(핫스팟 {len(merged)}) · {time.time() - _t_fuse:.0f}s")
 
     # ---- 크랙 유형 분류 (크랙 / 조인트·시공선 / 실금 / 얼룩) ----
     # 융합 중심선(기하) + 대표 뷰 이미지(겉모습)로 각 크랙에 type/type_conf 부여.
@@ -1198,9 +1206,11 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             P = polym.get(mi)
             if P is None or len(P) < 2: continue
             ax, c = _ct.principal_axis(P); axes.append(ax); cents.append(c); midx.append(mi)
+        log(f"  유형 분류 시작: 크랙 {len(merged)}개 (L2 평행이웃 계산 완료) …")
         par = _ct.parallel_fraction(cents, axes, near=diag * _ct.PAR_NEAR_FRAC) if cents else []
         par_of = {midx[k]: float(par[k]) for k in range(len(midx))}
         tcnt = {}
+        _t_cls = time.time(); _ncls = len(merged)
         for mi, h in enumerate(merged):
             P = polym.get(mi); lab, conf = "crack", 0.0
             if P is not None and len(P) >= 2:
@@ -1217,10 +1227,13 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                     lab, conf = _ct.classify_crack(P, w, h.get("length_mm"), best, _gray(best["source"]), par_of.get(mi, 0.0))
             h["type"] = lab; h["type_conf"] = round(float(conf), 3)
             tcnt[lab] = tcnt.get(lab, 0) + 1
-        log(f"  크랙 유형 분류: {tcnt}")
+            if _ncls >= 2000 and (mi + 1) % 2000 == 0:
+                log(f"    분류 {mi + 1}/{_ncls} ({(mi + 1) / _ncls * 100:.0f}%) · {time.time() - _t_cls:.0f}s")
+        log(f"  크랙 유형 분류: {tcnt} · {time.time() - _t_cls:.0f}s")
     except Exception as e:
         log(f"  (유형 분류 건너뜀: {e})")
 
+    log(f"후처리 완료: 크랙 {len(merged)} · 리본 {len(all_ribbons)} · 텍스트 {len(crack_points)}")
     return {"ply_path": ply_path, "text_points": crack_points, "ribbons": all_ribbons,
             "cameras": all_cameras, "hotspots": merged, "report_meta": report_meta}
 
@@ -1270,6 +1283,9 @@ def save_report(scene_data, out_path):
 def build_report(folder, ply_path, out_path, log, progress, detect=True, thr=CRACK_THR, limit=None):
     """분석 → scene_data 생성 → .twin 저장까지 한 번에 수행한다."""
     scene = build_scene_data(folder, ply_path, log, progress, detect=detect, thr=thr, limit=limit)
+    log(f"보고서 저장 중: {os.path.basename(out_path)} (메시·이미지 압축) …")
+    _t_save = time.time()
     p = save_report(scene, out_path)
-    log(f"보고서 저장: {p} ({os.path.getsize(p)/1e6:.1f} MB) · 카메라 {len(scene['cameras'])} · 크랙 {len(scene['hotspots'])}")
+    log(f"보고서 저장: {p} ({os.path.getsize(p)/1e6:.1f} MB) · 카메라 {len(scene['cameras'])} · "
+        f"크랙 {len(scene['hotspots'])} · {time.time() - _t_save:.0f}s")
     return p
