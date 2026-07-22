@@ -1875,17 +1875,35 @@ document.querySelectorAll('#topbar .tmenu').forEach(b=>b.onclick=()=>showPane(b.
 })();
 
 // 행 클릭 → 크랙 앞으로 비행(현 시선 유지, 크랙 크기에 비례한 거리) + 선택·상세 표시
+// 크랙을 검출한 카메라(멤버 뷰) 중 그 크랙에 가장 가까운 카메라를 고른다.
+// 크랙이 실제로 화면 안에 들어오는 뷰를 우선하고, 그중 최단 거리를 택한다.
+function nearestMemberCam(h){
+  const t=new THREE.Vector3(h.xyz[0],h.xyz[1],h.xyz[2]);
+  let best=null, bestD=Infinity, bestVis=false;
+  for(const vw of (h.views||[])){
+    const cam=camDataBySource[vw.source]; if(!cam) continue;
+    const d=t.distanceTo(new THREE.Vector3(cam.pos[0],cam.pos[1],cam.pos[2]));
+    const vis=!!projectToCam(cam, h.xyz);            // 크랙이 이 카메라 화면 안에 보이는가
+    // 화면에 보이는 뷰를 항상 우선, 그다음 거리로 비교
+    if((vis && !bestVis) || (vis===bestVis && d<bestD)){ best=cam; bestD=d; bestVis=vis; }
+  }
+  return best;
+}
 function flyToCrack(i){
   const h=DATA.hotspots[i]; if(!h) return;
-  const t=new THREE.Vector3(h.xyz[0],h.xyz[1],h.xyz[2]);
-  const dist=Math.max(1.2, Math.min(10, ((h.length_mm||500)/1000)*0.9));   // 메시 단위(공칭 m)
-  const dir=camera.getWorldDirection(new THREE.Vector3());
-  const p1=t.clone().addScaledVector(dir,-dist);
-  const f=t.clone().sub(p1).normalize();
-  anim={t:0, dur:0.7, p0:camera.position.clone(), p1,
-        yaw0:camYaw, yaw1:Math.atan2(f.y,f.x),
-        pitch0:camPitch, pitch1:clampPitch(Math.atan2(f.z,Math.hypot(f.x,f.y)))};
   selectHotspot(i); showHotspotRep(h);
+  const cam=nearestMemberCam(h);
+  if(cam){ flyToCamera(cam); }                        // 그 크랙을 찍은 가장 가까운 카메라 시점으로(우측은 대표 크롭 유지)
+  else {                                              // 멤버 카메라가 없으면(예외) 기존 방식 폴백
+    const t=new THREE.Vector3(h.xyz[0],h.xyz[1],h.xyz[2]);
+    const dist=Math.max(1.2, Math.min(10, ((h.length_mm||500)/1000)*0.9));
+    const dir=camera.getWorldDirection(new THREE.Vector3());
+    const p1=t.clone().addScaledVector(dir,-dist);
+    const f=t.clone().sub(p1).normalize();
+    anim={t:0, dur:0.7, p0:camera.position.clone(), p1,
+          yaw0:camYaw, yaw1:Math.atan2(f.y,f.x),
+          pitch0:camPitch, pitch1:clampPitch(Math.atan2(f.z,Math.hypot(f.x,f.y)))};
+  }
 }
 
 // CSV: 현재 필터·정렬 결과를 그대로(보정된 mm) — Excel 한글 호환 BOM 포함
