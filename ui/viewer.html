@@ -487,6 +487,36 @@ function radiusOf(wmm){                            // 폭(mm) → 반경(m): 실
   const r=(wmm==null?0:wmm)/1000/2*RIBBON_WIDTH_EXAG;
   return Math.min(RIBBON_MAX_R, Math.max(RIBBON_MIN_R, r));
 }
+// ---- 병합 렌더: 수만 개 리본을 메시 1개(드로우콜 1회)로 — 대규모 데이터 FPS 의 핵심 ----
+// 리본마다 Mesh 를 만들면 1.7만 드로우콜 + 씬그래프 순회로 6fps 가 된다. 정점색으로 심각도를
+// 굽고 전부 한 버퍼에 병합한다. 호버/선택 하이라이트는 그 크랙만 흰 오버레이 튜브로 따로 그린다.
+const ribGeo = {pos:[], col:[], idx:[], vbase:0};
+const ribRuns = [];                                  // ri → [{pts,rr}] 하이라이트 오버레이 재생성용
+function tubeInto(pts, radii, radialSeg, color){     // variableTube 와 동일 기하를 병합 버퍼에 축적
+  const N=pts.length;
+  const tan=pts.map((p,i)=>new THREE.Vector3().subVectors(pts[Math.min(N-1,i+1)], pts[Math.max(0,i-1)]).normalize());
+  let nrm=new THREE.Vector3(0,0,1);
+  if(Math.abs(tan[0].dot(nrm))>0.9) nrm.set(0,1,0);
+  nrm.crossVectors(tan[0], nrm).normalize();
+  const bin=new THREE.Vector3(), v=new THREE.Vector3();
+  const b0=ribGeo.vbase;
+  for(let i=0;i<N;i++){
+    nrm.addScaledVector(tan[i], -nrm.dot(tan[i])).normalize();
+    bin.crossVectors(tan[i], nrm).normalize();
+    const r=radii[i];
+    for(let j=0;j<radialSeg;j++){
+      const a=j/radialSeg*Math.PI*2, cs=Math.cos(a)*r, sn=Math.sin(a)*r;
+      v.copy(pts[i]).addScaledVector(nrm, cs).addScaledVector(bin, sn);
+      ribGeo.pos.push(v.x, v.y, v.z); ribGeo.col.push(color.r, color.g, color.b);
+    }
+  }
+  for(let i=0;i<N-1;i++) for(let j=0;j<radialSeg;j++){
+    const a=b0+i*radialSeg+j, b=b0+i*radialSeg+(j+1)%radialSeg,
+          c=b0+(i+1)*radialSeg+j, d=b0+(i+1)*radialSeg+(j+1)%radialSeg;
+    ribGeo.idx.push(a,c,b, b,c,d);
+  }
+  ribGeo.vbase += N*radialSeg;
+}
 function buildRibbon(h, i){
   const poly=h.poly, pn=h.poly_n, pw=h.poly_w||[];
   if(!poly || poly.length<2) return;
@@ -496,19 +526,15 @@ function buildRibbon(h, i){
   });
   const rad=poly.map((p,k)=>radiusOf(pw[k]));
   const hot=(h.hot!=null?h.hot:-1);
-  // 크랙 형상 색 = 심각도(상대 순위 색). 호버/선택 시엔 흰색으로 바뀐다(refreshRibbonColor).
-  const base=(hot>=0 ? rankColor(rankFrac(hot)).getHex() : RIBBON_COLOR);
-  ribbonBase[i]=base;
-  // polygonOffset: 표면과 z-fight 시 리본을 카메라 쪽으로 살짝 당겨 '위에' 그린다(가림 완화)
-  const mat=new THREE.MeshBasicMaterial({color: base, polygonOffset:true, polygonOffsetFactor:-4, polygonOffsetUnits:-4});
-  ribbonMats[i]=mat;
+  // 크랙 형상 색 = 심각도(상대 순위 색) — 정점색으로 병합 버퍼에 굽는다.
+  const base=(hot>=0 ? rankColor(rankFrac(hot)) : new THREE.Color(RIBBON_COLOR));
+  ribbonBase[i]=base.getHex();
   if(hot>=0){ (ribsByHot[hot]=ribsByHot[hot]||[]).push(i); }        // 핫스팟→리본 역매핑
-  let run=[], rr=[]; const hitPts=[];
+  let run=[], rr=[]; const hitPts=[]; const runs=[];
   const flush=()=>{
     if(run.length>=2){
-      const m=new THREE.Mesh(variableTube(run, rr, RIBBON_RADIAL), mat);
-      m.userData={ri:i, hot};                                        // ri=리본, hot=소속 핫스팟
-      ribbonGroup.add(m); ribbonMeshes.push(m);
+      tubeInto(run, rr, RIBBON_RADIAL, base);
+      runs.push({pts:run, rr});                                      // 오버레이용 원본 경로 보존
       for(let j=1;j<run.length;j++){ const a=run[j-1],b=run[j]; hitPts.push(a.x,a.y,a.z,b.x,b.y,b.z); }  // 히트박스용 중심선 세그먼트
     }
     run=[]; rr=[];
@@ -518,10 +544,12 @@ function buildRibbon(h, i){
     run.push(pts[k]); rr.push(rad[k]);
   }
   flush();
+  ribRuns[i]=runs;
   if(hitPts.length){                                   // 보이는 튜브보다 큰 '히트박스'(투명 라인, 임계값으로 굵게 피킹)
     const hg=new THREE.BufferGeometry();
     hg.setAttribute('position', new THREE.Float32BufferAttribute(hitPts,3));
     const hl=new THREE.LineSegments(hg, HIT_MAT); hl.userData={ri:i, hot};  // 객체는 visible(피킹 가능), 재질만 안 그려짐
+    hl.matrixAutoUpdate=false;                          // 정적 — 매 프레임 행렬 갱신 생략
     ribbonGroup.add(hl); ribbonHitLines.push(hl);
   }
 }
@@ -569,43 +597,72 @@ function rankColor(f){ const n=SEV_STOPS.length-1, x=Math.max(0,Math.min(1,f))*n
   k=Math.min(n-1,Math.floor(x)), t=x-k, a=SEV_STOPS[k], b=SEV_STOPS[k+1];
   return new THREE.Color(a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t); }
 
-// 리더선+말풍선 = DOM(호버/선택 때 해당 크랙 1개만 표시). 3D 다이아몬드 스프라이트는 만들지 않는다.
-DATA.hotspots.forEach((h,i)=>{
+// 리더선+말풍선 = DOM. 어차피 호버/선택된 1~2개만 보이므로 DOM 은 그때 처음 만든다(지연 생성).
+// 수만 개 크랙에서 미리 다 만들면 DOM 노드 수만 개 생성·순회로 로드·프레임이 모두 무너진다.
+DATA.hotspots.forEach((h,i)=>{ hudMarkers.push({el:null,h,i,sprite:null}); });
+function ensureMarkerEl(i){
+  const m=hudMarkers[i]; if(m.el) return m.el;
   const col=rankColor(rankFrac(i));               // 상대 심각도 색(빨강=상위 … 초록=하위)
   const rgb='rgb('+Math.round(col.r*255)+','+Math.round(col.g*255)+','+Math.round(col.b*255)+')';
   const el=document.createElement('div'); el.className='hud-marker'; el.style.setProperty('--sev',rgb);
-  el.innerHTML='<div class="leader"></div><div class="tag">'+fmtWL(h)+'</div>';
+  el.innerHTML='<div class="leader"></div><div class="tag">'+fmtWL(m.h)+'</div>';
   el.addEventListener('mouseenter',()=>{ hoverTag=i; });
   el.addEventListener('mouseleave',()=>{ if(hoverTag===i) hoverTag=-1; });
-  el.addEventListener('click',ev=>{ ev.stopPropagation(); selectHotspot(i); showHotspotRep(h); });
-  hud.appendChild(el); hudMarkers.push({el,h,i,sprite:null});   // sprite 없음(다이아몬드 제거)
-});
+  el.addEventListener('click',ev=>{ ev.stopPropagation(); selectHotspot(i); showHotspotRep(m.h); });
+  hud.appendChild(el); m.el=el; return el;
+}
 // 리본: 병합과 분리해 '모든 2D 크랙 인스턴스'를 그대로 렌더 → 병합에서 형상이 사라지지 않는다.
 // (구버전 .twin 은 ribbons 가 없으니 hotspots 의 poly 로 폴백)
 const _ribs = DATA.ribbons || DATA.hotspots.filter(h=>h.poly);
 _ribs.forEach((rb,ri)=>buildRibbon(rb, ri));
+// 병합 버퍼 → 단일 메시(드로우콜 1회). polygonOffset 으로 표면 위에 그린다.
+(function buildMergedRibbonMesh(){
+  if(!ribGeo.pos.length) return;
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(ribGeo.pos,3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(ribGeo.col,3));
+  g.setIndex(ribGeo.idx);
+  const m=new THREE.Mesh(g, new THREE.MeshBasicMaterial({vertexColors:true,
+    polygonOffset:true, polygonOffsetFactor:-4, polygonOffsetUnits:-4}));
+  m.matrixAutoUpdate=false;
+  ribbonGroup.add(m);
+  ribGeo.pos=ribGeo.col=ribGeo.idx=null;             // 병합 후 원본 배열 해제(메모리)
+})();
+// 호버/선택 하이라이트: 그 크랙의 리본만 흰 튜브로 위에 겹쳐 그린다(병합 버퍼는 불변).
+const hlGroup=new THREE.Group(); ribbonGroup.add(hlGroup);
+const HL_MAT=new THREE.MeshBasicMaterial({color:RIBBON_HL,
+  polygonOffset:true, polygonOffsetFactor:-6, polygonOffsetUnits:-6});
 function selectHotspot(i){
   if(selIdx>=0 && selIdx!==i) deselectHotspot();
   selIdx=i;
-  if(i>=0){ hudMarkers[i].el.classList.add('active','show'); refreshRibbonColor(i); }   // 선택 크랙 흰색
+  if(i>=0){ ensureMarkerEl(i).classList.add('active','show'); refreshRibbonColor(i); }   // 선택 크랙 흰색
 }
 function deselectHotspot(){
   if(selIdx<0) return;
-  const m=hudMarkers[selIdx]; m.el.classList.remove('active');
-  if(!m.el.classList.contains('high')) m.el.classList.remove('show');
+  const m=hudMarkers[selIdx];
+  if(m.el){
+    m.el.classList.remove('active');
+    if(!m.el.classList.contains('high')) m.el.classList.remove('show');
+  }
   const prev=selIdx; selIdx=-1; refreshRibbonColor(prev);   // 심각도색으로 복원(호버 중이면 유지)
 }
-// 호버/선택된 1개의 리더선+말풍선(DOM)만 그 크랙 위치(h.xyz)에 따라다니게 한다(다이아몬드 없음).
+// 호버/선택된 1~2개의 리더선+말풍선(DOM)만 크랙 위치(h.xyz)를 따라다닌다 — 활성분만 순회.
+let _hudShown=new Set();
 function updateHUD(){
   if(hud.style.display==='none') return;
   const W=innerWidth,H=innerHeight, v=new THREE.Vector3();
-  for(const m of hudMarkers){
-    if(m.i!==hoverIdx && m.i!==selIdx && m.i!==hoverTag){ m.el.style.display='none'; continue; }
+  const act=new Set();
+  for(const i of [hoverIdx,selIdx,hoverTag]) if(i!=null && i>=0) act.add(i);
+  for(const i of _hudShown) if(!act.has(i)){ const el=hudMarkers[i] && hudMarkers[i].el; if(el) el.style.display='none'; }
+  for(const i of act){
+    const m=hudMarkers[i]; if(!m) continue;
+    const el=ensureMarkerEl(i);
     const x=m.h.xyz; v.set(x[0],x[1],x[2]).project(camera);
-    if(v.z>1||v.x<-1.2||v.x>1.2||v.y<-1.2||v.y>1.2){ m.el.style.display='none'; continue; }
-    m.el.style.display='block'; m.el.classList.add('show');
-    m.el.style.left=((v.x*0.5+0.5)*W)+'px'; m.el.style.top=((-v.y*0.5+0.5)*H)+'px';
+    if(v.z>1||v.x<-1.2||v.x>1.2||v.y<-1.2||v.y>1.2){ el.style.display='none'; continue; }
+    el.style.display='block'; el.classList.add('show');
+    el.style.left=((v.x*0.5+0.5)*W)+'px'; el.style.top=((-v.y*0.5+0.5)*H)+'px';
   }
+  _hudShown=act;
 }
 
 // ================= 카메라 3D 객체 (밝은 파란색 프러스텀) =================
@@ -1074,12 +1131,21 @@ const ray=new THREE.Raycaster(), mouse=new THREE.Vector2(); let mIn=false;
 renderer.domElement.addEventListener('mousemove',e=>{mouse.x=(e.clientX/innerWidth)*2-1;mouse.y=-(e.clientY/innerHeight)*2+1;mIn=true;});
 renderer.domElement.addEventListener('mouseleave',()=>mIn=false);
 // 카메라 콘 / 핫스팟 레티클 위에 커서 포인터. 스프라이트 레이캐스트는 쿼드 몇 개라 매 프레임도 싸다.
-// 크랙(hot) 리본 색 갱신: 호버 중이거나 선택된 크랙 = 흰색, 아니면 기본 심각도색.
-function refreshRibbonColor(hot){
-  if(hot==null || hot<0) return;
-  const ris = ribsByHot[hot]; if(!ris) return;
-  const white = (hot===hoverHot || hot===selIdx);
-  for(const ri of ris){ if(ribbonMats[ri]) ribbonMats[ri].color.setHex(white ? RIBBON_HL : ribbonBase[ri]); }
+// 크랙(hot) 하이라이트 갱신: 호버·선택된 크랙의 리본만 흰 오버레이 튜브로 재생성.
+// (병합 버퍼는 건드리지 않는다 — 인자는 호환용이고 현재 hoverHot/selIdx 상태로 전체 동기화)
+let _hlHots=new Set();
+function refreshRibbonColor(_hot){
+  const want=new Set();
+  if(hoverHot>=0) want.add(hoverHot);
+  if(selIdx>=0) want.add(selIdx);
+  if(want.size===_hlHots.size && [..._hlHots].every(h=>want.has(h))) return;
+  _hlHots=want;
+  while(hlGroup.children.length){ const c=hlGroup.children.pop(); if(c.geometry) c.geometry.dispose(); }
+  for(const hot of want){
+    for(const ri of (ribsByHot[hot]||[]))
+      for(const run of (ribRuns[ri]||[]))
+        hlGroup.add(new THREE.Mesh(variableTube(run.pts, run.rr, RIBBON_RADIAL), HL_MAT));
+  }
 }
 function setHoverHot(hot){
   if(hot===hoverHot) return;
@@ -1091,7 +1157,10 @@ function setHoverHot(hot){
 function pickRibbonHot(){
   if(!ribbonGroup.visible || !ribbonHitLines.length) return -1;
   const saved = ray.params.Line.threshold;
-  ray.params.Line.threshold = (modelDiag||1)*0.03;    // 후보를 넉넉히 잡고 아래에서 화면거리로 거른다
+  // 후보 임계값 = 화면 14px 의 월드 길이(관측 거리 근사). 예전 modelDiag 비례(622m 모델 → 19m!)는
+  // 수만 히트라인 전부가 후보로 잡혀 프레임을 잡아먹는다. 아래 화면거리 필터가 정밀 판정을 맡는다.
+  ray.params.Line.threshold = Math.max(RIBBON_MAX_R,
+    HITBOX_PX * worldPerPixel(camera.position.distanceTo(sceneCenter)));
   const hits = ray.intersectObjects(ribbonHitLines,false);
   ray.params.Line.threshold = saved;
   if(!hits.length) return -1;
@@ -1107,13 +1176,16 @@ function pickRibbonHot(){
   }
   return bestHot;
 }
+let _lastPickT=0, _lastPickHot=-1;                    // 호버 피킹 스로틀 상태
 function updateHover(){
   if(measureMode||!mIn){ renderer.domElement.style.cursor='default'; hoverIdx=-1; setHoverHot(-1); return; }
   ray.setFromCamera(mouse,camera);
   const c = camGroup.visible ? ray.intersectObjects(camMeshes,false) : [];
   let hot = -1;
   if(ribbonGroup.visible){                            // 리본 호버 → 리본의 '자기' 크랙(핫스팟)
-    hot = pickRibbonHot();                            // 히트박스 피킹(보이는 튜브보다 크게 · 겹치면 가장 가까운 크랙)
+    const now=performance.now();                      // 피킹은 60ms 마다(수만 크랙에서 매 프레임은 낭비)
+    if(now-_lastPickT>60){ _lastPickHot=pickRibbonHot(); _lastPickT=now; }
+    hot=_lastPickHot;
   }
   hoverIdx = hot;                                    // 말풍선(폭·길이) 표시
   setHoverHot(hot);                                  // 그 크랙의 리본 빨강
@@ -1393,7 +1465,7 @@ function refreshCalibUI(){
     ? '✔ 보정 계수 <b style="color:#7fffd4">×'+calibScale.toFixed(4)+'</b> 적용 중 — 모든 mm 수치에 반영됩니다.'
     : '실측 길이를 아는 두 점(표척·조인트 등)을 클릭해 모든 mm 수치를 보정합니다.';
   // 열려 있는 표시들 일괄 갱신: 말풍선 태그 · 메타/경고 · 크랙 목록 · 측정 결과
-  hudMarkers.forEach(m=>{ const t=m.el.querySelector('.tag'); if(t) t.innerHTML=fmtWL(m.h); });
+  hudMarkers.forEach(m=>{ if(!m.el) return; const t=m.el.querySelector('.tag'); if(t) t.innerHTML=fmtWL(m.h); });
   renderMeta(); showResult(); relabel();
   if(typeof clRefresh==='function' && document.getElementById('cracklist').style.display==='flex') clRefresh();
   if(selIdx>=0) showHotspotRep(DATA.hotspots[selIdx]);
