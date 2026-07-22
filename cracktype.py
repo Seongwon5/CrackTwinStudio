@@ -13,19 +13,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(HERE, "model", "crack_type.json")
 
 # 특징 순서(학습·추론 공통) · 로그 변환 대상
+# circ_resid/turn_consist/curv_cv: 직선뿐 아니라 '원호형' 조인트(매끄러운 규칙 곡선)를
+# 불규칙 크랙과 구분하기 위한 곡률-규칙성 특징.
 FEATS = ["w", "straight", "bend", "axl",
+         "circ_resid", "turn_consist", "curv_cv",
          "ap_depth", "ap_depth_p90", "ap_sharp", "ap_fwhm", "ap_val", "ap_contrast", "ap_consist", "ap_aspect"]
-LOG_FEATS = {"w", "straight"}
+LOG_FEATS = {"w", "straight", "circ_resid"}
 CLASSES = ["crack", "joint", "craze", "blob"]
 _PROF_R = 11   # 단면 표본 반폭(px, full 해상도 기준)
 
 
 # ---------------- 특징 추출 ----------------
 def geom_features(poly):
-    """3D 중심선(Nx3) → 직선잔차·평균꺾임각·축정렬각."""
+    """3D 중심선(Nx3) → 직선잔차·평균꺾임각·축정렬각 + 곡률-규칙성(원적합잔차·회전일관성·곡률변동)."""
     P = np.asarray(poly, float)
-    if len(P) < 4:
-        return dict(straight=0.02, bend=30.0, axl=25.0)
+    if len(P) < 5:
+        return dict(straight=0.02, bend=30.0, axl=25.0, circ_resid=0.05, turn_consist=0.5, curv_cv=1.0)
     dv = np.diff(P, axis=0); seg = np.linalg.norm(dv, axis=1); path = seg.sum()
     u = dv / np.maximum(seg[:, None], 1e-9)
     cosb = np.clip((u[:-1] * u[1:]).sum(1), -1, 1)
@@ -34,7 +37,29 @@ def geom_features(poly):
     resid = np.linalg.norm((P - c) - np.outer((P - c) @ axis, axis), axis=1)
     straight = float(resid.mean() / max(path, 1e-6))
     axl = float(np.degrees(np.arccos(min(1.0, max(abs(axis[0]), abs(axis[1]), abs(axis[2]))))))
-    return dict(straight=straight, bend=bend, axl=axl)
+    # 최적 평면(주성분 2축)에 투영 → 2D
+    e1, e2 = Vt[0], Vt[1]
+    xy = np.column_stack([(P - c) @ e1, (P - c) @ e2]); x = xy[:, 0]; y = xy[:, 1]
+    # 원 적합(Kåsa): 직선·원호는 잔차↓, 불규칙 크랙은 잔차↑
+    circ_resid = 0.05
+    try:
+        A = np.column_stack([2 * x, 2 * y, np.ones(len(x))]); bb = x * x + y * y
+        sol, *_ = np.linalg.lstsq(A, bb, rcond=None)
+        cx, cy, cc = sol; r = float(np.sqrt(max(cc + cx * cx + cy * cy, 0.0)))
+        d = np.abs(np.hypot(x - cx, y - cy) - r)
+        circ_resid = float(d.mean() / max(path, 1e-6))
+    except Exception:
+        pass
+    # 회전 방향 일관성(원호=한 방향으로 일관 회전=1, 크랙=좌우 무작위=0) + 곡률 변동계수
+    d2 = np.diff(xy, axis=0)
+    cross = d2[:-1, 0] * d2[1:, 1] - d2[:-1, 1] * d2[1:, 0]
+    dot = (d2[:-1] * d2[1:]).sum(1)
+    turn = np.arctan2(cross, dot)                     # 정점별 부호 있는 회전각
+    at = np.abs(turn)
+    turn_consist = float(abs(turn.sum()) / (at.sum() + 1e-9))
+    curv_cv = float(at.std() / (at.mean() + 1e-9))
+    return dict(straight=straight, bend=bend, axl=axl,
+                circ_resid=circ_resid, turn_consist=turn_consist, curv_cv=curv_cv)
 
 
 def appearance_features(gray, uv_px):
