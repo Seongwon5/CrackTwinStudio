@@ -818,19 +818,30 @@ function _nearestOn(md, x, y, R){
   return null;
 }
 function snapPaths(paths, md){
-  const {W,H}=md, R=Math.max(10, Math.round(W*0.02));   // 스냅 반경 ≈ 폭의 2% (1920px 기준 38px)
-  let tot=0, hit=0;
-  const out=[];
-  for(const path of paths){
-    const np=[];
-    for(const q of path){
-      tot++;
-      const s=_nearestOn(md, Math.round(q.u*W), Math.round(q.v*H), R);
-      if(s){ hit++; np.push({u:s[0]/W, v:s[1]/H}); }
-    }
-    if(np.length>1) out.push(np);
+  // 정점별 독립 스냅은 근처의 다른 검출 덩어리로 흩어져 사각형·지그재그로 모양을 망가뜨린다.
+  // → '강체 이동 정렬': 전체 정점의 최근접 오프셋 중앙값(dx,dy) 하나로만 평행이동해
+  //   모양은 100% 보존하고 위치만 보정한다. 이미 정렬돼 있으면 원본 그대로 반환.
+  const {W,H}=md, R=Math.max(10, Math.round(W*0.02));   // 탐색 반경 ≈ 폭의 2%
+  const offs=[], dists=[]; let tot=0;
+  for(const path of paths) for(const q of path){
+    tot++;
+    const x=Math.round(q.u*W), y=Math.round(q.v*H);
+    const s=_nearestOn(md, x, y, R);
+    if(s){ offs.push([s[0]-x, s[1]-y]); dists.push(Math.hypot(s[0]-x, s[1]-y)); }
   }
-  return (hit>=4 && hit/Math.max(tot,1)>=0.35) ? out : null;   // 다수가 못 붙으면 정합 실패
+  if(offs.length<4 || offs.length/Math.max(tot,1)<0.35) return null;   // 이 뷰와 정합 불가
+  dists.sort((a,b)=>a-b);
+  if(dists[dists.length>>1] <= 4) return paths;         // 이미 크랙 위 → 모양 그대로
+  const med=a=>{ const s=[...a].sort((x,y)=>x-y); return s[s.length>>1]; };
+  const dx=med(offs.map(o=>o[0]))/W, dy=med(offs.map(o=>o[1]))/H;
+  const shifted=paths.map(p=>p.map(q=>({u:q.u+dx, v:q.v+dy})));
+  // 이동 후 검증: 절반 이상이 6px 내로 붙어야 표시(아니면 이 뷰에선 숨김)
+  let ok=0, n=0;
+  for(const path of shifted) for(const q of path){
+    n++;
+    if(_nearestOn(md, Math.round(q.u*W), Math.round(q.v*H), 6)) ok++;
+  }
+  return (n>0 && ok/n>=0.5) ? shifted : null;
 }
 function crackSeenIn(cam){                           // 이 카메라가 선택 크랙을 실제로 검출했는가
   if(selIdx<0) return false;
