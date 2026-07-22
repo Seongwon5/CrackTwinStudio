@@ -971,6 +971,15 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                     ncr = int(mask.sum())
                     if ncr > 0:                        # 후처리는 워커에 넘기고 다음 이미지 추론으로
                         post_futs.append((i, name, it["cam"], poster.submit(_post_one, it, prob, mask)))
+                        # 배압: 캐시 히트면 추론이 0초라 메인 루프가 후처리보다 빨라져
+                        # 대기 작업마다 prob(~80MB/장)를 붙든 채 무한히 쌓인다(→ OOM).
+                        # 미완료 후처리가 2개를 넘으면 가장 오래된 것을 기다린다.
+                        pend = [f for *_pf, f in post_futs if not f.done()]
+                        if len(pend) > 2:
+                            try:
+                                pend[0].result()
+                            except Exception:
+                                pass                   # 실제 오류는 수확 단계에서 이미지명과 함께 보고
                     log(f"  [{i+1}/{len(pairs)}] {name}  crack_px={ncr}" + (" (캐시)" if hitc else ""))
                 else:
                     log(f"  [{i+1}/{len(pairs)}] {name} (카메라만)")
