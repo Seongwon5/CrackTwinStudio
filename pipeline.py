@@ -352,7 +352,16 @@ def fuse_points(pts, ws, ns, voxel):
     adj = [[] for _ in range(n)]
     for a, b in zip(mst.row.tolist(), mst.col.tolist()):
         adj[a].append(b); adj[b].append(a)
-    # ②-b DFS 순서화(모든 가지 포함, 인접 유지) — 위치와 무관하게 그래프로 결정
+    # ②-b 라플라시안 스무딩: 각 정점을 MST 이웃 평균 쪽으로 당겨 정합 오차로 생긴 측면 지그재그를
+    #     접는다(뷰 간 수십 cm 어긋남이 리본을 실폭보다 뚱뚱하게 만들던 원인). 그래프 기반이라
+    #     순서·분기와 무관하고, 크랙의 완만한 곡률(저주파)은 보존한다.
+    LAM, ITER = 0.5, 6
+    for _ in range(ITER):
+        acc = np.zeros_like(vp)
+        for i in range(n):
+            nb = adj[i]
+            acc[i] = vp[nb].mean(0) if nb else vp[i]
+        vp = vp * (1.0 - LAM) + acc * LAM
     start = next((i for i in range(n) if len(adj[i]) == 1), 0)   # 끝점(leaf)에서 시작
     order = [start]; seen = [False] * n; seen[start] = True; stack = [start]
     while stack:
@@ -364,46 +373,7 @@ def fuse_points(pts, ws, ns, voxel):
             if stack:
                 order.append(stack[-1])       # 되돌아가는 한 걸음(인접) → 다음 가지로
     idx = np.array(order)
-    ow = vw[idx].round(3).tolist(); on = vn[idx].round(4).tolist()
-
-    # ②-c 라플라시안 스무딩(잔떨림 접기) — 각 정점을 MST 이웃 평균 쪽으로.
-    sm = vp.copy()
-    for _ in range(6):
-        acc = np.zeros_like(sm)
-        for i in range(n):
-            nb = adj[i]; acc[i] = sm[nb].mean(0) if nb else sm[i]
-        sm = sm * 0.5 + acc * 0.5
-    sm = sm[idx]
-
-    def _lat(Q):
-        if len(Q) < 4: return 0.0
-        c = Q.mean(0); _, _, Vt = np.linalg.svd(Q - c, full_matrices=False)
-        return float(np.sqrt((np.linalg.norm((Q - c) - np.outer((Q - c) @ Vt[0], Vt[0]), axis=1) ** 2).mean()))
-
-    # ②-d '가장 대표하는 가상 곡선'(이방성 주곡선): 정합 오차로 여러 뷰의 선이 옆으로 벌어져도
-    #     그 여러 선의 '중심'을 지나는 하나의 곡선으로 접는다. 각 스파인 점을 '축방향 창(±win)' 안의
-    #     원본 점(수직 무제한, 반경 Rcand 한정)의 중앙(median)으로 이동 → 큰 수직 오프셋도 접힘,
-    #     축방향 위치·곡률은 보존. 단일뷰(퍼짐 없음)는 이득이 없으니 건너뛴다(성능).
-    out = sm
-    if _lat(sm) > voxel:                                # 옆으로 벌어진(다중선) 크랙만
-        win = voxel * 2.0; Rc = voxel * 10.0
-        rtree = cKDTree(P)
-        sp = sm.copy()
-        for _ in range(8):
-            cand = rtree.query_ball_point(sp, Rc)
-            new = sp.copy()
-            for i in range(len(sp)):
-                ids = cand[i]
-                if len(ids) < 3: continue
-                t = sp[min(len(sp) - 1, i + 1)] - sp[max(0, i - 1)]; nt = np.linalg.norm(t)
-                if nt < 1e-9: continue
-                t = t / nt; Pc = P[ids]; al = (Pc - sp[i]) @ t
-                sel = Pc[np.abs(al) <= win]
-                if len(sel) >= 3: new[i] = np.median(sel, axis=0)
-            sp = 0.3 * sp + 0.7 * new
-        if _lat(sp) < _lat(sm):                         # 가드: 더 얇을 때만 채택(절대 나빠지지 않음)
-            out = sp
-    return np.asarray(out).round(5).tolist(), ow, on
+    return vp[idx].round(5).tolist(), vw[idx].round(3).tolist(), vn[idx].round(4).tolist()
 
 
 # ==================================================================
@@ -1165,7 +1135,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
     hot2insts = {}
     for hi, mi in inst2hot.items():
         hot2insts.setdefault(mi, []).append(hi)
-    log(f"  리본 융합 시작: 크랙 {len(merged)}개(가상 대표곡선 투영) …")
+    log(f"  리본 융합 시작: 크랙 {len(merged)}개(뷰별 중심선 복셀 병합·스무딩) …")
     all_ribbons = []
     _t_fuse = time.time(); _nfuse = len(merged)
     for mi in range(_nfuse):
