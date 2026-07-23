@@ -151,28 +151,33 @@ def agg(ms):
                 n_frag=len(ms))
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("twin_a"); ap.add_argument("twin_b")
-    ap.add_argument("-o", "--out", default="asset.json")
-    ap.add_argument("--ida", default="T1"); ap.add_argument("--idb", default="T2")
-    ap.add_argument("--name", default=None)
-    a = ap.parse_args()
+class RegistrationError(RuntimeError):
+    """정합 잔차가 게이트를 넘음 — 결과를 신뢰할 수 없다."""
 
-    print(f"[1/4] 로드: {os.path.basename(a.twin_a)} · {os.path.basename(a.twin_b)}")
+
+def run(twin_a, twin_b, out, ida="T1", idb="T2", name=None, log=print):
+    """비교 본체(라이브러리 진입점). asset dict 를 반환하고 out 에 저장한다.
+    정합 실패 시 RegistrationError. log 콜백으로 진행 로그 전달(백엔드 잡 로그용)."""
+    class _A:                                            # argparse 결과와 동일 모양
+        pass
+    a = _A(); a.twin_a = twin_a; a.twin_b = twin_b; a.out = out
+    a.ida = ida; a.idb = idb; a.name = name
+
+    log(f"[1/4] 로드: {os.path.basename(a.twin_a)} · {os.path.basename(a.twin_b)}")
     ma, Va = load_twin(a.twin_a)
     mb, Vb = load_twin(a.twin_b)
     diag = float(np.linalg.norm(Va.max(0) - Va.min(0)))
 
-    print(f"[2/4] 정합(7-DoF ICP) …")
+    log(f"[2/4] 정합(7-DoF ICP) …")
     T, rms = register(Va, Vb, diag)
     gate = diag * REG_GATE_FRAC
-    print(f"  잔차 RMS {rms*100:.1f}cm (게이트 {gate*100:.1f}cm · 대각 {diag:.0f}m)")
+    log(f"  잔차 RMS {rms*100:.1f}cm (게이트 {gate*100:.1f}cm · 대각 {diag:.0f}m)")
     if rms > gate:
-        print("  ✗ 정합 실패 — 결과를 신뢰할 수 없어 중단합니다. (수동 시드 정합은 Phase 2)")
-        sys.exit(2)
+        raise RegistrationError(
+            f"정합 실패: 잔차 {rms*100:.1f}cm > 게이트 {gate*100:.1f}cm — 두 메시가 같은 구조물이 아니거나 "
+            "복원 품질 차이가 큽니다. (수동 시드 정합은 추후 지원)")
 
-    print(f"[3/4] 매칭(복셀 연결요소 + 성분 내 정밀 배정) …")
+    log(f"[3/4] 매칭(복셀 연결요소 + 성분 내 정밀 배정) …")
     pa = crack_points(ma); pb = crack_points(mb, T)
     voxel = max(3.0 * rms, MATCH_VOXEL_MIN)
     items = [("A", hi, P) for hi, P in pa.items()] + [("B", hi, P) for hi, P in pb.items()]
@@ -206,7 +211,7 @@ def main():
         for bi in lone_b:
             gid += 1; groups[gid] = {"A": [], "B": [bi]}
 
-    print(f"[4/4] 판정 …")
+    log(f"[4/4] 판정 …")
     cracks = []; pid = 0
     stats = {"matched": 0, "new": 0, "missing": 0, "grown": 0, "stable": 0, "shrunk": 0}
     for g in groups.values():
@@ -252,10 +257,25 @@ def main():
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(asset, f, ensure_ascii=False, indent=1)
     na, nb = len(ma["hotspots"]), len(mb["hotspots"])
-    print(f"\n결과: {a.ida} {na}개 · {a.idb} {nb}개 → 영속 균열 {len(cracks)}개")
-    print(f"  매칭 {stats['matched']} (성장 {stats['grown']} · 불변 {stats['stable']} · 감소? {stats['shrunk']})"
-          f" · 신규 {stats['new']} · 미검출 {stats['missing']}")
-    print(f"저장: {a.out}")
+    log(f"결과: {a.ida} {na}개 · {a.idb} {nb}개 → 영속 균열 {len(cracks)}개")
+    log(f"  매칭 {stats['matched']} (성장 {stats['grown']} · 불변 {stats['stable']} · 감소? {stats['shrunk']})"
+        f" · 신규 {stats['new']} · 미검출 {stats['missing']}")
+    log(f"저장: {a.out}")
+    asset["_stats"] = stats
+    return asset
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("twin_a"); ap.add_argument("twin_b")
+    ap.add_argument("-o", "--out", default="asset.json")
+    ap.add_argument("--ida", default="T1"); ap.add_argument("--idb", default="T2")
+    ap.add_argument("--name", default=None)
+    a = ap.parse_args()
+    try:
+        run(a.twin_a, a.twin_b, a.out, a.ida, a.idb, a.name)
+    except RegistrationError as e:
+        print("  ✗", e); sys.exit(2)
 
 
 if __name__ == "__main__":

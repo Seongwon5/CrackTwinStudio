@@ -16,6 +16,8 @@
   <symbol id="i-power" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z"/></symbol>
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
 </svg>
 
 <header>
@@ -59,6 +61,29 @@
       <button id="btnRefresh" class="ghost"><svg class="ic"><use href="#i-refresh"/></svg>목록 새로고침</button>
     </div>
     <div id="reportList" class="rlist"></div>
+  </section>
+
+  <!-- 기능 3: 검사 비교 (디지털 트윈 시간축) -->
+  <section class="card wide">
+    <h2><span class="step">3</span>검사 비교 <span class="hint">같은 구조물의 두 시점 — 신규·성장·미검출 추적</span></h2>
+    <p class="desc">시간 순서대로 <b>이전 검사 → 이번 검사</b>를 고르면 3D 정합 후 같은 균열을 이어 붙여
+      <b>신규·성장·불변·미검출</b>을 판정합니다. 결과는 비교 뷰어(상태색·이전 검사 고스트)로 열립니다.</p>
+    <div class="cmprow">
+      <div class="cmpsel">
+        <label for="cmpA"><svg class="ic"><use href="#i-clock"/></svg>이전 검사 (T1)</label>
+        <select id="cmpA"></select>
+      </div>
+      <svg class="ic cmparrow"><use href="#i-arrow"/></svg>
+      <div class="cmpsel">
+        <label for="cmpB"><svg class="ic"><use href="#i-clock"/></svg>이번 검사 (T2)</label>
+        <select id="cmpB"></select>
+      </div>
+      <button id="btnCompare" class="primary" disabled><svg class="ic"><use href="#i-play"/></svg>비교 실행</button>
+    </div>
+    <div id="cmpNote" class="cmpnote hidden"></div>
+    <div id="cmpProg" class="prog hidden"><div id="cmpProgBar"></div></div>
+    <pre id="cmpLog" class="log hidden"></pre>
+    <div id="assetList" class="rlist"></div>
   </section>
 </main>
 

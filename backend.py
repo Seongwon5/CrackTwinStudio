@@ -33,6 +33,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 UI_DIR, LIBS_DIR, REPORTS_DIR = os.path.join(HERE, "ui"), os.path.join(HERE, "libs"), os.path.join(HERE, "reports")
 _jobs = {}                       # job_id -> {progress, done, error, result, log[]}
 
+import sys as _sys
+_sys.path.insert(0, os.path.join(HERE, "tools"))
+import compare_twins as CT2      # 검사 간 비교(정합·매칭·판정) — 대시보드 '검사 비교' 가 사용
+
 # 구형식(v1: 단일 JSON) 을 백엔드가 통째로 파싱해도 되는 상한. v1 은 이 크기를 넘으면 열지 않고
 # 변환을 안내한다(파싱만으로 파일의 4~5배 메모리를 쓰기 때문).
 LEGACY_MAX = 400 * 1024 * 1024
@@ -204,6 +208,22 @@ def render_viewer_html(twin_path, asset=None):
     return html.replace("__ASSET__", json.dumps(asset, ensure_ascii=False) if asset else "null")
 
 
+def _run_compare_job(job_id, twin_a, twin_b, ida, idb, out_path):
+    """백그라운드에서 검사 간 비교(asset.json 생성)를 수행하고 로그/결과를 갱신한다."""
+    j = _jobs[job_id]
+    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
+    try:
+        asset = CT2.run(twin_a, twin_b, out_path, ida=ida, idb=idb, log=log)
+        j["result"] = out_path; j["progress"] = 1.0
+        j["stats"] = asset.get("_stats")
+    except CT2.RegistrationError as e:
+        j["error"] = str(e)
+    except Exception as e:
+        import traceback; traceback.print_exc(); j["error"] = str(e)
+    finally:
+        j["done"] = True
+
+
 def _run_job(job_id, folder, ply, out_path, detect):
     """백그라운드에서 크랙 분석 보고서를 생성하고 진행률/로그/결과를 갱신한다."""
     j = _jobs[job_id]
@@ -339,6 +359,22 @@ class Handler(BaseHTTPRequestHandler):
                             items.append({"name": f, "path": fp, "mb": round(os.path.getsize(fp) / 1e6, 1),
                                           "mtime": os.path.getmtime(fp)})
                 return self._json({"reports": items})
+            if r == "/api/assets":
+                items = []
+                if os.path.isdir(REPORTS_DIR):
+                    for f in sorted(os.listdir(REPORTS_DIR)):
+                        if f.lower().endswith(".json") and f.lower().startswith("asset"):
+                            fp = os.path.join(REPORTS_DIR, f)
+                            try:
+                                with open(fp, encoding="utf-8") as fh:
+                                    a = json.load(fh)
+                                ids = [i["id"] for i in a.get("inspections", [])]
+                                items.append({"name": a.get("name") or f, "path": fp,
+                                              "ids": ids, "n": len(a.get("cracks", [])),
+                                              "mtime": os.path.getmtime(fp)})
+                            except Exception:
+                                pass
+                return self._json({"assets": items})
             if r == "/api/job":
                 j = _jobs.get(q.get("id", [""])[0])
                 if not j:
@@ -350,7 +386,32 @@ class Handler(BaseHTTPRequestHandler):
             import traceback; traceback.print_exc(); self._send(500, "error: " + str(e), "text/plain; charset=utf-8")
 
     def do_POST(self):
-        if urllib.parse.urlparse(self.path).path != "/api/create":
+        rp = urllib.parse.urlparse(self.path).path
+        if rp == "/api/compare":
+            try:
+                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+                ta, tb = d.get("a", ""), d.get("b", "")
+                if not (os.path.exists(ta) and os.path.exists(tb)):
+                    return self._json({"error": "보고서 파일 없음"}, 400)
+                if os.path.abspath(ta) == os.path.abspath(tb):
+                    return self._json({"error": "같은 보고서끼리는 비교할 수 없습니다"}, 400)
+                import datetime
+                ida = (d.get("ida") or "").strip() or datetime.datetime.fromtimestamp(os.path.getmtime(ta)).strftime("%Y-%m-%d")
+                idb = (d.get("idb") or "").strip() or datetime.datetime.fromtimestamp(os.path.getmtime(tb)).strftime("%Y-%m-%d")
+                if ida == idb:
+                    idb += "(2)"
+                na = os.path.splitext(os.path.basename(ta))[0]; nb = os.path.splitext(os.path.basename(tb))[0]
+                safe = lambda s: re.sub(r'[\\/:*?"<>|]+', "_", s)
+                out = os.path.join(REPORTS_DIR, f"asset_{safe(na)}__{safe(nb)}.json")
+                os.makedirs(REPORTS_DIR, exist_ok=True)
+                jid = uuid.uuid4().hex[:8]
+                _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
+                threading.Thread(target=_run_compare_job, args=(jid, ta, tb, ida, idb, out), daemon=True).start()
+                return self._json({"job": jid, "out": out})
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                return self._json({"error": str(e)}, 500)
+        if rp != "/api/create":
             return self._send(404, "not found", "text/plain")
         try:
             d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))

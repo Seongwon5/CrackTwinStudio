@@ -33,6 +33,16 @@ class Api:
                               width=1360, height=860, min_size=(900, 600))
         return {"ok": True}
 
+    def open_asset(self, path):
+        """asset.json(검사 간 비교) 경로를 받아 비교 뷰어 창을 띄운다."""
+        import os
+        if not path or not os.path.exists(path):
+            return {"error": "파일 없음"}
+        url = f"http://127.0.0.1:{self.port}/viewer?asset=" + urllib.parse.quote(path)
+        webview.create_window("검사 비교 · " + os.path.basename(path), url,
+                              width=1360, height=860, min_size=(900, 600))
+        return {"ok": True}
+
     def quit_app(self):
         """대시보드의 빨간 종료 버튼. 확인 대화상자는 띄우지 않는다 —
         destroy() 가 창의 closing 이벤트를 발생시키므로 _on_closing 이 한 번만 물어본다."""
