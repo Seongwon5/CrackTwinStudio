@@ -498,13 +498,21 @@ try{
   if(s && s.scale > 0){ calibScale = s.scale; calibInfo = s; }
 }catch(e){}
 function cmm(x){ return x==null ? null : x * calibScale; }   // 데이터 mm → 보정 mm
+// 총연장(가지 포함) — 구 .twin 은 length_total_mm 이 없어 length_mm(최장경로)로 폴백
+function ltot(h){ return cmm(h.length_total_mm!=null ? h.length_total_mm : h.length_mm); }
+// 길이 표기: "길이 183mm" + 가지가 있어 총연장이 더 길면 "(총연장 201)" 덧붙임
+function fmtLen(h){
+  const L=cmm(h.length_mm), T=ltot(h);
+  const base='길이 '+(L!=null?Math.round(L).toLocaleString():'?')+'mm';
+  return (T!=null && L!=null && T>L+0.5) ? base+' (총연장 '+Math.round(T).toLocaleString()+')' : base;
+}
 // 핫스팟 요약문(파이프라인이 구워둔 h.text 대신 — 보정 계수를 반영해 매번 생성)
 function fmtHotText(h){
   if(h.width_mm_median==null) return h.text || '크랙';
   const f=(x,d=1)=>(x!=null?Number(cmm(x)).toFixed(d):'?');
   return `크랙 폭 중앙 ${f(h.width_mm_median)}mm (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
     + (h.width_mm_3d!=null?` · 3D폭 ${f(h.width_mm_3d)}`:'')
-    + ` · 길이 ${Math.round(cmm(h.length_mm)||0)}mm`;
+    + ` · ${fmtLen(h)}`;
 }
 
 // 보고서 메타데이터 표시 (v2 에만 있음 — v1 은 report_meta 가 없으니 건너뜀)
@@ -743,10 +751,9 @@ function makeReticleTex(){
 }
 const reticleTex=makeReticleTex();
 // 태그 내용: 폭·길이 (두 줄)
-function fmtWL(h){                                  // 말풍선(호버): 평균 폭 + 크랙 총 길이만(최대·p95 는 클릭 시)
+function fmtWL(h){                                  // 말풍선(호버): 평균 폭 + 길이(최대·p95 는 클릭 시)
   const w=cmm(h.width_mm_median!=null?h.width_mm_median:(h.width_mm_max!=null?h.width_mm_max:h.width_mm));
-  const l=cmm(h.length_mm);
-  return '평균 폭 '+(w!=null?Number(w).toFixed(2):'?')+'mm<br>크랙 총 길이 '+(l!=null?Math.round(l):'?')+'mm';
+  return '평균 폭 '+(w!=null?Number(w).toFixed(2):'?')+'mm<br>'+fmtLen(h);
 }
 // 크랙 정보는 '말풍선(mm 태그)'로만 — 다이아몬드 레티클은 제거(겹치고 클릭 혼란). 리본이 전체
 // 지도를 담당하고, 크랙을 호버/선택하면 그 크랙의 말풍선(폭·길이)이 뜬다. 색은 상대 심각도.
@@ -1262,7 +1269,7 @@ function showHotspotRep(h){
   const wtxt = (h.width_mm_median!=null)
     ? `크랙 평균 폭 ${f(h.width_mm_median)}mm (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
       + (h.width_mm_3d!=null?` · 3D폭 ${f(h.width_mm_3d)}`:'')
-      + ` · 크랙 총 길이 ${Math.round(cmm(h.length_mm)||0)}mm`
+      + ` · ${fmtLen(h)}`
     : (h.text||'크랙');
   document.getElementById('imgHot').innerHTML =
     '▶ '+wtxt+'<br><span style="color:#888">X '+h.xyz[0].toFixed(2)+'  Y '+h.xyz[1].toFixed(2)+'  Z '+h.xyz[2].toFixed(2)+'</span>';
@@ -1891,13 +1898,14 @@ function clRow(i,h){
   const el=document.createElement('div'); el.className='clRow'; el.dataset.hi=i;
   const c=rankColor(rankFrac(i));
   const rgb='rgb('+Math.round(c.r*255)+','+Math.round(c.g*255)+','+Math.round(c.b*255)+')';
-  const wmed=cmm(h.width_mm_median??h.width_mm_max), wmax=cmm(h.width_mm_max??h.width_mm), L=cmm(h.length_mm);
+  const wmed=cmm(h.width_mm_median??h.width_mm_max), wmax=cmm(h.width_mm_max??h.width_mm), L=cmm(h.length_mm), T=ltot(h);
   const ty=hotType(i);
+  const lenTitle=(T!=null&&L!=null&&T>L+0.5)?' title="최장경로 '+Math.round(L).toLocaleString()+'mm · 총연장 '+Math.round(T).toLocaleString()+'mm"':'';
   el.innerHTML='<span><span class="sevchip" style="background:'+rgb+'"></span>C-'+String(i+1).padStart(4,'0')+'</span>'
     +'<span><span class="tychip" style="color:'+TYPE_COLOR[ty]+'">'+TYPE_LABEL[ty].slice(0,2)+'</span></span>'
     +'<span>'+(wmed!=null?wmed.toFixed(2):'?')+'</span>'
     +'<span>'+(wmax!=null?wmax.toFixed(2):'?')+'</span>'
-    +'<span>'+(L!=null?Math.round(L).toLocaleString():'?')+'</span>'
+    +'<span'+lenTitle+'>'+(L!=null?Math.round(L).toLocaleString():'?')+(lenTitle?' *':'')+'</span>'
     +'<span>'+(h.views||[]).length+'</span>';
   el.onclick=()=>{ clRowsEl.querySelectorAll('.clRow.sel').forEach(x=>x.classList.remove('sel'));
     el.classList.add('sel'); flyToCrack(i); };
@@ -1996,13 +2004,13 @@ function flyToCrack(i){
 // CSV: 현재 필터·정렬 결과를 그대로(보정된 mm) — Excel 한글 호환 BOM 포함
 function clCsvText(){
   const fx=v=>v==null?'':(Math.round(v*1000)/1000);
-  const head=['id','width_mm_median','width_mm_max','width_mm_p95','width_mm_3d','length_mm',
+  const head=['id','width_mm_median','width_mm_max','width_mm_p95','width_mm_3d','length_mm','length_total_mm',
               'views','conf','x','y','z','calib_scale','sources'];
   const lines=[head.join(',')];
   for(const [i,h] of clData){
     lines.push(['C-'+String(i+1).padStart(4,'0'),
       fx(cmm(h.width_mm_median)), fx(cmm(h.width_mm_max)), fx(cmm(h.width_mm_p95)), fx(cmm(h.width_mm_3d)),
-      fx(cmm(h.length_mm)), (h.views||[]).length, h.conf??'',
+      fx(cmm(h.length_mm)), fx(ltot(h)), (h.views||[]).length, h.conf??'',
       h.xyz[0], h.xyz[1], h.xyz[2], calibScale,
       '"'+(h.views||[]).map(v=>v.source).join('|')+'"'].join(','));
   }
