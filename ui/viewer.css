@@ -1,0 +1,221 @@
+  /* ============ 디자인 토큰 ============ */
+  :root{
+    --topbarh:46px; --typebarh:40px; --toph:86px; --leftw:340px; --rightw:300px;
+    /* 표면·선(중립 회청색조) */
+    --bg:#0e1319; --surface:rgba(15,20,27,.95); --surface-2:#151d25; --surface-3:#1c262f;
+    --line:#26323d; --line-2:#334352;
+    /* 텍스트 3단계 */
+    --tx:#e7edf3; --tx-2:#9db0bf; --tx-3:#64788a;
+    /* 단일 액센트 + 의미색(측정/반경/캘리브/선택/경고) */
+    --accent:#12b5cc; --accent-2:#0a3a42; --accent-dim:rgba(18,181,204,.14);
+    --measure:#12b5cc; --radius:#ff9d3c; --calib:#b98cff; --select:#ffd21e; --warn:#ffb454;
+    /* 타입 스케일 4단계 · 굵기 2단계 */
+    --fs-cap:11px; --fs-body:12.5px; --fs-head:14px; --fs-title:17px;
+    --r:9px; --r-sm:6px;
+  }
+  body{margin:0;overflow:hidden;background:var(--bg);color:var(--tx);
+    font-family:'Segoe UI','Malgun Gothic',system-ui,sans-serif;font-size:var(--fs-body);
+    -webkit-font-smoothing:antialiased;}
+  .ic{width:1em;height:1em;stroke:currentColor;stroke-width:1.75;fill:none;
+    stroke-linecap:round;stroke-linejoin:round;vertical-align:-0.15em;flex:0 0 auto;}
+  /* ===== 상단 메뉴바 ===== */
+  #topbar{position:fixed;top:0;left:0;right:0;height:var(--topbarh);z-index:30;
+    display:flex;align-items:center;gap:3px;padding:0 12px;background:var(--surface);
+    border-bottom:1px solid var(--line);box-shadow:0 1px 0 rgba(255,255,255,.02),0 2px 10px rgba(0,0,0,.5);
+    backdrop-filter:blur(8px);}
+  #topbar .brand{display:flex;align-items:center;gap:7px;color:var(--tx);font-weight:600;
+    font-size:var(--fs-head);letter-spacing:.2px;margin-right:14px;white-space:nowrap;}
+  #topbar .brand .ic{width:19px;height:19px;color:var(--accent);}
+  #topbar .tmenu{display:flex;align-items:center;gap:6px;background:transparent;color:var(--tx-2);
+    border:1px solid transparent;border-radius:var(--r-sm);padding:7px 11px;cursor:pointer;
+    font-size:var(--fs-body);font-family:inherit;white-space:nowrap;transition:background .12s,color .12s;}
+  #topbar .tmenu .ic{width:16px;height:16px;}
+  #topbar .tmenu:hover{background:var(--surface-3);color:var(--tx);}
+  #topbar .tmenu.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent);font-weight:600;}
+  #topbarHint{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:var(--fs-cap);
+    color:var(--tx-3);white-space:nowrap;}
+  /* ===== 좌측 도크 ===== */
+  /* ===== 유형 필터 상단 고정 바 ===== */
+  #typebar{position:fixed;top:var(--topbarh);left:0;right:0;height:var(--typebarh);z-index:29;
+    display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--surface-2);
+    border-bottom:1px solid var(--line);}
+  #typebar .lb{color:var(--tx-3);font-size:var(--fs-cap);white-space:nowrap;display:flex;align-items:center;gap:6px;}
+  #typebar .tychip2{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-2);
+    border-radius:14px;padding:4px 11px;cursor:pointer;font-size:var(--fs-body);color:var(--tx-2);
+    background:transparent;user-select:none;transition:all .12s;}
+  #typebar .tychip2 .dot{width:9px;height:9px;border-radius:3px;}
+  #typebar .tychip2 .cnt{font-family:Consolas,monospace;color:var(--tx-3);font-size:var(--fs-cap);}
+  #typebar .tychip2.on{color:var(--tx);border-color:currentColor;background:rgba(255,255,255,.04);}
+  #typebar .tychip2.off{opacity:.45;}
+  #typebar .tychip2:hover{background:rgba(255,255,255,.06);}
+  #typebar #tbAll{border-color:var(--accent);color:var(--accent);}
+  #leftdock{position:fixed;top:var(--toph);left:0;bottom:0;width:var(--leftw);z-index:20;
+    background:var(--surface);border-right:1px solid var(--line);display:flex;box-shadow:2px 0 12px rgba(0,0,0,.35);}
+  .dockpane{flex:1;overflow-y:auto;padding:16px;display:none;color:var(--tx);font-size:var(--fs-body);line-height:1.65;min-width:0;}
+  .dockpane b{font-size:var(--fs-head);font-weight:600;color:var(--tx);}
+  /* 패널 헤더 통일 */
+  .panehd{display:flex;align-items:center;gap:8px;font-size:var(--fs-head);font-weight:600;color:var(--tx);
+    padding-bottom:10px;margin-bottom:12px;border-bottom:1px solid var(--line);}
+  .panehd .ic{width:17px;height:17px;color:var(--accent);}
+  .panehd .sp{margin-left:auto;}
+  .dockpane .mbtn{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);
+    padding:8px 6px;cursor:pointer;font-size:var(--fs-body);font-family:inherit;transition:background .12s,border-color .12s;}
+  .dockpane .mbtn .ic{width:15px;height:15px;}
+  .dockpane .mbtn:hover{background:#222d37;border-color:var(--accent);}
+  .dockpane .mbtn.active{background:var(--accent-dim);border-color:var(--accent);color:var(--accent);font-weight:600;}
+  .dockpane .mbtn.reset{background:transparent;border-color:var(--line-2);color:var(--tx-2);}
+  .dockpane .mbtn.reset:hover{background:#2a1f22;border-color:#8a4b4b;color:#e6b0b0;}
+  .dockpane label{display:flex;align-items:center;gap:9px;cursor:pointer;padding:6px 0;color:var(--tx);}
+  .dockpane label .ic{width:16px;height:16px;color:var(--tx-2);}
+  .dockpane input[type="checkbox"]{margin:0;cursor:pointer;accent-color:var(--accent);width:15px;height:15px;}
+  .dockpane select{background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 6px;font-family:inherit;}
+  .dockpane hr{border:0;border-top:1px solid var(--line);margin:14px 0;}
+  /* ===== 폭 조절 그립 ===== */
+  #leftgrip{position:fixed;top:var(--toph);bottom:0;left:calc(var(--leftw) - 2px);width:7px;
+    cursor:ew-resize;z-index:26;transition:background .12s;}
+  #leftgrip:hover, #leftgrip.drag{background:var(--accent-dim);}
+  #rightgrip{position:fixed;top:var(--toph);bottom:0;right:calc(var(--rightw) - 2px);width:7px;
+    cursor:ew-resize;z-index:26;transition:background .12s;}
+  #rightgrip:hover, #rightgrip.drag{background:var(--accent-dim);}
+  #panel{position:absolute;top:10px;right:10px;width:340px;max-height:94vh;overflow:auto;
+         background:rgba(0,0,0,.85);color:#eee;border-radius:10px;padding:15px;display:none;font-size:13px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);}
+  #panel h3{margin:.2em 0;color:#ffdd33; border-bottom: 1px solid #444; padding-bottom: 5px;} 
+  #panel img{width:100%;border-radius:6px;margin:8px 0;cursor:zoom-in; border: 1px solid #444;}
+  #panel .src{color:#9cf;word-break:break-all; font-weight: bold;} 
+  #panel .close{float:right;cursor:pointer;color:#f88; font-weight: bold; background: #333; padding: 2px 6px; border-radius: 4px;}
+  #panel .close:hover{background: #555;}
+  /* 우측 전체 이미지 리스트 (고정 도크 · 좌측 그립으로 폭 조절) */
+  #imglist{position:fixed;top:var(--toph);right:0;bottom:0;width:var(--rightw);display:flex;flex-direction:column;
+    background:var(--surface);color:var(--tx);border-left:1px solid var(--line);padding:16px;font-size:var(--fs-body);
+    box-shadow:-2px 0 12px rgba(0,0,0,.35);z-index:20;box-sizing:border-box;}
+  #imglist h3{margin:0;color:var(--tx);border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:6px;
+    display:flex;justify-content:space-between;align-items:center;font-size:var(--fs-head);font-weight:600;gap:8px;}
+  #imglist h3 .ic{width:17px;height:17px;color:var(--accent);}
+  #imglist h3 span{display:flex;align-items:center;gap:8px;}
+  #imglist .reset{font-size:var(--fs-cap);background:var(--surface-3);border:1px solid var(--line-2);color:var(--tx-2);border-radius:var(--r-sm);padding:4px 9px;cursor:pointer;font-family:inherit;}
+  #imglist .reset:hover{background:#222d37;border-color:var(--accent);color:var(--accent);}
+  #imgHot{font-size:var(--fs-cap);color:var(--tx-2);margin:8px 0;line-height:1.55;}
+  .revbtn{background:transparent;border:1px solid var(--line-2);color:var(--tx-2);border-radius:4px;
+    padding:3px 9px;cursor:pointer;font-size:var(--fs-cap);font-family:inherit;}
+  .revbtn:hover{background:var(--surface-3);}
+  .revsel{background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:4px;
+    padding:3px 6px;font-size:var(--fs-cap);font-family:inherit;}
+  #imgItems{overflow-y:auto;flex:1;margin-top:6px;}
+  .imgItem{display:flex;gap:9px;align-items:center;padding:6px;border-radius:var(--r-sm);cursor:pointer;border:1px solid transparent;margin-bottom:3px;transition:background .1s;}
+  .imgItem:hover{background:var(--surface-3);border-color:var(--line-2);}
+  .imgItem.active{background:var(--accent-dim);border-color:var(--accent);}
+  .imgItem img{width:70px;height:50px;object-fit:cover;border-radius:5px;background:#000;flex-shrink:0;}
+  .imgItem .nm{font-size:var(--fs-cap);word-break:break-all;color:var(--tx-2);}
+  /* 지점 검사: 클릭한 3D 점을 각 사진에 투영한 위치(노란 원) */
+  .imgItem .tw{position:relative;width:70px;height:50px;flex-shrink:0;}
+  .imgItem .tw .mk{position:absolute;inset:0;width:70px;height:50px;object-fit:cover;border-radius:4px;pointer-events:none;background:transparent!important;}
+  .twmini{position:relative;width:58px;height:44px;flex-shrink:0;}
+  .twmini img{width:58px;height:44px;object-fit:cover;border-radius:4px;border:1px solid #333;display:block;}
+  .twmini .mk{position:absolute;inset:0;border:1px solid transparent;pointer-events:none;}
+  .imgItem .uvdot{position:absolute;width:13px;height:13px;margin:-6.5px 0 0 -6.5px;border:2px solid #ffee00;
+    border-radius:50%;box-shadow:0 0 6px #ffee00, inset 0 0 3px #ffee00;pointer-events:none;}
+  .imgItem .uvdot::after{content:'';position:absolute;inset:4px;background:#ffee00;border-radius:50%;}
+  /* 카메라 정보 패널 */
+  #caminfo{position:fixed;bottom:14px;left:calc(var(--leftw) + 16px);background:var(--surface);color:var(--tx);border:1px solid var(--line);border-radius:var(--r);
+    padding:13px 15px;font-size:var(--fs-body);display:none;box-shadow:0 6px 18px rgba(0,0,0,.5);min-width:220px;z-index:27;backdrop-filter:blur(8px);}
+  #caminfo h3{margin:0 0 8px;color:var(--tx);font-size:var(--fs-head);font-weight:600;display:flex;align-items:center;gap:7px;}
+  #caminfo h3 .ic{width:16px;height:16px;color:var(--accent);}
+  #caminfo .coord{font-family:Consolas,monospace;color:var(--accent);line-height:1.7;font-size:13px;}
+  #caminfo .clear{margin-top:11px;font-size:var(--fs-cap);background:transparent;border:1px solid var(--line-2);color:var(--tx-2);border-radius:var(--r-sm);padding:6px 10px;cursor:pointer;font-family:inherit;}
+  #caminfo .clear:hover{background:#2a1f22;border-color:#8a4b4b;color:#e6b0b0;}
+  /* 원본 크게 보기 모달 (앱 내부 GUI) */
+  #imgmodal{position:absolute;inset:0;z-index:60;background:rgba(0,0,0,.92);display:none;flex-direction:column;}
+  #imgmodal .bar{height:50px;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--surface);border-bottom:1px solid var(--line);}
+  #imgmodal .bar .title{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--tx);margin-right:auto;word-break:break-all;font-size:var(--fs-head);}
+  #imgmodal .bar .title .ic{width:16px;height:16px;color:var(--accent);}
+  #imgmodal .bar button{display:inline-flex;align-items:center;gap:6px;background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:7px 11px;cursor:pointer;font-size:var(--fs-body);font-family:inherit;}
+  #imgmodal .bar button:hover{background:#222d37;border-color:var(--accent);}
+  #imgmodal .bar button .ic{width:15px;height:15px;}
+  #imgmodal .bar .close{background:transparent;border-color:var(--line-2);color:var(--tx-2);}
+  #imgmodal .bar .close:hover{background:#2a1f22;border-color:#8a4b4b;color:#e6b0b0;}
+  #imView{flex:1;overflow:hidden;position:relative;cursor:crosshair;background:#0a0a0d;}
+  /* will-change: 확대 후 패닝(translate)을 컴포지터 레이어 이동으로 만든다. 없으면 매 프레임
+     '확대된 1920px 이미지'를 메인 스레드에서 재래스터화해 줌인할수록 느려진다(측정: JS 는 0.002ms,
+     병목은 paint). backface-visibility 로 GPU 레이어를 확실히 유지한다. */
+  #imStage{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform;backface-visibility:hidden;}
+  #imStage img{display:block;user-select:none;-webkit-user-drag:none;}
+  /* 검출 마스크 오버레이: 원본 위에 정확히 겹침. 픽셀 경계 살리려 pixelated. 기본 숨김. */
+  #imMask{position:absolute;top:0;left:0;opacity:0.6;pointer-events:none;image-rendering:pixelated;display:none;}
+  #imMarker{position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;border:2px solid #ff33cc;border-radius:50%;
+    box-shadow:0 0 8px #ff33cc;pointer-events:none;display:none;}
+  #imMarker::after{content:'';position:absolute;inset:5px;background:#ff33cc;border-radius:50%;}
+  #imCrackMarker{position:absolute;width:36px;height:36px;margin:-18px 0 0 -18px;border:3px solid #ff2d2d;border-radius:50%;
+    box-shadow:0 0 12px #ff2d2d, inset 0 0 8px rgba(255,45,45,.6);pointer-events:none;display:none;}
+  /* 지점 검사에서 온 표식은 노랑 — 검출된 크랙(빨강)과 구분한다 */
+  #imCrackMarker.inspect{border-color:#ffee00;box-shadow:0 0 12px #ffee00, inset 0 0 8px rgba(255,238,0,.6);}
+  #imCoord{position:absolute;bottom:14px;left:14px;background:var(--surface);color:var(--tx-2);padding:9px 13px;border-radius:var(--r-sm);
+    border:1px solid var(--line);font-size:var(--fs-body);box-shadow:0 3px 8px rgba(0,0,0,.5);}
+  /* ===== 크랙 HUD 콜아웃 마커 (사이버네틱) ===== */
+  #hud{position:fixed;inset:0;z-index:5;pointer-events:none;overflow:hidden;}
+  .hud-marker{position:absolute;left:0;top:0;pointer-events:none;}
+  /* 레티클은 3D 스프라이트(makeReticleTex)로 옮겼다 → 메시 뒤면 GPU 깊이 테스트로 자동 가려짐.
+     여기 남은 건 그 레티클을 따라다니는 리더선+태그(DOM)뿐. */
+  /* 리더선: 앵커에서 태그로 이어지는 얇은 발광선(고정 오프셋) */
+  .hud-marker .leader{position:absolute;left:0;top:0;width:32px;height:1px;background:var(--sev);
+    transform-origin:left center;transform:rotate(-58deg);box-shadow:0 0 4px var(--sev);opacity:0;transition:opacity .15s;}
+  /* 태그: 각진(코너컷) 발광 칩 + 폭 수치. 평소 숨김, 호버/선택/고위험 때 표시 */
+  .hud-marker .tag{position:absolute;left:17px;top:-34px;padding:3px 9px;font:600 11px Consolas,monospace;
+    letter-spacing:.5px;color:var(--sev);background:rgba(6,10,14,.82);border:1px solid var(--sev);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);box-shadow:0 0 8px rgba(0,0,0,.6);
+    white-space:nowrap;pointer-events:auto;cursor:pointer;opacity:0;transform:translateX(-4px);
+    transition:opacity .15s, transform .15s;}
+  .hud-marker.show .leader{opacity:.9;}
+  .hud-marker.show .tag{opacity:1;transform:translateX(0);}
+  .hud-marker.active .tag{border-color:#fff;color:#fff;box-shadow:0 0 12px rgba(255,255,255,.4);}
+  .hud-marker.active .leader{background:#fff;box-shadow:0 0 6px #fff;}
+  /* ===== 크랙 목록 패널 (좌측 도크 안에서 세로 flex 로 채움) ===== */
+  #cracklist{display:none;flex-direction:column;color:var(--tx);font-size:var(--fs-body);padding:16px;flex:1;min-width:0;overflow:hidden;}
+  #cracklist h3{margin:0;color:var(--tx);border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:10px;
+    display:flex;justify-content:space-between;align-items:center;font-size:var(--fs-head);font-weight:600;gap:8px;}
+  #cracklist h3 span{display:flex;align-items:center;gap:8px;}
+  #cracklist h3 .ic{width:17px;height:17px;color:var(--accent);}
+  #cracklist .close{display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-cap);background:transparent;border:1px solid var(--line-2);color:var(--tx-2);border-radius:var(--r-sm);
+    padding:4px 9px;cursor:pointer;font-family:inherit;}
+  #cracklist .close:hover{background:#2a1f22;border-color:#8a4b4b;color:#e6b0b0;}
+  #cracklist .ctr{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 10px;font-size:var(--fs-cap);color:var(--tx-2);}
+  #cracklist .ctr input{width:62px;background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 6px;font-family:inherit;}
+  #cracklist .ctr select{background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:4px 6px;font-family:inherit;}
+  #cracklist .ctr button{display:inline-flex;align-items:center;gap:5px;background:var(--surface-3);color:var(--tx-2);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:5px 9px;cursor:pointer;font-size:var(--fs-cap);font-family:inherit;}
+  #cracklist .ctr button:hover{background:#222d37;border-color:var(--accent);color:var(--accent);}
+  #cracklist .ctr button .ic{width:13px;height:13px;}
+  #clHead{display:grid;grid-template-columns:60px 46px 38px 1fr 1fr 1fr 30px;gap:4px;padding:7px 8px;color:var(--tx-3);
+    background:var(--surface-2);border-radius:var(--r-sm) var(--r-sm) 0 0;font-weight:600;font-size:10.5px;
+    text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;}
+  #clRows{overflow-y:auto;flex:1;min-height:120px;border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-sm) var(--r-sm);}
+  .clRow{display:grid;grid-template-columns:60px 46px 38px 1fr 1fr 1fr 30px;gap:4px;padding:6px 8px;cursor:pointer;
+    border-left:2px solid transparent;font-family:Consolas,monospace;font-size:var(--fs-cap);color:var(--tx);}
+  .tychip{display:inline-block;padding:1px 5px;border-radius:8px;font-size:9.5px;font-family:'Segoe UI',sans-serif;
+    border:1px solid currentColor;white-space:nowrap;}
+  .clRow:nth-child(odd){background:rgba(255,255,255,.018);}
+  .clRow:hover{background:var(--surface-3);}
+  .clRow.sel{background:var(--accent-dim);border-left-color:var(--accent);}
+  .sevchip{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle;}
+  #clFoot{font-size:var(--fs-cap);color:var(--tx-3);margin-top:8px;}
+  /* ===== 방향 기즈모(우하단) ===== */
+  #gizmo{position:fixed;right:calc(var(--rightw) + 16px);bottom:16px;width:88px;height:88px;z-index:28;
+    cursor:pointer;user-select:none;}
+  #gizmo svg{width:100%;height:100%;overflow:visible;}
+  #gizmo .gzl{font:600 11px 'Segoe UI',sans-serif;cursor:pointer;}
+  #gizmo .gzhit{fill:transparent;cursor:pointer;}
+  /* ===== 토스트 알림(우하단) ===== */
+  #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);z-index:70;
+    background:var(--surface);border:1px solid var(--line-2);border-left:3px solid var(--accent);
+    color:var(--tx);padding:11px 16px;border-radius:var(--r-sm);font-size:var(--fs-body);
+    box-shadow:0 8px 24px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;
+    display:flex;align-items:center;gap:9px;max-width:60vw;backdrop-filter:blur(8px);}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+  #toast .ic{width:16px;height:16px;color:var(--accent);}
+  /* 성능 계측 오버레이 (F2 로 토글) */
+  #stats{position:fixed;left:calc(var(--leftw) + 16px);top:calc(var(--toph) + 12px);z-index:60;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--r-sm);padding:9px 12px;font:11px/1.55 Consolas,monospace;color:var(--accent);white-space:pre;
+    pointer-events:none;display:none;box-shadow:0 3px 12px rgba(0,0,0,.6);}
+  /* 보고서 로딩/오류 표시 (메시가 GB 급이면 수 초 걸린다) */
+  #boot{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:50;
+    background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r);padding:18px 26px;
+    font:14px Consolas,monospace;color:var(--tx-2);box-shadow:0 6px 24px rgba(0,0,0,.6);max-width:80vw;}

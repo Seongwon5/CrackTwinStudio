@@ -354,7 +354,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if r in ("/", "/index.html", "/dashboard.html"):
                 return self._file(os.path.join(UI_DIR, "dashboard.html"), "text/html; charset=utf-8")
-            if r in ("/dashboard.js", "/style.css"):
+            if r in ("/dashboard.js", "/style.css", "/viewer.js", "/viewer.css"):
                 ct = "text/javascript" if r.endswith(".js") else "text/css"
                 return self._file(os.path.join(UI_DIR, r[1:]), ct + "; charset=utf-8")
             if r.startswith("/libs/"):
