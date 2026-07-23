@@ -102,13 +102,83 @@ def _ps_dialog(script):
         return None
 
 
+# 최신(Vista+) 탐색기 스타일 폴더 선택 — IFileOpenDialog + FOS_PICKFOLDERS.
+# WinForms FolderBrowserDialog 는 .NET Framework(=Windows PowerShell)에서 구형 트리(작은 창)로만
+# 떠서, 일반 파일 탐색기처럼 주소창·즐겨찾기·검색이 있는 공통 항목 대화상자를 COM 으로 띄운다.
+_FOLDER_PS = r'''
+$ErrorActionPreference='Stop'
+$outFile = '__OUT__'
+$code = @"
+using System;
+using System.Runtime.InteropServices;
+namespace FS {
+  [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")] internal class Dlg { }
+  [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface ISI {
+    void BindToHandler(IntPtr a, ref Guid b, ref Guid c, out IntPtr d); void GetParent(out ISI a);
+    void GetDisplayName(uint a, out IntPtr b); void GetAttributes(uint a, out uint b); void Compare(ISI a, uint b, out int c);
+  }
+  [ComImport, Guid("d57c7288-d4ad-4768-be02-9d969532d960"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface IFOD {
+    [PreserveSig] int Show(IntPtr parent);
+    void SetFileTypes(uint a, IntPtr b); void SetFileTypeIndex(uint a); void GetFileTypeIndex(out uint a);
+    void Advise(IntPtr a, out uint b); void Unadvise(uint a);
+    void SetOptions(uint a); void GetOptions(out uint a);
+    void SetDefaultFolder(IntPtr a); void SetFolder(IntPtr a); void GetFolder(out IntPtr a); void GetCurrentSelection(out IntPtr a);
+    void SetFileName(string a); void GetFileName(out string a); void SetTitle(string a); void SetOkButtonLabel(string a);
+    void SetFileNameLabel(string a); void GetResult(out ISI a); void AddPlace(IntPtr a, int b); void SetDefaultExtension(string a);
+    void Close(int a); void SetClientGuid(ref Guid a); void ClearClientData(); void SetFilter(IntPtr a);
+    void GetResults(out IntPtr a); void GetSelectedItems(out IntPtr a);
+  }
+  public static class P {
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    public static string Pick(string title) {
+      var d = (IFOD)(new Dlg());
+      uint o; d.GetOptions(out o);
+      d.SetOptions(o | 0x20u | 0x40u);            // FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM
+      if (!string.IsNullOrEmpty(title)) d.SetTitle(title);
+      if (d.Show(GetForegroundWindow()) != 0) return null;
+      ISI si; d.GetResult(out si);
+      IntPtr pp; si.GetDisplayName(0x80058000u, out pp);   // SIGDN_FILESYSPATH
+      string s = Marshal.PtrToStringUni(pp); Marshal.FreeCoTaskMem(pp); return s;
+    }
+  }
+}
+"@
+$path = $null
+try {
+  Add-Type -TypeDefinition $code -Language CSharp
+  $path = [FS.P]::Pick("이미지+XMP 폴더 선택")
+} catch {
+  Add-Type -AssemblyName System.Windows.Forms
+  $f=New-Object System.Windows.Forms.Form; $f.TopMost=$true
+  $b=New-Object System.Windows.Forms.FolderBrowserDialog
+  if($b.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK){ $path=$b.SelectedPath }
+  $f.Dispose()
+}
+if ($path) { [IO.File]::WriteAllText($outFile, $path, [System.Text.Encoding]::UTF8) }
+'''
+
+
 def pick_folder():
-    """폴더 선택 다이얼로그 → 선택 경로."""
-    return _ps_dialog(
-        "Add-Type -AssemblyName System.Windows.Forms;"
-        "$f=New-Object System.Windows.Forms.Form; $f.TopMost=$true;"
-        "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
-        "if($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Out.Write($d.SelectedPath)};$f.Dispose()")
+    """최신 탐색기 스타일 폴더 선택 다이얼로그 → 선택 경로. 실패 시 구형으로 폴백."""
+    import tempfile
+    fd, out = tempfile.mkstemp(suffix=".txt"); os.close(fd)
+    fd, ps = tempfile.mkstemp(suffix=".ps1"); os.close(fd)
+    try:
+        with open(ps, "w", encoding="utf-8-sig") as f:      # BOM: PowerShell 이 한글 리터럴을 정확히 읽게
+            f.write(_FOLDER_PS.replace("__OUT__", out.replace("'", "''")))
+        subprocess.run(["powershell", "-STA", "-NoProfile", "-NonInteractive",
+                        "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps],
+                       capture_output=True, timeout=300)
+        with open(out, "r", encoding="utf-8") as f:
+            return f.read().strip() or None
+    except Exception:
+        return None
+    finally:
+        for p in (out, ps):
+            try: os.remove(p)
+            except OSError: pass
 
 
 def pick_file(kind):
