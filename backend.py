@@ -171,7 +171,7 @@ def pick_folder():
         subprocess.run(["powershell", "-STA", "-NoProfile", "-NonInteractive",
                         "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps],
                        capture_output=True, timeout=300)
-        with open(out, "r", encoding="utf-8") as f:
+        with open(out, "r", encoding="utf-8-sig") as f:   # .NET UTF8 은 BOM 을 붙인다 → sig 로 제거
             return f.read().strip() or None
     except Exception:
         return None
