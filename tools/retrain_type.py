@@ -120,44 +120,41 @@ def extract_from_twin(twin, log=print):
     return X, y, src
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--reports-dir", default=REPORTS_DIR)
-    ap.add_argument("--out", default=MODEL_JSON)
-    ap.add_argument("--trainset", default=TRAIN_NPZ)
-    ap.add_argument("--min-labels", type=int, default=40)
-    ap.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args()
-
-    print("[1/3] 검토 라벨 수집 …")
+def run(reports_dir=REPORTS_DIR, out=MODEL_JSON, trainset=TRAIN_NPZ,
+        min_labels=40, dry_run=False, log=print):
+    """재학습 본체(라이브러리 진입점) — 대시보드 '재학습' 버튼(백엔드 잡)과 CLI 가 공유.
+    반환: {trained: bool, labels: int, dist: {...}, note: str}"""
+    log("[1/3] 검토 라벨 수집 …")
     X = []; y = []; src = []
-    for f in sorted(os.listdir(a.reports_dir)):
-        if f.lower().endswith(".twin") and os.path.exists(os.path.join(a.reports_dir, f) + ".review.json"):
-            xs, ys, ss = extract_from_twin(os.path.join(a.reports_dir, f))
+    for f in sorted(os.listdir(reports_dir)):
+        if f.lower().endswith(".twin") and os.path.exists(os.path.join(reports_dir, f) + ".review.json"):
+            xs, ys, ss = extract_from_twin(os.path.join(reports_dir, f), log=log)
             X += xs; y += ys; src += ss
-    print(f"  신규 라벨 특징: {len(X)}건 · 분포 {dict(Counter(y))}")
+    log(f"  신규 라벨 특징: {len(X)}건 · 분포 {dict(Counter(y))}")
 
     # 스냅샷 병합(같은 출처는 새 검토가 덮음 — 검토를 고치면 라벨도 갱신)
-    if os.path.exists(a.trainset):
-        old = np.load(a.trainset, allow_pickle=True)
+    if os.path.exists(trainset):
+        old = np.load(trainset, allow_pickle=True)
         keep = [k for k in range(len(old["y"])) if str(old["src"][k]) not in set(src)]
         X = list(old["X"][keep]) + X
         y = list(old["y"][keep]) + y
         src = list(old["src"][keep]) + src
-        print(f"  스냅샷 병합: 총 {len(X)}건 · 분포 {dict(Counter(y))}")
+        log(f"  스냅샷 병합: 총 {len(X)}건 · 분포 {dict(Counter(y))}")
     if not X:
-        print("라벨이 없습니다 — 뷰어에서 검토(확인/유형수정/오탐)를 먼저 남기세요."); return
+        log("라벨이 없습니다 — 뷰어에서 검토(확인/유형수정/오탐)를 먼저 남기세요.")
+        return {"trained": False, "labels": 0, "dist": {}, "note": "no-labels"}
     Xa = np.array(X, float); ya = np.array(y)
 
     cnt = Counter(ya)
-    if len(Xa) < a.min_labels or len(cnt) < 2:
-        print(f"[중단] 라벨 {len(Xa)}건 · 클래스 {len(cnt)}종 — 최소 {a.min_labels}건·2클래스 필요."
-              f" 모델은 변경하지 않습니다. (수집분은 --dry-run 아니어도 저장 안 함)")
-        return
-    if a.dry_run:
-        print("[dry-run] 여기서 종료 — 모델·스냅샷 미변경."); return
+    if len(Xa) < min_labels or len(cnt) < 2:
+        log(f"[중단] 라벨 {len(Xa)}건 · 클래스 {len(cnt)}종 — 최소 {min_labels}건·2클래스 필요."
+            f" 모델은 변경하지 않습니다.")
+        return {"trained": False, "labels": int(len(Xa)), "dist": dict(cnt), "note": "below-threshold"}
+    if dry_run:
+        log("[dry-run] 여기서 종료 — 모델·스냅샷 미변경.")
+        return {"trained": False, "labels": int(len(Xa)), "dist": dict(cnt), "note": "dry-run"}
 
-    print("[2/3] 재학습(RandomForest) …")
+    log("[2/3] 재학습(RandomForest) …")
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.model_selection import cross_val_predict, StratifiedKFold
     from sklearn.metrics import precision_recall_fscore_support
@@ -166,35 +163,46 @@ def main():
     folds = min(5, min(cnt.values()))
     if folds >= 2:
         yp = cross_val_predict(rf, Xa, ya, cv=StratifiedKFold(folds, shuffle=True, random_state=0))
-        print(f"  CV({folds}) 정확도 {(yp == ya).mean()*100:.0f}%")
+        log(f"  CV({folds}) 정확도 {(yp == ya).mean()*100:.0f}%")
         p, r, _, s = precision_recall_fscore_support(ya, yp, labels=sorted(cnt), zero_division=0)
         for k, l in enumerate(sorted(cnt)):
-            print(f"    {l:>6} 정밀도 {p[k]:.2f} 재현율 {r[k]:.2f} (n={s[k]})")
+            log(f"    {l:>6} 정밀도 {p[k]:.2f} 재현율 {r[k]:.2f} (n={s[k]})")
     rf.fit(Xa, ya)
     # 신·구 판정 일치율(교체 전 비교)
     try:
         old_pred = [CT.classify(x)[0] for x in Xa]
         agree = float(np.mean(np.array(old_pred) == rf.predict(Xa)))
-        print(f"  기존 모델과 일치율: {agree*100:.0f}% (라벨 표본 기준)")
+        log(f"  기존 모델과 일치율: {agree*100:.0f}% (라벨 표본 기준)")
     except Exception:
         pass
 
-    print("[3/3] 모델 교체 + 스냅샷 저장 …")
-    if os.path.exists(a.out):
+    log("[3/3] 모델 교체 + 스냅샷 저장 …")
+    if os.path.exists(out):
         import shutil
-        shutil.copy(a.out, os.path.splitext(a.out)[0] + ".bak.json")
+        shutil.copy(out, os.path.splitext(out)[0] + ".bak.json")
     classes = [str(c) for c in rf.classes_]; trees = []
     for est in rf.estimators_:
         t = est.tree_
         trees.append(dict(cl=t.children_left.tolist(), cr=t.children_right.tolist(), fe=t.feature.tolist(),
                           th=[round(float(v), 5) for v in t.threshold],
                           va=[[int(round(c)) for c in nd[0]] for nd in t.value]))
-    with open(a.out, "w", encoding="utf-8") as f:
+    with open(out, "w", encoding="utf-8") as f:
         json.dump(dict(classes=classes, feats=CT.FEATS, trees=trees,
                        note=f"retrain: {len(Xa)} labels ({dict(cnt)})"), f)
-    np.savez_compressed(a.trainset, X=Xa, y=ya, src=np.array(src, dtype=object))
-    print(f"  저장: {a.out} (백업 .bak.json) · 스냅샷 {a.trainset} ({len(Xa)}건)")
-    print("  ※ 앱 재시작 시 새 모델이 적용됩니다(파이프라인이 시작에 1회 로드).")
+    np.savez_compressed(trainset, X=Xa, y=ya, src=np.array(src, dtype=object))
+    log(f"  저장: {out} (백업 .bak.json) · 스냅샷 {trainset} ({len(Xa)}건)")
+    return {"trained": True, "labels": int(len(Xa)), "dist": dict(cnt), "note": "ok"}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--reports-dir", default=REPORTS_DIR)
+    ap.add_argument("--out", default=MODEL_JSON)
+    ap.add_argument("--trainset", default=TRAIN_NPZ)
+    ap.add_argument("--min-labels", type=int, default=40)
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    run(a.reports_dir, a.out, a.trainset, a.min_labels, a.dry_run)
 
 
 if __name__ == "__main__":

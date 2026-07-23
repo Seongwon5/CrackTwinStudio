@@ -86,6 +86,18 @@
     <pre id="cmpLog" class="log hidden"></pre>
     <div id="assetList" class="rlist"></div>
   </section>
+
+  <!-- 기능 4: AI 유형 재학습 (검토 = 학습 데이터) -->
+  <section class="card wide">
+    <h2><span class="step">4</span>AI 유형 재학습 <span class="hint">검사원 검토가 곧 학습 데이터</span></h2>
+    <p class="desc">뷰어에서 남긴 검토(<b>확인·유형수정·오탐</b>)를 모아 유형 분류기를 재학습합니다.
+      기존 모델은 자동 백업되고, 재시작 없이 <b>다음 분석부터</b> 새 모델이 적용됩니다. (최소 40건 · 2개 유형)</p>
+    <div class="row">
+      <button id="btnRetrain" class="primary"><svg class="ic"><use href="#i-refresh"/></svg>재학습 실행</button>
+      <span id="retrainLbl" class="lbl">라벨 현황 확인 중…</span>
+    </div>
+    <pre id="rtLog" class="log hidden"></pre>
+  </section>
 </main>
 
 <script src="/dashboard.js"></script>

@@ -214,6 +214,44 @@
     } catch (e) { /* 자산 없음은 조용히 */ }
   }
 
+  // ===== AI 유형 재학습 (검토 = 학습 데이터) =====
+  async function loadRetrainStatus() {
+    try {
+      const d = await (await fetch("/api/retrain/status")).json();
+      const st = d.states || {};
+      $("retrainLbl").textContent =
+        `신규 라벨 ${d.new_labels}건 (확인 ${st.confirmed||0} · 수정 ${st.edited||0} · 오탐 ${st.rejected||0})`
+        + ` · 스냅샷 ${d.snapshot}건 · 합계 ${d.new_labels + d.snapshot}/${d.min_labels}건 필요`;
+      $("btnRetrain").disabled = (d.new_labels + d.snapshot) < d.min_labels;
+    } catch (e) { $("retrainLbl").textContent = "현황 조회 실패: " + e; }
+  }
+
+  $("btnRetrain").onclick = async () => {
+    $("btnRetrain").disabled = true;
+    $("rtLog").classList.remove("hidden");
+    $("rtLog").textContent = "재학습 시작(라벨 수집 → 학습 → 모델 교체)...\n";
+    try {
+      const r = await fetch("/api/retrain", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: "{}" });
+      const d = await r.json();
+      if (d.error) { alert(d.error); $("btnRetrain").disabled = false; return; }
+      const t = setInterval(async () => {
+        const s = await (await fetch("/api/job?id=" + d.job)).json();
+        if (s.log) $("rtLog").textContent = s.log.join("\n");
+        $("rtLog").scrollTop = $("rtLog").scrollHeight;
+        if (!s.done) return;
+        clearInterval(t);
+        loadRetrainStatus();
+        if (s.error) { alert("재학습 오류: " + s.error); return; }
+        const res = s.result || {};
+        $("rtLog").textContent += res.trained
+          ? "\n✅ 완료 — 다음 분석부터 새 모델이 적용됩니다."
+          : "\nℹ 모델 미변경 (" + (res.note || "") + ")";
+      }, 700);
+    } catch (e) { alert("재학습 실패: " + e); $("btnRetrain").disabled = false; }
+  };
+
   loadReports();
   loadAssets();
+  loadRetrainStatus();
 })();
