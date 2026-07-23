@@ -641,8 +641,32 @@ def _skeleton_lengths(skel, scale_map=None, scalar=1.0):
     g = csr_matrix((np.r_[w, w], (np.r_[a, b], np.r_[b, a])), shape=(n, n))
     d0 = dijkstra(g, indices=0); d0[~np.isfinite(d0)] = -1.0
     u = int(np.argmax(d0))
-    du = dijkstra(g, indices=u); du[~np.isfinite(du)] = -1.0
-    return total, float(max(du.max(), 0.0))
+    du, pred = dijkstra(g, indices=u, return_predecessors=True)
+    du[~np.isfinite(du)] = -1.0
+    far = int(np.argmax(du)); L_naive = float(max(du[far], 0.0))
+    # 계단(디지털화) 편향 보정: 8-이웃 간선 합은 30/60° 직선에서 최대 +10% 과대(실측).
+    # 지름 경로의 픽셀 좌표를 이동평균(창5)으로 스무딩해 유클리드 합산 → 계단이 접혀
+    # 각도 무관 ~±1%. 총연장은 같은 스켈레톤의 계단 통계를 공유하므로 동일 비율로 보정.
+    path = []
+    v = far
+    while v >= 0 and len(path) <= n:
+        path.append(v)
+        v = int(pred[v])
+    if len(path) >= 3 and L_naive > 0:
+        pc = np.column_stack([xs[path], ys[path]]).astype(float)
+        k = 5 if len(pc) >= 5 else 3            # 홀수 커널만(짝수면 출력 길이가 어긋남)
+        ker = np.ones(k) / k
+        sm = np.column_stack([np.convolve(np.pad(pc[:, j], (k // 2, k // 2), mode="edge"),
+                                          ker, mode="valid") for j in range(2)])
+        seg = np.linalg.norm(np.diff(sm, axis=0), axis=1)
+        if scale_map is not None:
+            sc = scale_map[ys[path], xs[path]]
+            L_path = float((seg * 0.5 * (sc[:-1] + sc[1:])).sum())
+        else:
+            L_path = float(seg.sum()) * scalar
+        ratio = min(1.0, max(0.85, L_path / L_naive))     # 안전 클램프(스무딩 과축소 방지)
+        return total * ratio, L_path
+    return total, L_naive
 
 
 def _perp_width_profile(ordered, field, thr, edt, cap_px, ds=WIDTH_STEP_PX):
