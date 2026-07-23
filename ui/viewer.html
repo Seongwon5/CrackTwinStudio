@@ -1392,10 +1392,11 @@ function showHotspotRep(h){
   const f=(x,d=1)=>(x!=null?Number(cmm(x)).toFixed(d):'?');
   const _hi = DATA.hotspots.indexOf(h);
   let _cmp='';
-  if(CMP && _hi>=0 && CMP.histByHot[_hi]){            // 검사 이력: 이전→현재 측정치
-    const H=CMP.histByHot[_hi], p=H[CMP.prevId], c=H[CMP.curId];
-    if(p && c) _cmp = ` · 이력 ${CMP.prevId} 폭 ${cmm(p.w).toFixed(2)}·길이 ${Math.round(cmm(p.L))}`
-                    + ` → ${CMP.curId} 폭 ${cmm(c.w).toFixed(2)}·길이 ${Math.round(cmm(c.L))}`;
+  if(CMP && _hi>=0 && CMP.histByHot[_hi]){            // 검사 이력: 전체 시점 체인(T1 → … → TN)
+    const H=CMP.histByHot[_hi];
+    const parts=CMP.insp.map(x=>x.id).filter(id=>H[id])
+      .map(id=>`${id} 폭 ${cmm(H[id].w).toFixed(2)}·길이 ${Math.round(cmm(H[id].L))}`);
+    if(parts.length) _cmp = ' · 이력 ' + parts.join(' → ');
   }
   const wtxt = ((h.width_mm_median!=null)
     ? `크랙 평균 폭 ${f(h.width_mm_median)}mm (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`

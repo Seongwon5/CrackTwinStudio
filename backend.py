@@ -208,13 +208,19 @@ def render_viewer_html(twin_path, asset=None):
     return html.replace("__ASSET__", json.dumps(asset, ensure_ascii=False) if asset else "null")
 
 
-def _run_compare_job(job_id, twin_a, twin_b, ida, idb, out_path):
-    """백그라운드에서 검사 간 비교(asset.json 생성)를 수행하고 로그/결과를 갱신한다."""
+def _run_compare_job(job_id, twin_a, twin_b, ida, idb, out_path, extend_asset=None):
+    """백그라운드에서 검사 간 비교(asset.json 생성/확장)를 수행하고 로그/결과를 갱신한다.
+    extend_asset 이 주어지면 새 자산을 만들지 않고 그 자산에 twin_b 를 N번째 검사로 승계."""
     j = _jobs[job_id]
     def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
     try:
-        asset = CT2.run(twin_a, twin_b, out_path, ida=ida, idb=idb, log=log)
-        j["result"] = out_path; j["progress"] = 1.0
+        if extend_asset:
+            asset = CT2.extend(extend_asset, twin_b, idn=idb, log=log)
+            j["result"] = extend_asset
+        else:
+            asset = CT2.run(twin_a, twin_b, out_path, ida=ida, idb=idb, log=log)
+            j["result"] = out_path
+        j["progress"] = 1.0
         j["stats"] = asset.get("_stats")
     except CT2.RegistrationError as e:
         j["error"] = str(e)
@@ -400,14 +406,29 @@ class Handler(BaseHTTPRequestHandler):
                 idb = (d.get("idb") or "").strip() or datetime.datetime.fromtimestamp(os.path.getmtime(tb)).strftime("%Y-%m-%d")
                 if ida == idb:
                     idb += "(2)"
+                # 자동 승계: 이전(T1)으로 고른 보고서가 어느 자산의 '최신 검사'면, 새 자산을 만들지
+                # 않고 그 자산에 이번(T2)을 N번째 검사로 이어붙인다(영속 ID 유지 = 시간축 축적).
+                ext_asset = None
+                if os.path.isdir(REPORTS_DIR):
+                    for f in os.listdir(REPORTS_DIR):
+                        if f.lower().endswith(".json") and f.lower().startswith("asset"):
+                            fp = os.path.join(REPORTS_DIR, f)
+                            try:
+                                with open(fp, encoding="utf-8") as fh:
+                                    a0 = json.load(fh)
+                                if os.path.abspath(a0["inspections"][-1]["twin"]) == os.path.abspath(ta):
+                                    ext_asset = fp; break
+                            except Exception:
+                                pass
                 na = os.path.splitext(os.path.basename(ta))[0]; nb = os.path.splitext(os.path.basename(tb))[0]
                 safe = lambda s: re.sub(r'[\\/:*?"<>|]+', "_", s)
                 out = os.path.join(REPORTS_DIR, f"asset_{safe(na)}__{safe(nb)}.json")
                 os.makedirs(REPORTS_DIR, exist_ok=True)
                 jid = uuid.uuid4().hex[:8]
                 _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
-                threading.Thread(target=_run_compare_job, args=(jid, ta, tb, ida, idb, out), daemon=True).start()
-                return self._json({"job": jid, "out": out})
+                threading.Thread(target=_run_compare_job,
+                                 args=(jid, ta, tb, ida, idb, out, ext_asset), daemon=True).start()
+                return self._json({"job": jid, "out": ext_asset or out, "mode": "extend" if ext_asset else "new"})
             except Exception as e:
                 import traceback; traceback.print_exc()
                 return self._json({"error": str(e)}, 500)
