@@ -97,7 +97,11 @@
         const b = document.createElement("button"); b.className = "primary";
         b.innerHTML = `<svg class="ic"><use href="#i-open"/></svg>열기`;
         b.onclick = () => openReport(rp.path);
-        el.appendChild(b); list.appendChild(el);
+        const pb = document.createElement("button"); pb.className = "ghost";
+        pb.innerHTML = `<svg class="ic"><use href="#i-download"/></svg>PDF`;
+        pb.title = "검사 보고서 PDF 생성(표지·위치도·균열 대장·사진 대지)";
+        pb.onclick = () => exportPdf(rp.path, pb);
+        el.appendChild(pb); el.appendChild(b); list.appendChild(el);
       });
       fillCompareSelects();
     } catch (e) { list.innerHTML = '<div class="empty">목록 로드 실패: ' + e + '</div>'; }
@@ -165,6 +169,26 @@
         if (confirm("비교 완료!\n비교 뷰어(상태색·고스트)로 열까요?")) openAsset(d.result);
       }
     }, 500);
+  }
+
+  async function exportPdf(path, btn) {
+    const old = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = "생성 중…";
+    try {
+      const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ p: path }) });
+      const d = await r.json();
+      if (d.error) { alert(d.error); return; }
+      const t = setInterval(async () => {
+        const s = await (await fetch("/api/job?id=" + d.job)).json();
+        if (s.log && s.log.length) btn.innerHTML = "생성 중… " + (s.log[s.log.length-1].match(/^\[\d\/\d\]/)||[""])[0];
+        if (!s.done) return;
+        clearInterval(t);
+        btn.disabled = false; btn.innerHTML = old;
+        if (s.error) { alert("PDF 생성 오류: " + s.error); return; }
+        window.open("/api/download?path=" + encodeURIComponent(s.result), "_blank");
+      }, 700);
+    } catch (e) { alert("PDF 생성 실패: " + e); btn.disabled = false; btn.innerHTML = old; }
   }
 
   function openAsset(path) {

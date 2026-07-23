@@ -37,6 +37,20 @@ import sys as _sys
 _sys.path.insert(0, os.path.join(HERE, "tools"))
 import compare_twins as CT2      # 검사 간 비교(정합·매칭·판정) — 대시보드 '검사 비교' 가 사용
 
+
+def _run_export_job(job_id, twin, out_pdf, rows, photos):
+    """백그라운드 PDF 보고서 생성(표지·요약/위치도/대장/사진 대지)."""
+    j = _jobs[job_id]
+    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
+    try:
+        import export_report as ER
+        ER.build_pdf(twin, out_pdf, log=log, max_rows=rows, top_photos=photos)
+        j["result"] = out_pdf; j["progress"] = 1.0
+    except Exception as e:
+        import traceback; traceback.print_exc(); j["error"] = str(e)
+    finally:
+        j["done"] = True
+
 # 구형식(v1: 단일 JSON) 을 백엔드가 통째로 파싱해도 되는 상한. v1 은 이 크기를 넘으면 열지 않고
 # 변환을 안내한다(파싱만으로 파일의 4~5배 메모리를 쓰기 때문).
 LEGACY_MAX = 400 * 1024 * 1024
@@ -365,6 +379,22 @@ class Handler(BaseHTTPRequestHandler):
                             items.append({"name": f, "path": fp, "mb": round(os.path.getsize(fp) / 1e6, 1),
                                           "mtime": os.path.getmtime(fp)})
                 return self._json({"reports": items})
+            if r == "/api/download":
+                # 생성된 PDF 만, reports 폴더 안만 서빙(경로 탈출 방지)
+                p = q.get("path", [""])[0]
+                ap = os.path.abspath(p)
+                if not (ap.startswith(os.path.abspath(REPORTS_DIR)) and ap.lower().endswith(".pdf")
+                        and os.path.exists(ap)):
+                    return self._send(404, "not found", "text/plain")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header("Content-Disposition", 'inline; filename="%s"'
+                                 % os.path.basename(ap).encode("ascii", "ignore").decode() )
+                self.send_header("Content-Length", str(os.path.getsize(ap)))
+                self.end_headers()
+                with open(ap, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile)
+                return
             if r == "/api/review":
                 # 검토 사이드카(<twin>.review.json) 조회 — .twin(GB급)은 절대 재작성하지 않는다
                 p = self._twin_arg(q)
@@ -433,6 +463,25 @@ class Handler(BaseHTTPRequestHandler):
                     json.dump(data, f, ensure_ascii=False, indent=1)
                 os.replace(tmp, rp2)
                 return self._json({"ok": True, "review": ent})
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                return self._json({"error": str(e)}, 500)
+        if rp == "/api/export":
+            # PDF 보고서 생성 잡: {p, rows?, photos?} → 결과 pdf 는 reports/ 에 저장
+            try:
+                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+                p = d.get("p", "")
+                if not p or not os.path.exists(p):
+                    return self._json({"error": "보고서 없음"}, 400)
+                base = re.sub(r'[\\/:*?"<>|]+', "_", os.path.splitext(os.path.basename(p))[0])
+                out = os.path.join(REPORTS_DIR, base + "_report.pdf")
+                os.makedirs(REPORTS_DIR, exist_ok=True)
+                jid = uuid.uuid4().hex[:8]
+                _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
+                threading.Thread(target=_run_export_job,
+                                 args=(jid, p, out, int(d.get("rows", 300)), int(d.get("photos", 24))),
+                                 daemon=True).start()
+                return self._json({"job": jid, "out": out})
             except Exception as e:
                 import traceback; traceback.print_exc()
                 return self._json({"error": str(e)}, 500)
