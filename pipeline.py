@@ -55,6 +55,14 @@ SCALE_MAP_CAP = 60000             # 스케일맵/점군용 크랙 픽셀 역투�
 COS_CLAMP = 0.2                   # 경사(grazing)에서 스케일 폭주 방지 cosθ 하한
 WIDTH_CAP_PX = 60                 # 수직 폭 프로파일의 편측 최대 탐색 반경(px). 옆 크랙으로 새는 것 방지
 WIDTH_STEP_PX = 0.5               # 수직 폭 샘플 간격(px). 서브픽셀 보간 → 실효 분해능
+# ---- 판정 등급(절대 폭 기준, mm) — ACI 349.3R 계열 허용폭 관행을 참고한 기본 프레임 ----
+# A(허용) < 0.3 ≤ B(관찰) < 0.5 ≤ C(보수 검토) < 1.0 ≤ D(보수 필요). p95 폭 기준(단일픽셀
+# 최대의 노이즈와 중앙값의 국소확폭 둔감을 절충한 보수적 대표값). 임계값은 meta 에 기록해
+# 추적 가능하게 하고, 뷰어는 캘리브레이션 보정 mm 로 실시간 재계산한다.
+GRADE_T_MM = (0.3, 0.5, 1.0)
+# ---- 측정 신뢰 플래그 ----
+REL_SCALE_MM = 50.0               # 이 이상 폭 = 실척 전제 붕괴 의심(경사 폭주 등) → 신뢰 C
+REL_SPREAD = 0.5                  # 뷰 간 폭 IQR/중앙 이 이상 = 측정 불일치 → 신뢰 C
 
 
 # ==================================================================
@@ -1226,6 +1234,17 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                     views[m["source"]] = {"source": m["source"], "conf": m["conf"],
                                           "w": round(float(m["width_mm"]), 3),
                                           "L": round(float(m.get("length_mm", 0.0)), 1)}
+            # 판정 등급(절대 폭, p95 기준) + 측정 신뢰(A/B/C + 사유코드)
+            grade = "ABCD"[sum(w_p95 >= t for t in GRADE_T_MM)]
+            rel_why = []
+            if w_max > REL_SCALE_MM: rel_why.append("scale")          # 실척 의심(경사 폭주 등)
+            vwl = [v["w"] for v in views.values() if v.get("w") is not None]
+            if len(vwl) >= 3:
+                med = float(np.median(vwl))
+                if med > 1e-6 and float(np.subtract(*np.percentile(vwl, [75, 25]))) / med > REL_SPREAD:
+                    rel_why.append("spread")                          # 뷰 간 측정 불일치
+            if len(views) == 1: rel_why.append("single")              # 단일 뷰(교차검증 없음)
+            rel = "C" if ("scale" in rel_why or "spread" in rel_why) else ("B" if rel_why else "A")
             w3_txt = f" · 3D폭 {w_max_3d:.1f}" if w_max_3d is not None else ""
             tot_txt = f" (총연장 {L_tot:.0f})" if L_tot > L + 0.5 else ""
             merged.append({"text": f"크랙 폭 중앙 {w_med:.1f}mm (p95 {w_p95:.1f} · 최대 {w_max:.1f}){w3_txt} · 길이 {L:.0f}mm{tot_txt}",
@@ -1235,6 +1254,9 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                            "width_mm_3d": round(w_max_3d, 3) if w_max_3d is not None else None,
                            "length_mm": round(float(L), 2),               # 최장경로(대표)
                            "length_total_mm": round(float(L_tot), 2),      # 총연장(가지 포함)
+                           "grade": grade,                                 # 판정 등급(무보정 mm 기준 — 뷰어는 보정 재계산)
+                           "rel": rel, "rel_why": rel_why,                 # 측정 신뢰 A/B/C + 사유
+
                            "_members": member_idxs,   # 이 크랙(핫스팟)에 속한 뷰별 인스턴스 idx(리본 매핑용)
                            "views": sorted(views.values(), key=lambda v: -v["conf"])})
         merged.sort(key=lambda h: -h["width_mm_max"])
@@ -1268,6 +1290,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         "width_mm_range": [round(min(widths), 2), round(max(widths), 2)] if widths else None,
         # 측정 신뢰도 경고: 실척 전제("PLY 1단위=1m")가 깨지면 폭이 비현실적으로 커진다.
         "scale_warning": (max(widths) > 50.0) if widths else False,
+        "grade_thresholds_mm": list(GRADE_T_MM),   # 판정 등급 임계값(추적 가능성 — 뷰어 실시간 재계산의 근거)
     }
     # 리본 = '크랙(핫스팟)당 1개'. 서로 다른 이미지에서 검출한 같은 크랙의 여러 뷰 중심선을
     # fuse_points 로 융합(복셀 병합 + MST 순서화)한다 → 겹침 없는 단일 3D 객체 → 클릭 명확.

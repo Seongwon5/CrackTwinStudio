@@ -182,11 +182,11 @@
   #cracklist .ctr button{display:inline-flex;align-items:center;gap:5px;background:var(--surface-3);color:var(--tx-2);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:5px 9px;cursor:pointer;font-size:var(--fs-cap);font-family:inherit;}
   #cracklist .ctr button:hover{background:#222d37;border-color:var(--accent);color:var(--accent);}
   #cracklist .ctr button .ic{width:13px;height:13px;}
-  #clHead{display:grid;grid-template-columns:60px 46px 1fr 1fr 1fr 30px;gap:4px;padding:7px 8px;color:var(--tx-3);
+  #clHead{display:grid;grid-template-columns:60px 46px 38px 1fr 1fr 1fr 30px;gap:4px;padding:7px 8px;color:var(--tx-3);
     background:var(--surface-2);border-radius:var(--r-sm) var(--r-sm) 0 0;font-weight:600;font-size:10.5px;
     text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;}
   #clRows{overflow-y:auto;flex:1;min-height:120px;border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-sm) var(--r-sm);}
-  .clRow{display:grid;grid-template-columns:60px 46px 1fr 1fr 1fr 30px;gap:4px;padding:6px 8px;cursor:pointer;
+  .clRow{display:grid;grid-template-columns:60px 46px 38px 1fr 1fr 1fr 30px;gap:4px;padding:6px 8px;cursor:pointer;
     border-left:2px solid transparent;font-family:Consolas,monospace;font-size:var(--fs-cap);color:var(--tx);}
   .tychip{display:inline-block;padding:1px 5px;border-radius:8px;font-size:9.5px;font-family:'Segoe UI',sans-serif;
     border:1px solid currentColor;white-space:nowrap;}
@@ -281,6 +281,12 @@
         <span>경미(하위)</span><span>심각(상위)</span></div>
       <div style="margin-top:5px;color:var(--tx-3);line-height:1.45;">
         전체 크랙을 (길이 × 폭)으로 정렬한 순위 색 — 절대 mm 아님(스케일 미보정 대비 상대 비교).</div>
+      <div id="gradeLegend" style="margin-top:12px;">
+        <div style="margin-bottom:5px;color:var(--tx-3)">판정 등급 <span style="color:var(--tx-3)">— 절대 폭(p95·보정 mm) 기준</span></div>
+        <div id="gradeRows" style="line-height:1.8;"></div>
+        <div style="margin-top:4px;color:var(--tx-3);line-height:1.45;">
+          신뢰 A/B/C — 뷰 수·뷰 간 일치·실척 정상성. C(실척 의심·뷰 불일치)는 수치 해석 주의.</div>
+      </div>
     </div>
     <div style="margin-top:14px;font-size:var(--fs-cap);color:var(--tx-2);background:var(--surface-2);padding:11px;border-radius:var(--r-sm);line-height:1.75;">
       <div style="color:var(--tx-3);margin-bottom:4px;">조작</div>
@@ -316,7 +322,7 @@
       <button id="clCsv"><svg class="ic"><use href="#i-download"/></svg>CSV</button>
       <button id="clCopy"><svg class="ic"><use href="#i-copy"/></svg>복사</button>
     </div>
-    <div id="clHead"><span>ID</span><span>유형</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
+    <div id="clHead"><span>ID</span><span>유형</span><span>등급</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
     <div id="clRows"></div>
     <div id="clFoot"></div>
   </div>
@@ -507,6 +513,50 @@ function fmtLen(h){
   const base='길이 '+(L!=null?Math.round(L).toLocaleString():'?')+'mm';
   return (T!=null && L!=null && T>L+0.5) ? base+' (총연장 '+Math.round(T).toLocaleString()+')' : base;
 }
+// ===== 판정 등급(절대 폭·보정 mm) + 측정 신뢰 =====
+// 등급은 캘리브레이션(cmm)을 따라 실시간 재계산 — 파이프라인 저장값은 무보정 기준이라 표시용으론 여기서 다시 계산.
+const GRADE_T = (DATA.report_meta && DATA.report_meta.grade_thresholds_mm) || [0.3, 0.5, 1.0];
+const GRADE_COLOR={A:'#3fbf7f', B:'#ffd21e', C:'#ffb454', D:'#e0574e'};
+const GRADE_LABEL={A:'허용', B:'관찰', C:'보수 검토', D:'보수 필요'};
+function gradeOf(h){
+  const w=cmm(h.width_mm_p95!=null?h.width_mm_p95:(h.width_mm_median??h.width_mm_max??h.width_mm));
+  if(w==null) return null;
+  let g=0; for(const t of GRADE_T) if(w>=t) g++;
+  return 'ABCD'[g];
+}
+const REL_COLOR={A:'#12b5cc', B:'#ffb454', C:'#e0574e'};
+const REL_WHY={scale:'실척 의심', spread:'뷰 간 불일치', single:'단일 뷰'};
+function relWhy(h){
+  if(h.rel_why) return h.rel_why;                 // 신형 twin: 파이프라인 판정
+  const why=[];                                    // 구형 폴백: 클라이언트 근사
+  const wm=h.width_mm_max??h.width_mm; if(wm!=null && wm>50) why.push('scale');
+  const vw=(h.views||[]).map(v=>v&&v.w).filter(x=>x!=null);
+  if(vw.length>=3){ const s=[...vw].sort((a,b)=>a-b);
+    const med=s[Math.floor(s.length/2)], q1=s[Math.floor(s.length*0.25)], q3=s[Math.floor(s.length*0.75)];
+    if(med>1e-6 && (q3-q1)/med>0.5) why.push('spread'); }
+  if((h.views||[]).length===1) why.push('single');
+  return why;
+}
+function relOf(h){
+  if(h.rel) return h.rel;
+  const why=relWhy(h);
+  return (why.includes('scale')||why.includes('spread')) ? 'C' : (why.length ? 'B' : 'A');
+}
+function gradeBadge(h){                            // 말풍선/상세용 한 줄(html)
+  const g=gradeOf(h); if(!g) return '';
+  const r=relOf(h);
+  return '<span style="color:'+GRADE_COLOR[g]+';font-weight:600">등급 '+g+' '+GRADE_LABEL[g]+'</span>'
+       + ' · <span style="color:'+REL_COLOR[r]+'">신뢰 '+r+'</span>';
+}
+// 범례 채우기(임계값 실값 표기)
+(function fillGradeLegend(){
+  const el=document.getElementById('gradeRows'); if(!el) return;
+  const rng=[`< ${GRADE_T[0]}`, `${GRADE_T[0]}–${GRADE_T[1]}`, `${GRADE_T[1]}–${GRADE_T[2]}`, `≥ ${GRADE_T[2]}`];
+  el.innerHTML=['A','B','C','D'].map((g,i)=>
+    '<span style="display:inline-flex;align-items:center;gap:5px;margin-right:10px;">'
+    +'<span style="width:9px;height:9px;border-radius:3px;background:'+GRADE_COLOR[g]+'"></span>'
+    +g+' '+GRADE_LABEL[g]+' <span style="color:var(--tx-3)">'+rng[i]+'mm</span></span>').join('');
+})();
 // 핫스팟 요약문(파이프라인이 구워둔 h.text 대신 — 보정 계수를 반영해 매번 생성)
 function fmtHotText(h){
   if(h.width_mm_median==null) return h.text || '크랙';
@@ -764,9 +814,11 @@ function cmpLine(i){                                // 비교 모드: 상태 + �
   if(d && d.dw!=null) s+=' Δ폭 '+(d.dw>0?'+':'')+cmm(d.dw).toFixed(2)+'mm';
   return '<br>'+s;
 }
-function fmtWL(h, i){                               // 말풍선(호버): 평균 폭 + 길이(최대·p95 는 클릭 시)
+function fmtWL(h, i){                               // 말풍선(호버): 평균 폭 + 길이 + 등급·신뢰(최대·p95 는 클릭 시)
   const w=cmm(h.width_mm_median!=null?h.width_mm_median:(h.width_mm_max!=null?h.width_mm_max:h.width_mm));
-  return '평균 폭 '+(w!=null?Number(w).toFixed(2):'?')+'mm<br>'+fmtLen(h)+cmpLine(i);
+  const gb=gradeBadge(h);
+  return '평균 폭 '+(w!=null?Number(w).toFixed(2):'?')+'mm<br>'+fmtLen(h)
+       + (gb?'<br>'+gb:'') + cmpLine(i);
 }
 // 크랙 정보는 '말풍선(mm 태그)'로만 — 다이아몬드 레티클은 제거(겹치고 클릭 혼란). 리본이 전체
 // 지도를 담당하고, 크랙을 호버/선택하면 그 크랙의 말풍선(폭·길이)이 뜬다. 색은 상대 심각도.
@@ -1398,11 +1450,16 @@ function showHotspotRep(h){
       .map(id=>`${id} 폭 ${cmm(H[id].w).toFixed(2)}·길이 ${Math.round(cmm(H[id].L))}`);
     if(parts.length) _cmp = ' · 이력 ' + parts.join(' → ');
   }
+  let _gr='';
+  { const g=gradeOf(h), r=relOf(h);
+    if(g){ const why=relWhy(h).map(k=>REL_WHY[k]||k).join('·');
+      _gr=' · <span style="color:'+GRADE_COLOR[g]+';font-weight:600">등급 '+g+'('+GRADE_LABEL[g]+')</span>'
+        +' · <span style="color:'+REL_COLOR[r]+'">신뢰 '+r+(why?'('+why+')':'')+'</span>'; } }
   const wtxt = ((h.width_mm_median!=null)
     ? `크랙 평균 폭 ${f(h.width_mm_median)}mm (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
       + (h.width_mm_3d!=null?` · 3D폭 ${f(h.width_mm_3d)}`:'')
       + ` · ${fmtLen(h)}`
-    : (h.text||'크랙')) + cmpLine(_hi) + _cmp;
+    : (h.text||'크랙')) + _gr + cmpLine(_hi) + _cmp;
   document.getElementById('imgHot').innerHTML =
     '▶ '+wtxt+'<br><span style="color:#888">X '+h.xyz[0].toFixed(2)+'  Y '+h.xyz[1].toFixed(2)+'  Z '+h.xyz[2].toFixed(2)+'</span>';
   const items=document.getElementById('imgItems'); items.innerHTML='';
@@ -2033,8 +2090,13 @@ function clRow(i,h){
   const wmed=cmm(h.width_mm_median??h.width_mm_max), wmax=cmm(h.width_mm_max??h.width_mm), L=cmm(h.length_mm), T=ltot(h);
   const ty=hotType(i);
   const lenTitle=(T!=null&&L!=null&&T>L+0.5)?' title="최장경로 '+Math.round(L).toLocaleString()+'mm · 총연장 '+Math.round(T).toLocaleString()+'mm"':'';
+  const g=gradeOf(h), r_=relOf(h);
+  const gTitle=g?(' title="등급 '+g+' '+GRADE_LABEL[g]+' · 신뢰 '+r_
+    +(relWhy(h).length?'('+relWhy(h).map(k=>REL_WHY[k]||k).join('·')+')':'')+'"'):'';
   el.innerHTML='<span><span class="sevchip" style="background:'+rgb+'"></span>C-'+String(i+1).padStart(4,'0')+'</span>'
     +'<span><span class="tychip" style="color:'+TYPE_COLOR[ty]+'">'+TYPE_LABEL[ty].slice(0,2)+'</span></span>'
+    +'<span'+gTitle+' style="color:'+(g?GRADE_COLOR[g]:'inherit')+';font-weight:600">'+(g||'?')
+      +(r_==='C'?'<span style="color:'+REL_COLOR.C+'">!</span>':'')+'</span>'
     +'<span>'+(wmed!=null?wmed.toFixed(2):'?')+'</span>'
     +'<span>'+(wmax!=null?wmax.toFixed(2):'?')+'</span>'
     +'<span'+lenTitle+'>'+(L!=null?Math.round(L).toLocaleString():'?')+(lenTitle?' *':'')+'</span>'
@@ -2136,11 +2198,12 @@ function flyToCrack(i){
 // CSV: 현재 필터·정렬 결과를 그대로(보정된 mm) — Excel 한글 호환 BOM 포함
 function clCsvText(){
   const fx=v=>v==null?'':(Math.round(v*1000)/1000);
-  const head=['id','width_mm_median','width_mm_max','width_mm_p95','width_mm_3d','length_mm','length_total_mm',
+  const head=['id','grade','reliability','rel_reasons','width_mm_median','width_mm_max','width_mm_p95','width_mm_3d','length_mm','length_total_mm',
               'views','conf','x','y','z','calib_scale','sources'];
   const lines=[head.join(',')];
   for(const [i,h] of clData){
     lines.push(['C-'+String(i+1).padStart(4,'0'),
+      gradeOf(h)||'', relOf(h)||'', '"'+relWhy(h).join('|')+'"',
       fx(cmm(h.width_mm_median)), fx(cmm(h.width_mm_max)), fx(cmm(h.width_mm_p95)), fx(cmm(h.width_mm_3d)),
       fx(cmm(h.length_mm)), fx(ltot(h)), (h.views||[]).length, h.conf??'',
       h.xyz[0], h.xyz[1], h.xyz[2], calibScale,
