@@ -1274,13 +1274,6 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         cam_by_src = {c["source"]: c for c in all_cameras}
         rbh = {}
         for r in all_ribbons: rbh.setdefault(r["hot"], []).append(r)
-        gcache = {}
-        def _gray(src):
-            if src not in gcache:
-                c = cam_by_src.get(src); buf = c.get("_full") if c else None
-                arr = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_GRAYSCALE) if buf else None
-                gcache[src] = arr.astype(np.float32) if arr is not None else None
-            return gcache[src]
         # 크랙별 융합 중심선 + L2 par_neigh(장면 전체의 평행 이웃 비율 — 시공선 가족 신호)
         polym = {mi: np.array([p for r in rbh[mi] for p in r["poly"]], float) for mi in rbh}
         cents = []; axes = []; midx = []
@@ -1291,26 +1284,48 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         log(f"  유형 분류 시작: 크랙 {len(merged)}개 (L2 평행이웃 계산 완료) …")
         par = _ct.parallel_fraction(cents, axes, near=diag * _ct.PAR_NEAR_FRAC) if cents else []
         par_of = {midx[k]: float(par[k]) for k in range(len(midx))}
-        tcnt = {}
         _t_cls = time.time(); _ncls = len(merged)
+        # ① 대표 뷰 선택(이미지 불필요) — '화면에서 가장 크게 보이는 뷰' 비교라 중심선을
+        #    ≤48점으로 서브샘플해도 순위가 같다. 크랙을 대표 뷰(source)별로 그룹핑.
+        by_src = {}                                    # source → [(mi, P, cam)]
         for mi, h in enumerate(merged):
-            P = polym.get(mi); lab, conf = "crack", 0.0
-            if P is not None and len(P) >= 2:
-                best = None; bestext = -1
-                for vw in h.get("views", []):
-                    c = cam_by_src.get(vw["source"])
-                    if not c: continue
-                    uv, ok = _ct.project_to_cam(c, P); uv = uv[ok]
-                    if len(uv) < 4: continue
-                    ext = float(np.linalg.norm(uv.max(0) - uv.min(0)))
-                    if ext > bestext: bestext = ext; best = c
-                if best is not None:
-                    w = h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
-                    lab, conf = _ct.classify_crack(P, w, h.get("length_mm"), best, _gray(best["source"]), par_of.get(mi, 0.0))
-            h["type"] = lab; h["type_conf"] = round(float(conf), 3)
-            tcnt[lab] = tcnt.get(lab, 0) + 1
-            if _ncls >= 2000 and (mi + 1) % 2000 == 0:
-                log(f"    분류 {mi + 1}/{_ncls} ({(mi + 1) / _ncls * 100:.0f}%) · {time.time() - _t_cls:.0f}s")
+            h["type"] = "crack"; h["type_conf"] = 0.0  # 기본값(분류 불가 시 그대로)
+            P = polym.get(mi)
+            if P is None or len(P) < 4:
+                continue
+            Ps = P[::max(1, len(P) // 48)]
+            best = None; bestext = -1
+            for vw in h.get("views", []):
+                c = cam_by_src.get(vw["source"])
+                if not c: continue
+                uv, ok = _ct.project_to_cam(c, Ps); uv = uv[ok]
+                if len(uv) < 4: continue
+                ext = float(np.linalg.norm(uv.max(0) - uv.min(0)))
+                if ext > bestext: bestext = ext; best = c
+            if best is not None:
+                by_src.setdefault(best["source"], []).append((mi, P, best))
+        # ② 뷰별 그룹 처리 — 이미지당 디코드 딱 1회, 메모리엔 그 한 장(float32 ~11MB)만.
+        #    (예전: 크랙 순서대로 접근 + 전 이미지 float32 캐시 → 594장 ≈ 6.5GB 로 페이징 유발)
+        feats = []; fmi = []; done = 0
+        for src, items in by_src.items():
+            c0 = items[0][2]; buf = c0.get("_full")
+            arr = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_GRAYSCALE) if buf else None
+            gray = arr.astype(np.float32) if arr is not None else None
+            for mi, P, cam in items:
+                h = merged[mi]
+                w = h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
+                x = _ct.crack_features(P, w, h.get("length_mm"), cam, gray, par_of.get(mi, 0.0))
+                if x is not None:
+                    feats.append(x); fmi.append(mi)
+                done += 1
+                if _ncls >= 2000 and done % 2000 == 0:
+                    log(f"    분류 {done}/{_ncls} ({done / _ncls * 100:.0f}%) · {time.time() - _t_cls:.0f}s")
+        # ③ 일괄 분류 — numpy 벡터화 랜덤포레스트(샘플당 파이썬 트리순회 제거)
+        for k, (lab, conf) in enumerate(_ct.classify_batch(feats)):
+            h = merged[fmi[k]]; h["type"] = lab; h["type_conf"] = round(float(conf), 3)
+        tcnt = {}
+        for h in merged:
+            tcnt[h["type"]] = tcnt.get(h["type"], 0) + 1
         log(f"  크랙 유형 분류: {tcnt} · {time.time() - _t_cls:.0f}s")
     except Exception as e:
         log(f"  (유형 분류 건너뜀: {e})")

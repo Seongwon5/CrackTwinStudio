@@ -78,23 +78,25 @@ def appearance_features(gray, uv_px):
         return None
     idx = np.linspace(1, len(uv) - 2, min(40, len(uv) - 2)).astype(int)
     ts = np.arange(-_PROF_R, _PROF_R + 1)
-    depth = []; sharp = []; fwhm = []; valint = []; bgstd = []
-    for i in idx:
-        tan = uv[min(len(uv) - 1, i + 1)] - uv[max(0, i - 1)]; nrm = np.hypot(*tan)
-        if nrm < 1e-6:
-            continue
-        tan = tan / nrm; perp = np.array([-tan[1], tan[0]])
-        pts = uv[i][None, :] + ts[:, None] * perp[None, :]
-        prof = map_coordinates(gray, [pts[:, 1], pts[:, 0]], order=1, mode="nearest")
-        c = len(prof) // 2
-        val = prof[c - 2:c + 3].min()
-        shoulder = (prof[:3].mean() + prof[-3:].mean()) / 2
-        d = shoulder - val
-        depth.append(d); valint.append(val); sharp.append(np.abs(np.diff(prof)).max())
-        fwhm.append(int((prof <= shoulder - d / 2).sum())); bgstd.append(prof.std())
-    if not depth:
+    # 모든 단면(≤40개)의 표본점을 한 번에 쌓아 map_coordinates 1회 호출로 배칭
+    # (개별 호출 40회의 함수 오버헤드가 지배적이었음 — 값은 동일)
+    tan = uv[np.minimum(len(uv) - 1, idx + 1)] - uv[np.maximum(0, idx - 1)]
+    nrm = np.hypot(tan[:, 0], tan[:, 1])
+    keep = nrm > 1e-6
+    idx = idx[keep]; tan = tan[keep] / nrm[keep][:, None]
+    if len(idx) == 0:
         return None
-    depth = np.array(depth)
+    perp = np.column_stack([-tan[:, 1], tan[:, 0]])                     # (K,2)
+    pts = uv[idx][:, None, :] + ts[None, :, None] * perp[:, None, :]    # (K,S,2)
+    prof = map_coordinates(gray, [pts[..., 1].ravel(), pts[..., 0].ravel()],
+                           order=1, mode="nearest").reshape(len(idx), len(ts))
+    c = len(ts) // 2
+    valint = prof[:, c - 2:c + 3].min(1)
+    shoulder = (prof[:, :3].mean(1) + prof[:, -3:].mean(1)) / 2
+    depth = shoulder - valint
+    sharp = np.abs(np.diff(prof, axis=1)).max(1)
+    fwhm = (prof <= (shoulder - depth / 2)[:, None]).sum(1)
+    bgstd = prof.std(1)
     return dict(ap_depth=float(np.median(depth)), ap_depth_p90=float(np.percentile(depth, 90)),
                 ap_sharp=float(np.median(sharp)), ap_fwhm=float(np.median(fwhm)),
                 ap_val=float(np.median(valint)),
@@ -148,8 +150,9 @@ def parallel_fraction(centroids, axes, near, ang_deg=PAR_ANG_DEG):
     return out
 
 
-# ---------------- 순수 파이썬 랜덤포레스트 평가 ----------------
+# ---------------- 랜덤포레스트 평가 (numpy 벡터화 · sklearn 불필요) ----------------
 _MODEL = None
+_MODEL_NP = None
 def _load():
     global _MODEL
     if _MODEL is None:
@@ -161,22 +164,56 @@ def _load():
     return _MODEL
 
 
+def _load_np():
+    """트리를 numpy 배열로 1회 변환(캐시) — 전 샘플 일괄 평가용."""
+    global _MODEL_NP
+    if _MODEL_NP is None:
+        mdl = _load()
+        if not mdl:
+            _MODEL_NP = False
+        else:
+            trees = []
+            for t in mdl["trees"]:
+                cl = np.asarray(t["cl"], np.int64); cr = np.asarray(t["cr"], np.int64)
+                fe = np.maximum(np.asarray(t["fe"], np.int64), 0)   # 리프의 -2 → 0(마스크로 미사용)
+                th = np.asarray(t["th"], float)
+                va = np.asarray(t["va"], float)
+                leafp = va / np.maximum(va.sum(1, keepdims=True), 1)
+                trees.append((cl, cr, fe, th, leafp))
+            _MODEL_NP = (mdl["classes"], trees)
+    return _MODEL_NP
+
+
+def classify_batch(X):
+    """특징 벡터 N개 → [(label, confidence)] N개. 트리별로 전 샘플을 동시에 하강(레벨 단위
+    벡터화) — 샘플당 파이썬 루프 없음. 단일 classify 를 N번 부른 것과 값 동일."""
+    mdl = _load_np()
+    n = len(X)
+    if mdl is False or n == 0:
+        return [("crack", 0.0)] * n
+    classes, trees = mdl
+    X = np.asarray(X, float)
+    prob = np.zeros((n, len(classes)), float)
+    for cl, cr, fe, th, leafp in trees:
+        nodes = np.zeros(n, np.int64)
+        while True:
+            rows = np.nonzero(cl[nodes] != -1)[0]         # 아직 리프가 아닌 샘플
+            if len(rows) == 0:
+                break
+            nn = nodes[rows]
+            left = X[rows, fe[nn]] <= th[nn]
+            nodes[rows] = np.where(left, cl[nn], cr[nn])
+        prob += leafp[nodes]
+    prob /= len(trees)
+    k = prob.argmax(1)
+    return [(classes[int(k[i])], float(prob[i, k[i]])) for i in range(n)]
+
+
 def classify(x):
     """특징 벡터 → (label, confidence). 모델/입력 없으면 ('crack', 0.0)."""
-    mdl = _load()
-    if not mdl or x is None:
+    if x is None or _load_np() is False:
         return "crack", 0.0
-    classes = mdl["classes"]
-    prob = np.zeros(len(classes), float)
-    for t in mdl["trees"]:
-        cl, cr, fe, th, va = t["cl"], t["cr"], t["fe"], t["th"], t["va"]
-        n = 0
-        while cl[n] != -1:
-            n = cl[n] if x[fe[n]] <= th[n] else cr[n]
-        v = va[n]; prob += np.array(v, float) / max(sum(v), 1)
-    prob /= len(mdl["trees"])
-    k = int(prob.argmax())
-    return classes[k], float(prob[k])
+    return classify_batch([x])[0]
 
 
 def project_to_cam(cam, P):
@@ -192,13 +229,18 @@ def project_to_cam(cam, P):
     return np.column_stack([cam["fx"] * xd + cam["cx"], cam["fy"] * yd + cam["cy"]]), ok
 
 
+def crack_features(poly, width_mm, length_mm, cam, gray, par_neigh=0.0):
+    """크랙 중심선(3D) + 대표 카메라 + grayscale → 특징 벡터(x) 또는 None.
+    분류와 분리해 두면 여러 크랙의 x 를 모아 classify_batch 로 일괄 평가할 수 있다."""
+    P = np.asarray(poly, float)
+    if len(P) < 4 or gray is None:
+        return None
+    uv, ok = project_to_cam(cam, P)
+    uv = uv[ok] * (gray.shape[1] / cam["w"])
+    return feature_vector(P, width_mm, length_mm, gray, uv, par_neigh)
+
+
 def classify_crack(poly, width_mm, length_mm, cam, gray, par_neigh=0.0):
     """크랙 중심선(3D) + 대표 카메라 + 그 카메라 grayscale (+ L2 par_neigh) → (type, conf).
     gray 는 full 이미지(≤1920) grayscale, cam.w 는 원본폭 → 스케일 보정."""
-    P = np.asarray(poly, float)
-    if len(P) < 4 or gray is None:
-        return "crack", 0.0
-    uv, ok = project_to_cam(cam, P)
-    uv = uv[ok] * (gray.shape[1] / cam["w"])
-    x = feature_vector(P, width_mm, length_mm, gray, uv, par_neigh)
-    return classify(x)
+    return classify(crack_features(poly, width_mm, length_mm, cam, gray, par_neigh))
