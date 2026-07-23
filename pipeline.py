@@ -53,6 +53,8 @@ CRACK_BATCH = 4                   # 타일 배치 크기. 처리량은 배치에
 MAX_CRACK_POINTS_PER_IMG = 30000  # 이미지당 크랙 점군 상한
 SCALE_MAP_CAP = 60000             # 스케일맵/점군용 크랙 픽셀 역투영 상한
 COS_CLAMP = 0.2                   # 경사(grazing)에서 스케일 폭주 방지 cosθ 하한
+WIDTH_CAP_PX = 60                 # 수직 폭 프로파일의 편측 최대 탐색 반경(px). 옆 크랙으로 새는 것 방지
+WIDTH_STEP_PX = 0.5               # 수직 폭 샘플 간격(px). 서브픽셀 보간 → 실효 분해능
 
 
 # ==================================================================
@@ -606,7 +608,100 @@ class CrackMetrics:
 ROI_PAD = 2      # 컴포넌트 bbox 여유. ≥1 이면 EDT·컨볼루션 경계가 전체 프레임과 동일해진다.
 
 
-def quantify_crack(mask, mm_per_px=None, min_branch_px=10, min_object_px=30, bridge_px=0):
+def _skeleton_lengths(skel, scale_map=None, scalar=1.0):
+    """스켈레톤에서 (총연장, 최장경로) 를 실척으로 반환한다.
+      · 총연장  = 모든 간선(픽셀 인접) 길이의 합 — 가지까지 포함한 '총 크랙 연장'.
+      · 최장경로 = 그래프 지름(끝-끝 최장 측지) — 분기를 왕복하지 않는 '대표 길이'.
+    scale_map(ROI 크롭)가 있으면 픽셀별 mm/px, 아니면 scalar 배율. 대각 간선은 √2 로 가중."""
+    ys, xs = np.nonzero(skel)
+    n = len(ys)
+    if n < 2:
+        return 0.0, 0.0
+    H, W = skel.shape
+    pos = -np.ones((H, W), np.int64)
+    pos[ys, xs] = np.arange(n)
+    ra, rb, rw = [], [], []
+    for (dy, dx), d in (((0, 1), 1.0), ((1, 0), 1.0), ((1, 1), SQRT2), ((1, -1), SQRT2)):
+        y2, x2 = ys + dy, xs + dx
+        ok = (y2 >= 0) & (y2 < H) & (x2 >= 0) & (x2 < W)
+        ok[ok] = skel[y2[ok], x2[ok]]                 # 양끝 모두 스켈레톤인 간선만
+        if not ok.any():
+            continue
+        ay, ax = ys[ok], xs[ok]; by, bx = y2[ok], x2[ok]
+        if scale_map is not None:
+            w = d * 0.5 * (scale_map[ay, ax] + scale_map[by, bx])
+        else:
+            w = np.full(ok.sum(), d * scalar, float)
+        ra.append(pos[ay, ax]); rb.append(pos[by, bx]); rw.append(w)
+    if not ra:
+        return 0.0, 0.0
+    a = np.concatenate(ra); b = np.concatenate(rb); w = np.concatenate(rw)
+    total = float(w.sum())
+    # 최장경로: 이중 다익스트라(트리에서 정확, 소수 루프가 있어도 좋은 근사)
+    g = csr_matrix((np.r_[w, w], (np.r_[a, b], np.r_[b, a])), shape=(n, n))
+    d0 = dijkstra(g, indices=0); d0[~np.isfinite(d0)] = -1.0
+    u = int(np.argmax(d0))
+    du = dijkstra(g, indices=u); du[~np.isfinite(du)] = -1.0
+    return total, float(max(du.max(), 0.0))
+
+
+def _perp_width_profile(ordered, field, thr, edt, cap_px, ds=WIDTH_STEP_PX):
+    """중심선 각 점에서 '접선의 수직'으로 양쪽 경계를 찾아 전체폭(px)을 잰다.
+
+    한쪽 EDT×2(내접원 지름) 방식은 중심선이 실제 중심에 있다는 보장이 없어 과소 편향이 있다.
+    여기서는 접선을 구해 그 수직선을 따라 field(확률맵)가 thr 를 지나는 지점을 양쪽에서
+    서브픽셀 보간으로 찾는다 → 중심 가정 불필요·진짜 수직·양자화 완화.
+    경계를 못 찾은 점(프레임 밖 등)은 EDT×2 로 폴백한다.
+
+    ordered: [(x,y),...] ROI 좌표 · field: ROI 크롭(확률 또는 0/1) · thr: 경계 레벨
+    edt:     각 점의 EDT 반경(px, 폴백용) · 반환: w_px(P,), bl(P,2), br(P,2) 경계점 ROI좌표"""
+    xy = np.asarray(ordered, float); P = len(xy)
+    if P == 0:
+        return np.zeros(0), np.zeros((0, 2)), np.zeros((0, 2))
+    if P < 2:
+        r = float(edt[0]); nx, ny = 0.0, 1.0
+        return (np.array([2.0 * r]),
+                np.array([[xy[0, 0] - nx * r, xy[0, 1] - ny * r]]),
+                np.array([[xy[0, 0] + nx * r, xy[0, 1] + ny * r]]))
+    tx = np.gradient(xy[:, 0]); ty = np.gradient(xy[:, 1])
+    tn = np.hypot(tx, ty); tn[tn < 1e-9] = 1.0
+    nx = -ty / tn; ny = tx / tn                        # 법선(접선의 수직)
+    offs = np.arange(-cap_px, cap_px + ds, ds)         # (S,)
+    sx = xy[:, 0][:, None] + nx[:, None] * offs[None, :]
+    sy = xy[:, 1][:, None] + ny[:, None] * offs[None, :]
+    vals = ndi.map_coordinates(field, [sy.ravel(), sx.ravel()], order=1,
+                               mode="constant", cval=0.0).reshape(P, len(offs))
+    c = int(np.argmin(np.abs(offs)))                   # 중심(offset≈0) 인덱스
+    w_px = np.empty(P); bl = np.empty((P, 2)); br = np.empty((P, 2))
+
+    def _cross(v, direction):                          # 중심에서 direction 방향 첫 thr 하향교차 offset
+        prev = c; i = c + direction
+        while 0 <= i < len(offs):
+            if v[i] < thr:
+                v0, v1 = v[prev], v[i]; den = v0 - v1
+                f = (v0 - thr) / den if den > 1e-9 else 0.0
+                return offs[prev] + f * (offs[i] - offs[prev])
+            prev = i; i += direction
+        return None
+
+    for p in range(P):
+        v = vals[p]; pc = _cross(v, +1); nc = _cross(v, -1)
+        # 편측 한도: 접선이 분기·꼬임에서 잘못 잡히면 '수직'이 크랙을 따라가 폭이 폭주한다.
+        # 각 반쪽은 그 점의 내접원 반경(EDT)의 3배+4px 를 넘을 수 없다(넘으면 폴백).
+        lim = float(edt[p]) * 3.0 + 4.0
+        if v[c] < thr or pc is None or nc is None or pc > lim or -nc > lim:   # 폴백: 내접원 지름
+            r = float(edt[p]); w_px[p] = 2.0 * r
+            bl[p] = [xy[p, 0] - nx[p] * r, xy[p, 1] - ny[p] * r]
+            br[p] = [xy[p, 0] + nx[p] * r, xy[p, 1] + ny[p] * r]
+        else:
+            w_px[p] = pc - nc
+            br[p] = [xy[p, 0] + nx[p] * pc, xy[p, 1] + ny[p] * pc]
+            bl[p] = [xy[p, 0] + nx[p] * nc, xy[p, 1] + ny[p] * nc]
+    return w_px, bl, br
+
+
+def quantify_crack(mask, mm_per_px=None, min_branch_px=10, min_object_px=30, bridge_px=0,
+                   prob=None, prob_thr=CRACK_THR):
     """이진 마스크 → 크랙 인스턴스별 길이·최대/평균 폭. mm_per_px 가 (H,W) 배열이면
     픽셀별 스케일(실척)로 mm 단위 산출, None 이면 px 단위.
 
@@ -660,36 +755,46 @@ def quantify_crack(mask, mm_per_px=None, min_branch_px=10, min_object_px=30, bri
         y0, y1 = max(0, sl[0].start - ROI_PAD), min(H, sl[0].stop + ROI_PAD)
         x0, x1 = max(0, sl[1].start - ROI_PAD), min(W, sl[1].stop + ROI_PAD)
         sub = (lbl0[y0:y1, x0:x1] == i)                       # 이 컴포넌트만
-        dist, _edt_idx = ndi.distance_transform_edt(sub, return_indices=True)  # 반경 + 최근접 배경픽셀 좌표
+        dist = ndi.distance_transform_edt(sub)                # EDT 반경(폴백·탐색반경용)
         skel = _prune_spurs(skeletonize(sub), min_branch_px)  # 중심선
         if not skel.any():
             continue
-        cy, cx = np.nonzero(skel); cw_px = dist[cy, cx] * 2.0
+        smap = scale_map[y0:y1, x0:x1] if scale_map is not None else None
+        # 길이: 총연장 + 최장경로(그래프 지름) 둘 다
         if scale_map is not None:
-            smap = scale_map[y0:y1, x0:x1]
-            cw_u = cw_px * smap[cy, cx]; L_u = _scaled_length(skel, smap)
+            L_tot, L_path = _skeleton_lengths(skel, scale_map=smap)
         elif is_mm:
-            cw_u = cw_px * scale_scalar; L_u = _skeleton_length(skel) * scale_scalar
+            L_tot, L_path = _skeleton_lengths(skel, scalar=scale_scalar)
         else:
-            cw_u = cw_px; L_u = _skeleton_length(skel)
-        total_len_u += L_u; widths_all.append(cw_u); j = int(np.argmax(cw_u))
+            L_tot, L_path = _skeleton_lengths(skel)
         _ordered = _order_skeleton(skel)                       # [(x,y),...] (크롭 좌표)
-        _cl = [[x + x0, y + y0] for (x, y) in _ordered]        # 중심선(원본 프레임 좌표)
-        # 각 중심선 점의 '가장 가까운 배경 픽셀'(EDT 특징변환). 중심점과 이 경계점을 각각 메시에
-        # 역투영해 3D 거리×2 로 폭을 재는 데 쓴다(3D 폭 프로토타입).
-        _edge = [[int(_edt_idx[1][y, x]) + x0, int(_edt_idx[0][y, x]) + y0] for (x, y) in _ordered]
-        # 폭 프로파일: 정점별 국소 폭(mm). 중심선과 같은 순서 → 3D 리본으로 표면에 얹고
-        # 통계(중앙값·p95)에 쓴다. dist·smap 모두 ROI 좌표라 (x,y) 로 직접 인덱싱.
+        if not _ordered:
+            continue
+        oa = np.array(_ordered, float); oxi = oa[:, 0].astype(int); oyi = oa[:, 1].astype(int)
+        edt_ord = dist[oyi, oxi]
+        # 폭: 중심선 접선의 '수직'으로 양쪽 경계를 확률맵 thr 레벨셋에서 서브픽셀로 찾아 전체폭.
+        # (한쪽 EDT×2 의 중심-편향 과소측정을 제거) 폴백은 EDT×2.
+        field = prob[y0:y1, x0:x1].astype(np.float32) if prob is not None else sub.astype(np.float32)
+        thr_f = float(prob_thr) if prob is not None else 0.5
+        cap = float(min(WIDTH_CAP_PX, max(6.0, float(edt_ord.max()) * 3.0 + 4.0)))
+        wpx, bl, br = _perp_width_profile(_ordered, field, thr_f, edt_ord, cap)
+        # 실척(mm) 변환 — 중심선 점의 스케일
         if scale_map is not None:
-            _wp = [float(dist[y, x] * 2.0 * smap[y, x]) for (x, y) in _ordered]
+            sc_ord = smap[oyi, oxi]
         elif is_mm:
-            _wp = [float(dist[y, x] * 2.0 * scale_scalar) for (x, y) in _ordered]
+            sc_ord = np.full(len(wpx), scale_scalar)
         else:
-            _wp = [float(dist[y, x] * 2.0) for (x, y) in _ordered]
-        instances.append(dict(id=i, length=float(L_u), max_width=float(cw_u.max()),
-                              mean_width=float(cw_u.mean()),
-                              max_width_xy=(int(cx[j] + x0), int(cy[j] + y0)),
-                              centerline=_cl, edge=_edge, width_profile=_wp))
+            sc_ord = np.ones(len(wpx))
+        wmm = wpx * sc_ord
+        _cl = [[x + x0, y + y0] for (x, y) in _ordered]        # 중심선(원본 프레임 좌표)
+        _edge_l = [[float(bl[k, 0] + x0), float(bl[k, 1] + y0)] for k in range(len(bl))]
+        _edge_r = [[float(br[k, 0] + x0), float(br[k, 1] + y0)] for k in range(len(br))]
+        _wp = [float(v) for v in wmm]                          # 폭 프로파일(mm, 중심선 순서)
+        total_len_u += L_tot; widths_all.append(wmm); j = int(np.argmax(wmm))
+        instances.append(dict(id=i, length=float(L_tot), length_path=float(L_path),
+                              max_width=float(wmm.max()), mean_width=float(wmm.mean()),
+                              max_width_xy=(int(oxi[j] + x0), int(oyi[j] + y0)),
+                              centerline=_cl, edge_l=_edge_l, edge_r=_edge_r, width_profile=_wp))
     if not instances:
         return empty
     allw = np.concatenate(widths_all)
@@ -902,7 +1007,8 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             med_depth = 1.0
         smap = build_scale_map(mask.shape, uv, locs, ray_idx, tri_idx, dirs, C, fx, mesh, med_depth / fx * 1000.0)
         met = quantify_crack(mask, mm_per_px=smap, min_branch_px=4,   # 웹 가지 보존
-                             bridge_px=CRACK_BRIDGE_PX)               # 5px 이내 끊긴 크랙 잇기
+                             bridge_px=CRACK_BRIDGE_PX,               # 5px 이내 끊긴 크랙 잇기
+                             prob=prob, prob_thr=CRACK_THR)           # 수직 폭은 확률맵 thr 레벨셋에서
         for inst in met.instances:
             px, py = inst["max_width_xy"]
             loc, _r, _t, _d = backproject(np.array([[px, py]], float), K, dist, R, C, mesh)
@@ -928,22 +1034,25 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                         if float(np.dot(nrm, C - hit[i])) < 0:     # 카메라(바깥) 쪽으로 향하게
                             nrm = -nrm
                         poly_n.append([round(float(nrm[0]), 4), round(float(nrm[1]), 4), round(float(nrm[2]), 4)])
-            # [프로토타입] 3D 폭: 중심점 C 와 최근접 경계점 B 를 각각 역투영해 |C3d-B3d|×2.
+            # 3D 폭: 좌·우 경계점을 각각 역투영해 |L3d-R3d| (한쪽×2 대칭가정 없이 양쪽 실측).
             # 경사·곡면의 이방성 foreshortening 을 실측으로 반영(2D 방식의 등방 cosθ 근사 대체).
             width_mm_3d = None
-            edge = inst.get("edge") or []
-            if cl and edge:
-                elocs, eray, _et, _ed = backproject(np.array(edge, float), K, dist, R, C, mesh)
-                ehit = {int(eray[k]): elocs[k] for k in range(len(eray))}
-                w3 = [2000.0 * float(np.linalg.norm(hit[i] - ehit[i]))   # ×2(반→전폭) ×1000(m→mm)
-                      for i in range(len(cl)) if i in hit and i in ehit]
+            el = inst.get("edge_l") or []; er = inst.get("edge_r") or []
+            if cl and el and er:
+                ll, lray, _lt, _ld = backproject(np.array(el, float), K, dist, R, C, mesh)
+                rl, rray, _rt, _rd = backproject(np.array(er, float), K, dist, R, C, mesh)
+                lhit = {int(lray[k]): ll[k] for k in range(len(lray))}
+                rhit = {int(rray[k]): rl[k] for k in range(len(rray))}
+                w3 = [1000.0 * float(np.linalg.norm(lhit[i] - rhit[i]))   # 좌↔우 전폭 ×1000(m→mm)
+                      for i in range(min(len(el), len(er))) if i in lhit and i in rhit]
                 if w3:
                     width_mm_3d = round(max(w3), 3)
             hots.append({"conf": round(conf, 3),
                          "xyz": [float(p3[0]), float(p3[1]), float(p3[2])],
                          "width_mm": round(float(inst["max_width"]), 3),
-                         "width_mm_3d": width_mm_3d,   # 프로토타입(사장님 제안 방식)
-                         "length_mm": round(float(inst["length"]), 2),
+                         "width_mm_3d": width_mm_3d,
+                         "length_mm": round(float(inst.get("length_path", inst["length"])), 2),  # 최장경로(대표)
+                         "length_total_mm": round(float(inst["length"]), 2),                     # 총연장(가지 포함)
                          "quality": round(cosq / max(z, 1e-6), 6),
                          "poly": poly, "poly_w": poly_w, "poly_n": poly_n, "source": name})
         return {"mask_png": mask_png, "crack_pts": crack_pts, "hotspots": hots}
@@ -1077,10 +1186,11 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             rep_w = best_view.get("poly_w") or []
             rep_n = best_view.get("poly_n") or []
             rp = np.asarray(rep_poly, float)
-            # 길이: 멤버 인스턴스들의 2D 골격 실척 길이(_scaled_length=length_mm) 중 최대. 골격 합산이라
-            # 조각나지 않고(그래프 방식의 프래그먼트 문제 없음) 가지 왕복 중복도 없다. 여러 뷰가 같은
-            # 크랙을 보면 각자 length_mm 를 내므로 그중 가장 온전히 본 뷰(=최대)를 대표로 쓴다.
-            L = max((m.get("length_mm", 0.0) for m in members), default=0.0)
+            # 길이: 멤버 인스턴스들의 2D 골격 실척 길이 중 최대(뷰별로 재고 최대 채택). 두 지표를 함께 산출 —
+            # length_mm=최장경로(그래프 지름, 대표 길이) · length_total_mm=총연장(가지 포함). 둘 다 뷰별
+            # 골격에서 재므로 융합 형상과 무관하고, 여러 뷰 중 가장 온전히 본 뷰(=최대)를 대표로 쓴다.
+            L = max((m.get("length_mm", 0.0) for m in members), default=0.0)          # 최장경로(대표)
+            L_tot = max((m.get("length_total_mm", 0.0) for m in members), default=0.0)  # 총연장(가지 포함)
             wv = [w for w in rep_w if w is not None]
             w_med = float(np.median(wv)) if wv else w_best
             w_p95 = float(np.percentile(wv, 95)) if wv else w_best
@@ -1090,12 +1200,14 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                 if m["source"] not in views or m["conf"] > views[m["source"]]["conf"]:
                     views[m["source"]] = {"source": m["source"], "conf": m["conf"]}
             w3_txt = f" · 3D폭 {w_max_3d:.1f}" if w_max_3d is not None else ""
-            merged.append({"text": f"크랙 폭 중앙 {w_med:.1f}mm (p95 {w_p95:.1f} · 최대 {w_max:.1f}){w3_txt} · 길이 {L:.0f}mm",
+            tot_txt = f" (총연장 {L_tot:.0f})" if L_tot > L + 0.5 else ""
+            merged.append({"text": f"크랙 폭 중앙 {w_med:.1f}mm (p95 {w_p95:.1f} · 최대 {w_max:.1f}){w3_txt} · 길이 {L:.0f}mm{tot_txt}",
                            "conf": best["conf"], "xyz": [round(float(v), 5) for v in center],
                            "width_mm": round(w_best, 3), "width_mm_max": round(w_max, 3),
                            "width_mm_median": round(w_med, 3), "width_mm_p95": round(w_p95, 3),
                            "width_mm_3d": round(w_max_3d, 3) if w_max_3d is not None else None,
-                           "length_mm": round(float(L), 2),
+                           "length_mm": round(float(L), 2),               # 최장경로(대표)
+                           "length_total_mm": round(float(L_tot), 2),      # 총연장(가지 포함)
                            "_members": member_idxs,   # 이 크랙(핫스팟)에 속한 뷰별 인스턴스 idx(리본 매핑용)
                            "views": sorted(views.values(), key=lambda v: -v["conf"])})
         merged.sort(key=lambda h: -h["width_mm_max"])
