@@ -3,40 +3,60 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>디지털 트윈 스튜디오</title>
+<title>크랙 디지털 트윈 스튜디오</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<!-- SVG 아이콘 스프라이트(뷰어와 동일 스타일: 라인 아이콘) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-cube" viewBox="0 0 24 24"><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+</svg>
+
 <header>
-  <strong>🏭 디지털 트윈 스튜디오</strong>
-  <span class="sub">이미지 분석 → 보고서(.twin) 생성 · 여러 보고서를 각각의 창으로 열기</span>
-  <button id="btnQuit" class="danger" title="프로그램을 종료합니다 (확인 후 종료)">⏻ 종료</button>
+  <span class="brand"><svg class="ic"><use href="#i-cube"/></svg>크랙 디지털 트윈 스튜디오</span>
+  <span class="sub">이미지 분석 → 보고서(.twin) 생성 · 여러 보고서를 각각의 창으로</span>
+  <button id="btnQuit" class="danger" title="프로그램을 종료합니다 (확인 후 종료)">
+    <svg class="ic"><use href="#i-power"/></svg>종료</button>
 </header>
 
 <main>
   <!-- 기능 1: 보고서 만들기 -->
   <section class="card">
-    <h2>① 보고서 만들기</h2>
+    <h2><span class="step">1</span>보고서 만들기</h2>
     <p class="desc">이미지+XMP 폴더와 3D 메시(PLY)를 <b>best.pt로 크랙 검출</b>·3D 역투영해 자체완결형 보고서를 생성합니다.</p>
-    <div class="row"><button id="btnFolder">📁 이미지+XMP 폴더</button><span id="folderLbl" class="lbl">선택 안 됨</span></div>
-    <div class="row"><button id="btnPly">🧩 PLY 메시</button><span id="plyLbl" class="lbl">선택 안 됨</span></div>
+    <div class="row">
+      <button id="btnFolder"><svg class="ic"><use href="#i-folder"/></svg>이미지+XMP 폴더</button>
+      <span id="folderLbl" class="lbl">선택 안 됨</span>
+    </div>
+    <div class="row">
+      <button id="btnPly"><svg class="ic"><use href="#i-cube"/></svg>PLY 메시</button>
+      <span id="plyLbl" class="lbl">선택 안 됨</span>
+    </div>
     <div class="row nmrow">
       <label for="reportName">보고서 이름</label>
       <input type="text" id="reportName" placeholder="예: 격납건물_1층 (비우면 폴더명 사용)" spellcheck="false">
       <span class="ext">.twin</span>
     </div>
     <label class="ck"><input type="checkbox" id="ckOcr" checked> 크랙 검출(best.pt) 수행</label>
-    <button id="btnCreate" class="primary" disabled>분석 시작 → 보고서 생성</button>
+    <button id="btnCreate" class="primary" disabled>
+      <svg class="ic"><use href="#i-play"/></svg>분석 시작 → 보고서 생성</button>
     <div id="prog" class="prog hidden"><div id="progBar"></div></div>
     <pre id="log" class="log hidden"></pre>
   </section>
 
   <!-- 기능 2: 보고서 열기 -->
   <section class="card">
-    <h2>② 보고서 열기 <span class="hint">(각각 새 창 · 동시에 여러 개)</span></h2>
+    <h2><span class="step">2</span>보고서 열기 <span class="hint">각각 새 창 · 동시에 여러 개</span></h2>
+    <p class="desc">저장된 <b>.twin</b> 보고서를 3D 뷰어로 엽니다. 파일에서 직접 열거나 아래 목록에서 선택하세요.</p>
     <div class="row">
-      <button id="btnOpenFile" class="primary">📂 보고서 파일(.twin) 열기</button>
-      <button id="btnRefresh">↻ 목록 새로고침</button>
+      <button id="btnOpenFile" class="primary"><svg class="ic"><use href="#i-open"/></svg>보고서 파일(.twin) 열기</button>
+      <button id="btnRefresh" class="ghost"><svg class="ic"><use href="#i-refresh"/></svg>목록 새로고침</button>
     </div>
     <div id="reportList" class="rlist"></div>
   </section>

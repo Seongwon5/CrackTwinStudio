@@ -91,8 +91,10 @@
       }
       d.reports.sort((a, b) => b.mtime - a.mtime).forEach((rp) => {
         const el = document.createElement("div"); el.className = "ritem";
-        el.innerHTML = `<span class="nm">${rp.name}<br><span class="meta">${rp.mb} MB · ${new Date(rp.mtime*1000).toLocaleString()}</span></span>`;
-        const b = document.createElement("button"); b.className = "primary"; b.textContent = "열기";
+        el.innerHTML = `<svg class="ic ritem-ic"><use href="#i-file"/></svg>`
+          + `<span class="nm">${rp.name}<br><span class="meta">${rp.mb} MB · ${new Date(rp.mtime*1000).toLocaleString()}</span></span>`;
+        const b = document.createElement("button"); b.className = "primary";
+        b.innerHTML = `<svg class="ic"><use href="#i-open"/></svg>열기`;
         b.onclick = () => openReport(rp.path);
         el.appendChild(b); list.appendChild(el);
       });
