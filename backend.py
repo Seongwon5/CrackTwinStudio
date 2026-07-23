@@ -193,13 +193,15 @@ def pick_file(kind):
         "if($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Out.Write($d.FileName)};$f.Dispose()")
 
 
-def render_viewer_html(twin_path):
+def render_viewer_html(twin_path, asset=None):
     """뷰어 HTML 반환. 보고서 '경로'만 주입하고 데이터는 뷰어가 API 로 가져간다.
-    (예전처럼 .twin 을 통째로 끼워넣으면 V8 문자열 한계 536.9MB 에서 터진다 — 모듈 docstring 참조)"""
+    (예전처럼 .twin 을 통째로 끼워넣으면 V8 문자열 한계 536.9MB 에서 터진다 — 모듈 docstring 참조)
+    asset: compare_twins 의 asset.json(dict) — 주면 뷰어가 검사 간 비교 모드로 뜬다."""
     twin_version(twin_path)                      # 형식 검증(이상하면 여기서 예외)
     with open(os.path.join(UI_DIR, "viewer.html"), "r", encoding="utf-8") as f:
         html = f.read()
-    return html.replace("__REPORT__", json.dumps(twin_path))   # JS 문자열 리터럴로 안전하게 이스케이프
+    html = html.replace("__REPORT__", json.dumps(twin_path))   # JS 문자열 리터럴로 안전하게 이스케이프
+    return html.replace("__ASSET__", json.dumps(asset, ensure_ascii=False) if asset else "null")
 
 
 def _run_job(job_id, folder, ply, out_path, detect):
@@ -298,6 +300,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(403, "no")
                 return self._file(p, "text/javascript; charset=utf-8" if p.endswith(".js") else "application/octet-stream")
             if r == "/viewer":
+                ap = q.get("asset", [""])[0]
+                if ap:                                    # 자산(검사 간 비교) 모드
+                    if not os.path.exists(ap):
+                        return self._send(404, "자산 파일 없음: " + ap, "text/plain; charset=utf-8")
+                    with open(ap, encoding="utf-8") as f:
+                        asset = json.load(f)
+                    tw = asset["inspections"][-1]["twin"]  # 최신 검사를 본체로, 이전은 고스트
+                    if not os.path.exists(tw):
+                        return self._send(404, "보고서 파일 없음: " + tw, "text/plain; charset=utf-8")
+                    return self._send(200, render_viewer_html(tw, asset=asset), "text/html; charset=utf-8")
                 tw = q.get("report", [""])[0]
                 if not tw or not os.path.exists(tw):
                     return self._send(404, "보고서 파일 없음: " + tw, "text/plain; charset=utf-8")

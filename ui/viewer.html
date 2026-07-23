@@ -463,6 +463,7 @@ function lookToward(fromV, toV){                  // 한 점을 바라보도록 
 //   · 메시(GB 급)          → ArrayBuffer 로 fetch (문자열 한계와 무관. 1.6GB 도 실측 확인)
 //   · 이미지               → <img src=API> 로 지연 로드 (브라우저가 캐시/해제를 관리)
 const REPORT = __REPORT__;
+const ASSET = __ASSET__;          // 자산(검사 간 비교) 모드: compare_twins 의 asset.json. null=일반 뷰
 const _q = encodeURIComponent(REPORT);
 const api = (kind, extra = '') => `/api/report/${kind}?p=${_q}${extra}`;
 const imgUrl = (cam, kind) => api('img', `&id=${cam.id}&kind=${kind}`);
@@ -660,6 +661,8 @@ const TYPE_COLOR={crack:'#d0a000',joint:'#e05050',craze:'#3aaf5a',blob:'#b98cff'
 function hotType(hot){ const h=(hot>=0?DATA.hotspots[hot]:null); const t=h&&h.type; return CRACK_TYPES.indexOf(t)>=0?t:'crack'; }
 const ribGeoByType={}; CRACK_TYPES.forEach(t=>ribGeoByType[t]={pos:[],col:[],idx:[],vbase:0});
 const ribType=[];                                    // ri → 유형
+const ribHot=[];                                     // ri → 핫스팟 인덱스(비교 모드 상태색용)
+const ribVRange=[];                                  // ri → [{t,v0,v1}] 병합 버퍼 정점 범위(재도색용)
 const ribRuns = [];                                  // ri → [{pts,rr}] 하이라이트 오버레이 재생성용
 function tubeInto(G, pts, radii, radialSeg, color){  // variableTube 와 동일 기하를 유형별 버퍼 G 에 축적
   const N=pts.length;
@@ -698,12 +701,14 @@ function buildRibbon(h, i){
   const type=hotType(hot); ribType[i]=type; const G=ribGeoByType[type];   // 유형별 버퍼로 라우팅
   // 크랙 형상 색 = 심각도(상대 순위 색) — 정점색으로 병합 버퍼에 굽는다.
   const base=(hot>=0 ? rankColor(rankFrac(hot)) : new THREE.Color(RIBBON_COLOR));
-  ribbonBase[i]=base.getHex();
+  ribbonBase[i]=base.getHex(); ribHot[i]=hot;
   if(hot>=0){ (ribsByHot[hot]=ribsByHot[hot]||[]).push(i); }        // 핫스팟→리본 역매핑
   let run=[], rr=[]; const hitPts=[]; const runs=[];
   const flush=()=>{
     if(run.length>=2){
+      const _v0=G.vbase;
       tubeInto(G, run, rr, RIBBON_RADIAL, base);
+      (ribVRange[i]=ribVRange[i]||[]).push({t:type, v0:_v0, v1:G.vbase});
       runs.push({pts:run, rr});                                      // 오버레이용 원본 경로 보존
       for(let j=1;j<run.length;j++){ const a=run[j-1],b=run[j]; hitPts.push(a.x,a.y,a.z,b.x,b.y,b.z); }  // 히트박스용 중심선 세그먼트
     }
@@ -751,9 +756,17 @@ function makeReticleTex(){
 }
 const reticleTex=makeReticleTex();
 // 태그 내용: 폭·길이 (두 줄)
-function fmtWL(h){                                  // 말풍선(호버): 평균 폭 + 길이(최대·p95 는 클릭 시)
+function cmpLine(i){                                // 비교 모드: 상태 + Δ폭 한 줄(html)
+  if(!CMP || i==null || i<0) return '';
+  const st=CMP.stByHot[i]; if(!st) return '';
+  const d=CMP.dlByHot[i];
+  let s='<span style="color:'+CMP_COLOR[st]+';font-weight:600">'+CMP_LABEL[st]+'</span>';
+  if(d && d.dw!=null) s+=' Δ폭 '+(d.dw>0?'+':'')+cmm(d.dw).toFixed(2)+'mm';
+  return '<br>'+s;
+}
+function fmtWL(h, i){                               // 말풍선(호버): 평균 폭 + 길이(최대·p95 는 클릭 시)
   const w=cmm(h.width_mm_median!=null?h.width_mm_median:(h.width_mm_max!=null?h.width_mm_max:h.width_mm));
-  return '평균 폭 '+(w!=null?Number(w).toFixed(2):'?')+'mm<br>'+fmtLen(h);
+  return '평균 폭 '+(w!=null?Number(w).toFixed(2):'?')+'mm<br>'+fmtLen(h)+cmpLine(i);
 }
 // 크랙 정보는 '말풍선(mm 태그)'로만 — 다이아몬드 레티클은 제거(겹치고 클릭 혼란). 리본이 전체
 // 지도를 담당하고, 크랙을 호버/선택하면 그 크랙의 말풍선(폭·길이)이 뜬다. 색은 상대 심각도.
@@ -774,7 +787,7 @@ function ensureMarkerEl(i){
   const col=rankColor(rankFrac(i));               // 상대 심각도 색(빨강=상위 … 초록=하위)
   const rgb='rgb('+Math.round(col.r*255)+','+Math.round(col.g*255)+','+Math.round(col.b*255)+')';
   const el=document.createElement('div'); el.className='hud-marker'; el.style.setProperty('--sev',rgb);
-  el.innerHTML='<div class="leader"></div><div class="tag">'+fmtWL(m.h)+'</div>';
+  el.innerHTML='<div class="leader"></div><div class="tag">'+fmtWL(m.h, m.i)+'</div>';
   el.addEventListener('mouseenter',()=>{ hoverTag=i; });
   el.addEventListener('mouseleave',()=>{ if(hoverTag===i) hoverTag=-1; });
   // 말풍선 위에서 시작하는 좌드래그도 시점 회전이 되도록 캔버스 드래그를 시작시킨다.
@@ -841,6 +854,117 @@ function _syncTypeChips(){
     _syncTypeChips(); applyTypeFilter();
   };
   _syncTypeChips();
+})();
+
+// ===== 비교(자산) 모드: 검사 간 상태색 · 이전 검사 고스트 · Δ표시 =====
+// 원칙(도구와 동일): 위치는 신원, 측정은 상태. 상태색은 compare_twins 의 판정을 그대로 그린다.
+const CMP = (function(){
+  if(!ASSET || !ASSET.cracks) return null;
+  const insp = ASSET.inspections;
+  const curId = insp[insp.length-1].id, prevId = insp[insp.length-2].id;
+  const stByHot={}, dlByHot={}, histByHot={};        // 현재(.twin=DATA) 핫스팟 기준
+  const missingPrev=[];                              // 이전 검사에만 있는(미검출) 이전핫 목록
+  for(const c of ASSET.cracks){
+    for(const bi of (c.matches[curId]||[])){
+      stByHot[bi]=c.status; dlByHot[bi]=c.delta||null; histByHot[bi]=c.history||null;
+    }
+    if(c.status==='missing') missingPrev.push(...(c.matches[prevId]||[]));
+  }
+  return {curId, prevId, insp, stByHot, dlByHot, histByHot, missingPrev};
+})();
+const CMP_COLOR={new:'#e0574e', grown:'#ffb454', stable:'#64788a', shrunk:'#3fbf7f', missing:'#4a9fe0'};
+const CMP_LABEL={new:'신규', grown:'성장', stable:'불변', shrunk:'감소?', missing:'미검출'};
+const CMP_DIM=new THREE.Color('#232d36');
+let cmpColorOn = !!CMP;                              // 자산 모드면 기본 상태색
+const cmpEmph={new:true, grown:true, stable:true, shrunk:true};
+function cmpStatus(hot){ return (CMP && CMP.stByHot[hot]) || 'stable'; }
+function repaintRibbons(){
+  // 병합 버퍼의 정점색을 리본 단위로 다시 굽는다: 비교 모드=상태색(강조 해제 시 어둡게), 아니면 심각도색.
+  const attr={}; for(const t of CRACK_TYPES){ if(ribMeshByType[t]) attr[t]=ribMeshByType[t].geometry.getAttribute('color'); }
+  const c=new THREE.Color();
+  for(let ri=0; ri<ribVRange.length; ri++){
+    const ranges=ribVRange[ri]; if(!ranges) continue;
+    if(cmpColorOn && CMP){
+      const st=cmpStatus(ribHot[ri]);
+      c.copy(cmpEmph[st]===false ? CMP_DIM : new THREE.Color(CMP_COLOR[st]||CMP_COLOR.stable));
+    } else c.setHex(ribbonBase[ri]);
+    for(const rg of ranges){
+      const a=attr[rg.t]; if(!a) continue;
+      for(let v=rg.v0; v<rg.v1; v++){ a.setXYZ(v, c.r, c.g, c.b); }
+    }
+  }
+  for(const t of CRACK_TYPES){ if(attr[t]) attr[t].needsUpdate=true; }
+}
+// 이전 검사 고스트: 이전 meta 의 리본 중심선을 현재 좌표계로 변환해 라인으로 겹쳐 그린다.
+// 매칭된 것=은은한 파랑(맥락) · 미검출=밝은 파랑(주목: '지난번엔 여기 있었다').
+const ghostGroup=new THREE.Group(); scene.add(ghostGroup); ghostGroup.visible=false;
+let ghostMissing=null, ghostMatched=null, _ghostLoaded=false;
+async function loadGhost(){
+  if(_ghostLoaded || !CMP) return; _ghostLoaded=true;
+  try{
+    const prev = CMP.insp[CMP.insp.length-2];
+    const cur  = CMP.insp[CMP.insp.length-1];
+    const meta = await _fetch('/api/report/meta?p='+encodeURIComponent(prev.twin), 'json');
+    const Tp=new THREE.Matrix4().fromArray([].concat(...prev.T_to_ref)).transpose();  // 행우선→Matrix4
+    const Tc=new THREE.Matrix4().fromArray([].concat(...cur.T_to_ref)).transpose();
+    const M=new THREE.Matrix4().copy(Tc).invert().multiply(Tp);   // 이전좌표 → 현재좌표
+    const missSet=new Set(CMP.missingPrev);
+    const segMiss=[], segMatch=[]; const v=new THREE.Vector3();
+    const rbs = meta.ribbons || (meta.hotspots||[]).filter(h=>h.poly);
+    rbs.forEach(rb=>{
+      const arr=(missSet.has(rb.hot) ? segMiss : segMatch);
+      const poly=rb.poly||[];
+      let prevP=null;
+      for(const p of poly){
+        v.set(p[0],p[1],p[2]).applyMatrix4(M);
+        if(prevP) arr.push(prevP.x,prevP.y,prevP.z, v.x,v.y,v.z);
+        prevP=v.clone();
+      }
+    });
+    const mk=(seg,color,op)=>{ if(!seg.length) return null;
+      const g=new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(seg,3));
+      const l=new THREE.LineSegments(g, new THREE.LineBasicMaterial({color, transparent:true, opacity:op, depthWrite:false}));
+      l.matrixAutoUpdate=false; ghostGroup.add(l); return l; };
+    ghostMatched=mk(segMatch, 0x3a6a9a, 0.35);
+    ghostMissing=mk(segMiss, 0x4a9fe0, 0.9);
+  }catch(e){ console.warn('고스트 로드 실패:', e); }
+}
+// 상단 바 UI: 상태 칩(강조 토글) + 미검출(고스트) + 이전 검사 고스트 체크
+(function buildCompareUI(){
+  if(!CMP) return;
+  const box=document.getElementById('typeChips');
+  const sep=document.createElement('span');
+  sep.style.cssText='border-left:1px solid var(--line-2);align-self:stretch;margin:6px 4px;';
+  box.appendChild(sep);
+  const lb=document.createElement('span'); lb.className='lb';
+  lb.textContent=`비교 ${CMP.prevId}→${CMP.curId}`; box.appendChild(lb);
+  const cnt={new:0,grown:0,stable:0,shrunk:0};
+  DATA.hotspots.forEach((h,i)=>{ const s=cmpStatus(i); if(cnt[s]!=null) cnt[s]++; });
+  for(const st of ['new','grown','stable','shrunk']){
+    const el=document.createElement('span'); el.className='tychip2 on'; el.style.color=CMP_COLOR[st];
+    el.innerHTML='<span class="dot" style="background:'+CMP_COLOR[st]+'"></span>'+CMP_LABEL[st]
+      +' <span class="cnt">'+cnt[st].toLocaleString()+'</span>';
+    el.onclick=()=>{ cmpEmph[st]=!cmpEmph[st]; el.classList.toggle('on',cmpEmph[st]); el.classList.toggle('off',!cmpEmph[st]); repaintRibbons(); };
+    box.appendChild(el);
+  }
+  const miss=document.createElement('span'); miss.className='tychip2 off'; miss.style.color=CMP_COLOR.missing;
+  miss.innerHTML='<span class="dot" style="background:'+CMP_COLOR.missing+'"></span>미검출 <span class="cnt">'
+    +CMP.missingPrev.length.toLocaleString()+'</span>';
+  miss.title='이전 검사에만 있던 균열(고스트로 표시) — 보수/미관측 여부는 검사원 판단';
+  miss.onclick=async ()=>{ await loadGhost();
+    const on=!ghostGroup.visible; ghostGroup.visible=on;
+    if(ghostMatched) ghostMatched.visible=false;          // 칩 단독은 '미검출만'
+    miss.classList.toggle('on',on); miss.classList.toggle('off',!on); };
+  box.appendChild(miss);
+  const gl=document.createElement('label'); gl.className='lb'; gl.style.cursor='pointer';
+  gl.innerHTML='<input type="checkbox" id="ckGhost" style="accent-color:var(--accent);margin:0 4px 0 6px"> 이전 전체 고스트';
+  box.appendChild(gl);
+  gl.querySelector('input').onchange=async e=>{ await loadGhost();
+    ghostGroup.visible=e.target.checked || ghostGroup.visible;
+    if(ghostMatched) ghostMatched.visible=e.target.checked;
+    if(!e.target.checked && !miss.classList.contains('on')) ghostGroup.visible=false; };
+  repaintRibbons();                                       // 초기: 상태색
 })();
 // 호버/선택 하이라이트: 그 크랙의 리본만 흰 튜브로 위에 겹쳐 그린다(병합 버퍼는 불변).
 const hlGroup=new THREE.Group(); ribbonGroup.add(hlGroup);
@@ -1266,11 +1390,18 @@ function showHotspotRep(h){
   document.getElementById('imgReset').style.display='inline-block';
   // 클릭 시엔 평균 폭 + p95·최대(상세) + 크랙 총 길이 모두 표시 (캘리브레이션 반영)
   const f=(x,d=1)=>(x!=null?Number(cmm(x)).toFixed(d):'?');
-  const wtxt = (h.width_mm_median!=null)
+  const _hi = DATA.hotspots.indexOf(h);
+  let _cmp='';
+  if(CMP && _hi>=0 && CMP.histByHot[_hi]){            // 검사 이력: 이전→현재 측정치
+    const H=CMP.histByHot[_hi], p=H[CMP.prevId], c=H[CMP.curId];
+    if(p && c) _cmp = ` · 이력 ${CMP.prevId} 폭 ${cmm(p.w).toFixed(2)}·길이 ${Math.round(cmm(p.L))}`
+                    + ` → ${CMP.curId} 폭 ${cmm(c.w).toFixed(2)}·길이 ${Math.round(cmm(c.L))}`;
+  }
+  const wtxt = ((h.width_mm_median!=null)
     ? `크랙 평균 폭 ${f(h.width_mm_median)}mm (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
       + (h.width_mm_3d!=null?` · 3D폭 ${f(h.width_mm_3d)}`:'')
       + ` · ${fmtLen(h)}`
-    : (h.text||'크랙');
+    : (h.text||'크랙')) + cmpLine(_hi) + _cmp;
   document.getElementById('imgHot').innerHTML =
     '▶ '+wtxt+'<br><span style="color:#888">X '+h.xyz[0].toFixed(2)+'  Y '+h.xyz[1].toFixed(2)+'  Z '+h.xyz[2].toFixed(2)+'</span>';
   const items=document.getElementById('imgItems'); items.innerHTML='';
