@@ -99,6 +99,11 @@
   #imglist .reset{font-size:var(--fs-cap);background:var(--surface-3);border:1px solid var(--line-2);color:var(--tx-2);border-radius:var(--r-sm);padding:4px 9px;cursor:pointer;font-family:inherit;}
   #imglist .reset:hover{background:#222d37;border-color:var(--accent);color:var(--accent);}
   #imgHot{font-size:var(--fs-cap);color:var(--tx-2);margin:8px 0;line-height:1.55;}
+  .revbtn{background:transparent;border:1px solid var(--line-2);color:var(--tx-2);border-radius:4px;
+    padding:3px 9px;cursor:pointer;font-size:var(--fs-cap);font-family:inherit;}
+  .revbtn:hover{background:var(--surface-3);}
+  .revsel{background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);border-radius:4px;
+    padding:3px 6px;font-size:var(--fs-cap);font-family:inherit;}
   #imgItems{overflow-y:auto;flex:1;margin-top:6px;}
   .imgItem{display:flex;gap:9px;align-items:center;padding:6px;border-radius:var(--r-sm);cursor:pointer;border:1px solid transparent;margin-bottom:3px;transition:background .1s;}
   .imgItem:hover{background:var(--surface-3);border-color:var(--line-2);}
@@ -321,6 +326,7 @@
       길이≥ <input id="clMinL" type="number" min="0" step="any" placeholder="mm">
       <button id="clCsv"><svg class="ic"><use href="#i-download"/></svg>CSV</button>
       <button id="clCopy"><svg class="ic"><use href="#i-copy"/></svg>복사</button>
+      <span id="revProg" style="color:var(--tx-3);font-size:var(--fs-cap);margin-left:auto;white-space:nowrap;"></span>
     </div>
     <div id="clHead"><span>ID</span><span>유형</span><span>등급</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
     <div id="clRows"></div>
@@ -495,6 +501,28 @@ try {
 }
 document.getElementById('hdrCounts').textContent =
   `분석 이미지: ${DATA.counts.cameras}장 · 검출 포인트: ${DATA.counts.hotspots}개`;
+
+// ===== 검사원 검토(확인/유형수정/오탐) — 사이드카(<twin>.review.json) 영속 =====
+// 유형 수정은 리본 생성 '전'에 DATA 에 적용해 3D 색·필터·목록이 모두 일치하게 한다.
+let REVIEW = {version:1, reviews:{}};
+try{ REVIEW = await _fetch('/api/review?p='+_q, 'json'); }catch(e){}
+DATA.hotspots.forEach(h=>{ h._ai_type = h.type; });   // AI 원판정 보존(검토 해제 시 복원용)
+for(const [k,v] of Object.entries(REVIEW.reviews||{})){
+  const h = DATA.hotspots[+k];
+  if(h && v.type) h.type = v.type;                 // 검사원 수정 유형이 AI 판정을 덮는다
+}
+function revOf(i){ return (REVIEW.reviews||{})[String(i)] || null; }
+async function saveReview(i, patch){
+  const r = await fetch('/api/review', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(Object.assign({p: REPORT, idx: i}, patch))});
+  const d = await r.json();
+  if(d.error){ alert('검토 저장 실패: '+d.error); return null; }
+  if(patch.state==='clear') delete REVIEW.reviews[String(i)];
+  else REVIEW.reviews[String(i)] = d.review;
+  return d.review;
+}
+const REV_LABEL={confirmed:'확인됨', rejected:'오탐', edited:'수정됨'};
+const REV_COLOR={confirmed:'#3fbf7f', rejected:'#e0574e', edited:'#ffb454'};
 
 // ===== 스케일 캘리브레이션: 기준 거리(실측)로 모든 mm 수치를 보정하는 전역 계수 =====
 // 파이프라인의 mm 는 전부 '메시 1단위=1m' 전제에서 나온 선형량 → 한 계수로 일괄 보정 가능.
@@ -1437,6 +1465,69 @@ function makeCrop(container, cam, u, v, cropFrac){
 }
 
 // 핫스팟 클릭 → 대표 크랙 이미지를 크게(확대) 보여준다.
+// ---- 검토 UI: 상세 패널의 확인/오탐/유형수정/메모 행 ----
+function buildReviewRow(i){
+  if(i==null || i<0) return '';
+  const rv=revOf(i); const st=rv&&rv.state;
+  const badge = st
+    ? '<span style="color:'+REV_COLOR[st]+';font-weight:600">'+REV_LABEL[st]+'</span>'
+      +(rv.at?' <span style="color:var(--tx-3)">'+rv.at.replace('T',' ')+'</span>':'')
+    : '<span style="color:var(--tx-3)">미검토</span>';
+  const typeSel = '<select id="revType" class="revsel">'
+    + '<option value="">유형: AI 판정 유지</option>'
+    + CRACK_TYPES.map(t=>'<option value="'+t+'"'+((rv&&rv.type)===t?' selected':'')+'>유형→ '+TYPE_LABEL[t]+'</option>').join('')
+    + '</select>';
+  return '<div id="revRow" style="margin-top:9px;padding:8px 10px;background:var(--surface-2);'
+    +'border:1px solid var(--line);border-radius:var(--r-sm);">'
+    +'<span style="color:var(--tx-3)">검사원 검토</span> · '+badge
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:7px;">'
+    +'<button id="revOk" class="revbtn" style="color:#3fbf7f;border-color:#3fbf7f">✓ 확인</button>'
+    +'<button id="revNo" class="revbtn" style="color:#e0574e;border-color:#e0574e">✗ 오탐</button>'
+    + typeSel
+    +(st?'<button id="revClear" class="revbtn">해제</button>':'')
+    +'</div>'
+    +'<input id="revNote" placeholder="메모 (Enter 로 저장)" value="'+String((rv&&rv.note)||'').replace(/"/g,'&quot;')+'"'
+    +' style="margin-top:7px;width:100%;background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);'
+    +'border-radius:4px;padding:5px 8px;font-size:var(--fs-cap);font-family:inherit;box-sizing:border-box;">'
+    +'</div>';
+}
+function recomputeTypeCounts(){
+  for(const t of CRACK_TYPES) _typeCount[t]=0;
+  DATA.hotspots.forEach((h,i)=>{ _typeCount[hotType(i)]++; });
+  for(const t of CRACK_TYPES){
+    const el=_typeChipEl[t] && _typeChipEl[t].querySelector('.cnt');
+    if(el) el.textContent=_typeCount[t].toLocaleString();
+  }
+}
+function updateRevProg(){
+  const el=document.getElementById('revProg'); if(!el) return;
+  const n=Object.keys(REVIEW.reviews||{}).length;
+  el.textContent='검토 '+n.toLocaleString()+'/'+DATA.hotspots.length.toLocaleString();
+}
+function _revRefresh(i, h){
+  showHotspotRep(h); updateRevProg();
+  if(typeof clRefresh==='function' && document.getElementById('cracklist').style.display==='flex') clRefresh();
+}
+function wireReviewRow(i, h){
+  if(i==null || i<0) return;
+  const g=id=>document.getElementById(id);
+  if(g('revOk'))    g('revOk').onclick    = async()=>{ await saveReview(i,{state:'confirmed'}); _revRefresh(i,h); };
+  if(g('revNo'))    g('revNo').onclick    = async()=>{ await saveReview(i,{state:'rejected'}); _revRefresh(i,h); };
+  if(g('revClear')) g('revClear').onclick = async()=>{ await saveReview(i,{state:'clear'});
+                                                       h.type=h._ai_type; recomputeTypeCounts(); _revRefresh(i,h); };
+  if(g('revType'))  g('revType').onchange = async e=>{
+    const t=e.target.value;
+    const keep=(revOf(i)&&revOf(i).state)==='confirmed' ? 'confirmed' : 'edited';
+    await saveReview(i, t?{type:t, state:keep}:{type:'', state:keep});
+    h.type = t || h._ai_type;                        // 라이브: 목록·칩·필터 즉시 / 3D 리본 색은 재로드 시
+    recomputeTypeCounts(); _revRefresh(i,h);
+  };
+  if(g('revNote'))  g('revNote').onkeydown = async e=>{
+    if(e.key!=='Enter') return;
+    const keep=(revOf(i)&&revOf(i).state)||'edited';
+    await saveReview(i,{note:e.target.value, state:keep}); _revRefresh(i,h);
+  };
+}
 function showHotspotRep(h){
   document.getElementById('imgTitle').textContent='대표 크랙 이미지';
   document.getElementById('imgReset').style.display='inline-block';
@@ -1461,7 +1552,9 @@ function showHotspotRep(h){
       + ` · ${fmtLen(h)}`
     : (h.text||'크랙')) + _gr + cmpLine(_hi) + _cmp;
   document.getElementById('imgHot').innerHTML =
-    '▶ '+wtxt+'<br><span style="color:#888">X '+h.xyz[0].toFixed(2)+'  Y '+h.xyz[1].toFixed(2)+'  Z '+h.xyz[2].toFixed(2)+'</span>';
+    '▶ '+wtxt+'<br><span style="color:#888">X '+h.xyz[0].toFixed(2)+'  Y '+h.xyz[1].toFixed(2)+'  Z '+h.xyz[2].toFixed(2)+'</span>'
+    + buildReviewRow(_hi);
+  wireReviewRow(_hi, h);
   const items=document.getElementById('imgItems'); items.innerHTML='';
   const rep=pickRepView(h);
   if(!rep){ items.innerHTML='<div style="color:#888;padding:8px">대표 이미지를 찾지 못했습니다.</div>'; return; }
@@ -2093,7 +2186,10 @@ function clRow(i,h){
   const g=gradeOf(h), r_=relOf(h);
   const gTitle=g?(' title="등급 '+g+' '+GRADE_LABEL[g]+' · 신뢰 '+r_
     +(relWhy(h).length?'('+relWhy(h).map(k=>REL_WHY[k]||k).join('·')+')':'')+'"'):'';
-  el.innerHTML='<span><span class="sevchip" style="background:'+rgb+'"></span>C-'+String(i+1).padStart(4,'0')+'</span>'
+  const rv=revOf(i);
+  const rvMark=rv&&rv.state?'<span style="color:'+REV_COLOR[rv.state]+'" title="'+REV_LABEL[rv.state]+'"> '
+    +({confirmed:'✓',rejected:'✗',edited:'△'})[rv.state]+'</span>':'';
+  el.innerHTML='<span><span class="sevchip" style="background:'+rgb+'"></span>C-'+String(i+1).padStart(4,'0')+rvMark+'</span>'
     +'<span><span class="tychip" style="color:'+TYPE_COLOR[ty]+'">'+TYPE_LABEL[ty].slice(0,2)+'</span></span>'
     +'<span'+gTitle+' style="color:'+(g?GRADE_COLOR[g]:'inherit')+';font-weight:600">'+(g||'?')
       +(r_==='C'?'<span style="color:'+REL_COLOR.C+'">!</span>':'')+'</span>'
@@ -2118,6 +2214,7 @@ function clRefresh(){
   clFilterSort(); clRowsEl.innerHTML=''; clShown=0; clRenderMore();
   document.getElementById('clCount').textContent =
     '('+clData.length.toLocaleString()+' / '+DATA.hotspots.length.toLocaleString()+')';
+  updateRevProg();
 }
 clRowsEl.addEventListener('scroll',()=>{
   if(clRowsEl.scrollTop+clRowsEl.clientHeight > clRowsEl.scrollHeight-200 && clShown<clData.length) clRenderMore();
@@ -2198,12 +2295,15 @@ function flyToCrack(i){
 // CSV: 현재 필터·정렬 결과를 그대로(보정된 mm) — Excel 한글 호환 BOM 포함
 function clCsvText(){
   const fx=v=>v==null?'':(Math.round(v*1000)/1000);
-  const head=['id','grade','reliability','rel_reasons','width_mm_median','width_mm_max','width_mm_p95','width_mm_3d','length_mm','length_total_mm',
+  const head=['id','grade','reliability','rel_reasons','review','review_type','review_note',
+              'width_mm_median','width_mm_max','width_mm_p95','width_mm_3d','length_mm','length_total_mm',
               'views','conf','x','y','z','calib_scale','sources'];
   const lines=[head.join(',')];
   for(const [i,h] of clData){
+    const _rv=revOf(i)||{};
     lines.push(['C-'+String(i+1).padStart(4,'0'),
       gradeOf(h)||'', relOf(h)||'', '"'+relWhy(h).join('|')+'"',
+      _rv.state||'', _rv.type||'', '"'+String(_rv.note||'').replace(/"/g,'""')+'"',
       fx(cmm(h.width_mm_median)), fx(cmm(h.width_mm_max)), fx(cmm(h.width_mm_p95)), fx(cmm(h.width_mm_3d)),
       fx(cmm(h.length_mm)), fx(ltot(h)), (h.views||[]).length, h.conf??'',
       h.xyz[0], h.xyz[1], h.xyz[2], calibScale,

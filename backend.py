@@ -365,6 +365,14 @@ class Handler(BaseHTTPRequestHandler):
                             items.append({"name": f, "path": fp, "mb": round(os.path.getsize(fp) / 1e6, 1),
                                           "mtime": os.path.getmtime(fp)})
                 return self._json({"reports": items})
+            if r == "/api/review":
+                # 검토 사이드카(<twin>.review.json) 조회 — .twin(GB급)은 절대 재작성하지 않는다
+                p = self._twin_arg(q)
+                if p is None: return
+                rp2 = p + ".review.json"
+                if os.path.exists(rp2):
+                    return self._file(rp2, "application/json; charset=utf-8")
+                return self._json({"version": 1, "reviews": {}})
             if r == "/api/assets":
                 items = []
                 if os.path.isdir(REPORTS_DIR):
@@ -393,6 +401,41 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         rp = urllib.parse.urlparse(self.path).path
+        if rp == "/api/review":
+            # 검토 저장: {p, idx, state?, type?, note?} — state="clear" 는 해당 균열 검토 삭제.
+            # 사이드카에 원자적(tmp→replace) 기록. 이 파일이 곧 분류기 재학습 라벨의 축적처다.
+            try:
+                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+                p = d.get("p", "")
+                if not p or not os.path.exists(p):
+                    return self._json({"error": "보고서 없음"}, 400)
+                idx = str(int(d["idx"]))
+                rp2 = p + ".review.json"
+                data = {"version": 1, "reviews": {}}
+                if os.path.exists(rp2):
+                    with open(rp2, encoding="utf-8") as f:
+                        data = json.load(f)
+                if d.get("state") == "clear":
+                    data["reviews"].pop(idx, None); ent = None
+                else:
+                    import datetime
+                    ent = data["reviews"].get(idx, {})
+                    for k in ("state", "type", "note"):
+                        if k in d:
+                            if d[k] in (None, ""):
+                                ent.pop(k, None)
+                            else:
+                                ent[k] = d[k]
+                    ent["at"] = datetime.datetime.now().isoformat(timespec="seconds")
+                    data["reviews"][idx] = ent
+                tmp = rp2 + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=1)
+                os.replace(tmp, rp2)
+                return self._json({"ok": True, "review": ent})
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                return self._json({"error": str(e)}, 500)
         if rp == "/api/compare":
             try:
                 d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
