@@ -1222,7 +1222,10 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             views = {}
             for m in members:
                 if m["source"] not in views or m["conf"] > views[m["source"]]["conf"]:
-                    views[m["source"]] = {"source": m["source"], "conf": m["conf"]}
+                    # 뷰별 측정치(w/L)도 보관 — 시계열 비교의 '측정 노이즈 바닥'(뷰 간 산포) 추정용
+                    views[m["source"]] = {"source": m["source"], "conf": m["conf"],
+                                          "w": round(float(m["width_mm"]), 3),
+                                          "L": round(float(m.get("length_mm", 0.0)), 1)}
             w3_txt = f" · 3D폭 {w_max_3d:.1f}" if w_max_3d is not None else ""
             tot_txt = f" (총연장 {L_tot:.0f})" if L_tot > L + 0.5 else ""
             merged.append({"text": f"크랙 폭 중앙 {w_med:.1f}mm (p95 {w_p95:.1f} · 최대 {w_max:.1f}){w3_txt} · 길이 {L:.0f}mm{tot_txt}",
