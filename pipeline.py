@@ -59,26 +59,25 @@ WIDTH_STEP_PX = 0.5               # 수직 폭 샘플 간격(px). 서브픽셀 �
 # A(허용) < 0.3 ≤ B(관찰) < 0.5 ≤ C(보수 검토) < 1.0 ≤ D(보수 필요). p95 폭 기준(단일픽셀
 # 최대의 노이즈와 중앙값의 국소확폭 둔감을 절충한 보수적 대표값). 임계값은 meta 에 기록해
 # 추적 가능하게 하고, 뷰어는 캘리브레이션 보정 mm 로 실시간 재계산한다.
-GRADE_T_MM = (0.3, 0.5, 1.0)
-# ---- 심각도 등급(절대 기준) — 폭 0.5~10mm 를 로그 스케일 5등급으로 ----
-# 균열 위험도는 폭에 선형이 아니라 배수로 커진다 → 등급당 일정 배수(1.82배)가 물리적으로 타당하다.
-# 예전의 '길이×폭 상대 순위'는 보고서마다 색이 바뀌어 시점 간 비교가 불가능했다(절대 기준으로 교체).
-# 경계는 이론값(0.50/0.91/1.66/3.02/5.49/10.0)을 외우기 쉽게 라운딩 — 실제 배수 1.76~1.89 로 균일.
-SEV_MIN_MM, SEV_MAX_MM = 0.5, 10.0
-SEV_BOUNDS_MM = (0.9, 1.7, 3.0, 5.5)      # G1|G2|G3|G4|G5 내부 경계
-SEV_LABELS = ("G1", "G2", "G3", "G4", "G5")
+# ---- 심각도(절대 폭 기준, 단일 체계) ----
+# 예전엔 '심각도(상대 순위)'와 '판정 등급 A~D'가 따로 있어 화면에 기준이 둘이었다 → 하나로 통일.
+# 경계(mm): 0.5 / 1 / 3 / 5 / 10.  10mm 초과는 콘크리트 균열로는 비현실적이라 '특이값'으로 분리해
+# 측정 오류(실척 미보정·경사 폭주)를 눈에 띄게 한다.
+SEV_BOUNDS_MM = (0.5, 1.0, 3.0, 5.0, 10.0)
+SEV_LABELS = ("S1", "S2", "S3", "S4", "S5", "S6")
+SEV_NAMES = ("경미", "관찰", "보통", "심각", "매우 심각", "특이값")
 
 
 def severity_of(w_mm):
-    """대표 폭(mm) → 심각도 등급. 하한 미만은 'G0'(기록 대상 외), 상한 초과는 G5 로 클램프."""
+    """대표 폭(mm) → 심각도 S1~S6."""
     if w_mm is None:
         return None
-    if w_mm < SEV_MIN_MM:
-        return "G0"
     return SEV_LABELS[sum(w_mm >= b for b in SEV_BOUNDS_MM)]
-# ---- 측정 신뢰 플래그 ----
-REL_SCALE_MM = 50.0               # 이 이상 폭 = 실척 전제 붕괴 의심(경사 폭주 등) → 신뢰 C
-REL_SPREAD = 0.5                  # 뷰 간 폭 IQR/중앙 이 이상 = 측정 불일치 → 신뢰 C
+# ---- 균열 신뢰도(conf) 구간 ----
+# conf = AI 가 그 지점을 균열이라고 본 확률(0~1). 검출 임계값 CRACK_THR 미만은 애초에 마스크가 아니다.
+# 예전엔 '측정 신뢰 A/B/C'(실척 의심·뷰 불일치·단일뷰)를 따로 두었으나, 화면에 '신뢰'가 둘이라
+# 혼동이 커서 균열 신뢰도 하나로 통일했다. 실척 의심은 report_meta.scale_warning 이 담당한다.
+CONF_BOUNDS = (0.7, 0.9)          # 낮음 < 0.7 ≤ 보통 < 0.9 ≤ 높음
 
 
 # ==================================================================
@@ -1250,18 +1249,8 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                     views[m["source"]] = {"source": m["source"], "conf": m["conf"],
                                           "w": round(float(m["width_mm"]), 3),
                                           "L": round(float(m.get("length_mm", 0.0)), 1)}
-            # 판정 등급(절대 폭, p95 기준) + 심각도(로그 5등급) + 측정 신뢰(A/B/C + 사유코드)
-            grade = "ABCD"[sum(w_p95 >= t for t in GRADE_T_MM)]
+            # 심각도(절대 폭 p95 기준, 단일 체계)
             sev = severity_of(w_p95)
-            rel_why = []
-            if w_max > REL_SCALE_MM: rel_why.append("scale")          # 실척 의심(경사 폭주 등)
-            vwl = [v["w"] for v in views.values() if v.get("w") is not None]
-            if len(vwl) >= 3:
-                med = float(np.median(vwl))
-                if med > 1e-6 and float(np.subtract(*np.percentile(vwl, [75, 25]))) / med > REL_SPREAD:
-                    rel_why.append("spread")                          # 뷰 간 측정 불일치
-            if len(views) == 1: rel_why.append("single")              # 단일 뷰(교차검증 없음)
-            rel = "C" if ("scale" in rel_why or "spread" in rel_why) else ("B" if rel_why else "A")
             w3_txt = f" · 3D폭 {w_max_3d:.1f}" if w_max_3d is not None else ""
             tot_txt = f" (총연장 {L_tot:.0f})" if L_tot > L + 0.5 else ""
             merged.append({"text": f"크랙 폭 중앙 {w_med:.1f}mm (p95 {w_p95:.1f} · 최대 {w_max:.1f}){w3_txt} · 길이 {L:.0f}mm{tot_txt}",
@@ -1271,9 +1260,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                            "width_mm_3d": round(w_max_3d, 3) if w_max_3d is not None else None,
                            "length_mm": round(float(L), 2),               # 최장경로(대표)
                            "length_total_mm": round(float(L_tot), 2),      # 총연장(가지 포함)
-                           "grade": grade,                                 # 판정 등급(무보정 mm 기준 — 뷰어는 보정 재계산)
-                           "sev": sev,                                     # 심각도 G0~G5(로그 스케일 절대 기준)
-                           "rel": rel, "rel_why": rel_why,                 # 측정 신뢰 A/B/C + 사유
+                           "sev": sev,                                     # 심각도 S1~S6(무보정 mm 기준 — 뷰어는 보정 재계산)
 
                            "_members": member_idxs,   # 이 크랙(핫스팟)에 속한 뷰별 인스턴스 idx(리본 매핑용)
                            "views": sorted(views.values(), key=lambda v: -v["conf"])})
@@ -1308,10 +1295,10 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         "width_mm_range": [round(min(widths), 2), round(max(widths), 2)] if widths else None,
         # 측정 신뢰도 경고: 실척 전제("PLY 1단위=1m")가 깨지면 폭이 비현실적으로 커진다.
         "scale_warning": (max(widths) > 50.0) if widths else False,
-        "grade_thresholds_mm": list(GRADE_T_MM),   # 판정 등급 임계값(추적 가능성 — 뷰어 실시간 재계산의 근거)
-        # 심각도 로그 등급의 근거값도 함께 기록 — 뷰어·보고서가 보정 mm 로 재계산할 때 같은 기준을 쓴다
-        "severity_range_mm": [SEV_MIN_MM, SEV_MAX_MM],
+        # 심각도 기준값 기록(추적 가능성) — 뷰어·보고서가 보정 mm 로 재계산할 때 같은 기준을 쓴다
         "severity_bounds_mm": list(SEV_BOUNDS_MM),
+        "severity_names": list(SEV_NAMES),
+        "conf_bounds": list(CONF_BOUNDS),          # 균열 신뢰도 구간(낮음/보통/높음)
     }
     # 리본 = '크랙(핫스팟)당 1개'. 서로 다른 이미지에서 검출한 같은 크랙의 여러 뷰 중심선을
     # fuse_points 로 융합(복셀 병합 + MST 순서화)한다 → 겹침 없는 단일 3D 객체 → 클릭 명확.

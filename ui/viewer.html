@@ -58,17 +58,18 @@
       border:1px solid #5a4420;border-radius:var(--r-sm);padding:8px 10px;margin-top:8px;line-height:1.55;"></div>
     <!-- 심각도 색 범례: 실제 방식(길이×폭의 상대 순위)을 반영 -->
     <div id="sevLegend" style="margin-top:12px;font-size:var(--fs-cap);color:var(--tx-2);">
-      <div style="margin-bottom:5px;color:var(--tx-3)">심각도 <span style="color:var(--tx-3)">— 폭(p95·보정 mm) 로그 5등급</span></div>
+      <div style="margin-bottom:5px;color:var(--tx-3)">심각도 <span style="color:var(--tx-3)">— 균열 폭(p95·보정 mm) 기준</span></div>
       <div style="height:8px;border-radius:5px;
-        background:linear-gradient(90deg,#9ccb5b,#2e9e5b,#f0c419,#ee8a3c,#d9433c);"></div>
+        background:linear-gradient(90deg,#9ccb5b,#2e9e5b,#f0c419,#ee8a3c,#d9433c,#8a6bc4);"></div>
       <div id="sevRows" style="margin-top:5px;line-height:1.75;"></div>
       <div style="margin-top:4px;color:var(--tx-3);line-height:1.45;">
-        등급당 약 1.82배씩 커집니다(로그 스케일). 절대 기준이라 다른 보고서·다른 시점과 그대로 비교됩니다.</div>
-      <div id="gradeLegend" style="margin-top:12px;">
-        <div style="margin-bottom:5px;color:var(--tx-3)">판정 등급 <span style="color:var(--tx-3)">— 절대 폭(p95·보정 mm) 기준</span></div>
-        <div id="gradeRows" style="line-height:1.8;"></div>
+        절대 기준이라 다른 보고서·다른 시점과 그대로 비교됩니다.
+        <b>특이값(10mm 초과)</b>은 콘크리트 균열로는 비현실적이라 측정 오류를 의심해야 합니다.</div>
+      <div id="confLegend" style="margin-top:12px;">
+        <div style="margin-bottom:5px;color:var(--tx-3)">균열 신뢰도 <span style="color:var(--tx-3)">— AI가 균열이라고 본 확률</span></div>
+        <div id="confRows" style="line-height:1.8;"></div>
         <div style="margin-top:4px;color:var(--tx-3);line-height:1.45;">
-          신뢰 A/B/C — 뷰 수·뷰 간 일치·실척 정상성. C(실척 의심·뷰 불일치)는 수치 해석 주의.</div>
+          “균열이 맞나”에 대한 값입니다. 폭·길이의 정확도와는 별개이며, 낮으면 사진에서 직접 확인하세요.</div>
       </div>
     </div>
     <div style="margin-top:14px;font-size:var(--fs-cap);color:var(--tx-2);background:var(--surface-2);padding:11px;border-radius:var(--r-sm);line-height:1.75;">
@@ -106,7 +107,7 @@
       <button id="clCopy"><svg class="ic"><use href="#i-copy"/></svg>복사</button>
       <span id="revProg" style="color:var(--tx-3);font-size:var(--fs-cap);margin-left:auto;white-space:nowrap;"></span>
     </div>
-    <div id="clHead"><span>ID</span><span>유형</span><span>등급</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
+    <div id="clHead"><span>ID</span><span>유형</span><span>심각도</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
     <div id="clRows"></div>
     <div id="clFoot"></div>
   </div>
