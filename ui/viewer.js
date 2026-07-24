@@ -304,11 +304,17 @@ function radiusOf(wmm){                            // 폭(mm) → 반경(m): 실
 // ---- 병합 렌더: 수만 개 리본을 메시 1개(드로우콜 1회)로 — 대규모 데이터 FPS 의 핵심 ----
 // 리본마다 Mesh 를 만들면 1.7만 드로우콜 + 씬그래프 순회로 6fps 가 된다. 정점색으로 심각도를
 // 굽고 전부 한 버퍼에 병합한다. 호버/선택 하이라이트는 그 크랙만 흰 오버레이 튜브로 따로 그린다.
-// ---- 유형(크랙/조인트/실금/얼룩): 유형별 병합 버퍼로 나눠 필터 시 통째로 on/off ----
-const CRACK_TYPES=['crack','joint','craze','blob'];
-const TYPE_LABEL={crack:'크랙',joint:'조인트·시공선',craze:'실금',blob:'얼룩'};
-const TYPE_COLOR={crack:'#d0a000',joint:'#e05050',craze:'#3aaf5a',blob:'#b98cff'};
-function hotType(hot){ const h=(hot>=0?DATA.hotspots[hot]:null); const t=h&&h.type; return CRACK_TYPES.indexOf(t)>=0?t:'crack'; }
+// ---- 유형(크랙/조인트/얼룩): 유형별 병합 버퍼로 나눠 필터 시 통째로 on/off ----
+// '실금(craze)'은 폐지 — 실금도 가는 균열이라 크랙으로 흡수했다. 구 .twin 의 craze 는 아래 맵으로 폴백.
+const CRACK_TYPES=['crack','joint','blob'];
+const TYPE_LABEL={crack:'크랙',joint:'조인트·시공선',blob:'얼룩'};
+const TYPE_COLOR={crack:'#d0a000',joint:'#e05050',blob:'#b98cff'};
+const LEGACY_TYPE={craze:'crack'};                   // 폐지된 유형 → 대체 유형
+function hotType(hot){
+  const h=(hot>=0?DATA.hotspots[hot]:null); let t=h&&h.type;
+  if(LEGACY_TYPE[t]) t=LEGACY_TYPE[t];
+  return CRACK_TYPES.indexOf(t)>=0?t:'crack';
+}
 const ribGeoByType={}; CRACK_TYPES.forEach(t=>ribGeoByType[t]={pos:[],col:[],idx:[],vbase:0});
 const ribType=[];                                    // ri → 유형
 const ribHot=[];                                     // ri → 핫스팟 인덱스(비교 모드 상태색용)
@@ -472,8 +478,8 @@ const ribMeshByType={};
   }
 })();
 // 유형 표시 상태 + 필터 적용(리본 메시·히트라인·핫스팟·목록 모두 반영)
-const typeVisible={crack:true,joint:true,craze:true,blob:true};
-const _typeCount={crack:0,joint:0,craze:0,blob:0};
+const typeVisible={crack:true,joint:true,blob:true};
+const _typeCount={crack:0,joint:0,blob:0};
 DATA.hotspots.forEach((h,i)=>{ _typeCount[hotType(i)]++; });
 function applyTypeFilter(){
   for(const t of CRACK_TYPES){ if(ribMeshByType[t]) ribMeshByType[t].visible=typeVisible[t]; }

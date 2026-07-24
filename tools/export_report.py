@@ -34,8 +34,15 @@ A4L = (11.69, 8.27)                    # A4 가로(inch)
 GRADE_COLOR = {"A": "#2e9e63", "B": "#c8ae12", "C": "#e08a2e", "D": "#cc4038"}
 GRADE_LABEL = {"A": "허용", "B": "관찰", "C": "보수 검토", "D": "보수 필요"}
 REL_LABEL = {"A": "높음", "B": "보통", "C": "낮음"}
-TYPE_LABEL = {"crack": "크랙", "joint": "조인트·시공선", "craze": "실금", "blob": "얼룩"}
+TYPE_LABEL = {"crack": "크랙", "joint": "조인트·시공선", "blob": "얼룩"}
+LEGACY_TYPE = {"craze": "crack"}       # 폐지된 '실금' → 크랙(구 .twin 호환)
 REV_LABEL = {"confirmed": "확인", "rejected": "오탐", "edited": "수정"}
+
+
+def _type_of(h):
+    """핫스팟의 유형(폐지된 유형은 대체 유형으로 폴백)."""
+    t = h.get("type")
+    return LEGACY_TYPE.get(t, t)
 
 
 def _grade(h, thr):
@@ -81,7 +88,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
     sev = np.array([(h.get("length_mm") or 0) * (h.get("width_mm_median") or h.get("width_mm_max") or 0)
                     for h in hots])
     # 대장·사진 순서: '크랙' 유형 우선 → 심각도. 검사원이 오탐(rejected) 판정한 것은 제외.
-    is_crack = np.array([1 if h.get("type") in (None, "crack") else 0 for h in hots])
+    is_crack = np.array([1 if _type_of(h) in (None, "crack") else 0 for h in hots])
     rejected = np.array([revs.get(str(i), {}).get("state") == "rejected" for i in range(len(hots))])
     order = np.lexsort((-sev, -is_crack))
     order = [int(i) for i in order if not rejected[i]]
@@ -117,7 +124,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         ax.set_title(f"판정 등급 분포 (p95 폭 기준 · 임계 {thr} mm)", fontsize=11)
         for s in ("top", "right"): ax.spines[s].set_visible(False)
         # 신뢰/유형/검토 요약 텍스트
-        rc = Counter(rels); tc = Counter(TYPE_LABEL.get(h.get("type"), "크랙") for h in hots)
+        rc = Counter(rels); tc = Counter(TYPE_LABEL.get(_type_of(h), "크랙") for h in hots)
         rvc = Counter(v.get("state") for v in revs.values())
         ty_txt = " · ".join(f"{k} {v:,}" for k, v in tc.most_common())
         txt = (f"총 균열 {n:,}개\n\n"
@@ -183,7 +190,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                 h = hots[hi]; rv = revs.get(str(hi), {})
                 f1 = lambda x: (f"{x:.2f}" if isinstance(x, (int, float)) else "-")
                 f0 = lambda x: (f"{x:,.0f}" if isinstance(x, (int, float)) else "-")
-                cell.append([f"C-{hi+1:04d}", TYPE_LABEL.get(h.get("type"), "크랙"),
+                cell.append([f"C-{hi+1:04d}", TYPE_LABEL.get(_type_of(h), "크랙"),
                              grades[hi] or "-", rels[hi],
                              f1(h.get("width_mm_median")), f1(h.get("width_mm_p95")), f1(h.get("width_mm_max")),
                              f0(h.get("length_mm")), f0(h.get("length_total_mm")),
@@ -229,7 +236,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                     except Exception as e:
                         ax.text(0.5, 0.5, f"이미지 없음\n({e})", ha="center", va="center", fontsize=8, color="#999")
                     g = grades[hi]
-                    ax.set_title(f"C-{hi+1:04d} · {TYPE_LABEL.get(h.get('type'),'크랙')} · "
+                    ax.set_title(f"C-{hi+1:04d} · {TYPE_LABEL.get(_type_of(h),'크랙')} · "
                                  f"[{g}] {GRADE_LABEL.get(g,'')}\n폭 {h.get('width_mm_median','-')}mm · "
                                  f"길이 {h.get('length_mm','-')}mm",
                                  fontsize=8.5, color=GRADE_COLOR.get(g, "#333"))

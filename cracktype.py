@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""크랙 유형 분류 (크랙 / 조인트·시공선 / 실금 / 얼룩).
+"""크랙 유형 분류 (크랙 / 조인트·시공선 / 얼룩).
+
+※ '실금(craze)'은 별도 유형에서 제외했다 — 실금도 결국 가는 균열이라 크랙으로 흡수한다.
+   기존 4클래스 모델은 tools/merge_class.py 로 craze→crack 병합해 3클래스로 전환했고,
+   구 .twin 의 type="craze" 는 읽는 쪽(뷰어·보고서)에서 crack 으로 폴백한다.
 
 특징 = 3D 기하(직선성·꺾임·축정렬·폭) + 2D 겉모습(단면 골 깊이·엣지 선명도·골폭·
 어두움·대비·종횡비). 학습(offline)과 추론(pipeline)이 '같은' 이 함수를 써서 분포가
@@ -23,7 +27,8 @@ FEATS = ["w", "straight", "bend", "axl",
 LOG_FEATS = {"w", "straight", "circ_resid"}
 PAR_ANG_DEG = 12.0     # 평행 판정 각도
 PAR_NEAR_FRAC = 0.15   # 근방 거리 = 메시 대각선의 15%
-CLASSES = ["crack", "joint", "craze", "blob"]
+CLASSES = ["crack", "joint", "blob"]
+LEGACY_TYPE_MAP = {"craze": "crack"}      # 폐지된 유형 → 대체 유형(구 .twin 호환)
 _PROF_R = 11   # 단면 표본 반폭(px, full 해상도 기준)
 
 

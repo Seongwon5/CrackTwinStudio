@@ -120,6 +120,18 @@ def extract_from_twin(twin, log=print):
     return X, y, src
 
 
+MIN_PER_CLASS = 8          # 클래스당 최소 라벨 수 — 이보다 적으면 그 클래스는 학습이 무의미
+
+
+def _current_classes(path):
+    """지금 쓰고 있는 모델의 클래스 목록(없으면 빈 리스트)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return list(json.load(f).get("classes", []))
+    except Exception:
+        return []
+
+
 def run(reports_dir=REPORTS_DIR, out=MODEL_JSON, trainset=TRAIN_NPZ,
         min_labels=40, dry_run=False, log=print):
     """재학습 본체(라이브러리 진입점) — 대시보드 '재학습' 버튼(백엔드 잡)과 CLI 가 공유.
@@ -150,6 +162,21 @@ def run(reports_dir=REPORTS_DIR, out=MODEL_JSON, trainset=TRAIN_NPZ,
         log(f"[중단] 라벨 {len(Xa)}건 · 클래스 {len(cnt)}종 — 최소 {min_labels}건·2클래스 필요."
             f" 모델은 변경하지 않습니다.")
         return {"trained": False, "labels": int(len(Xa)), "dist": dict(cnt), "note": "below-threshold"}
+    # 가드 ①: 클래스당 최소 건수 — 몇 건짜리 클래스는 학습이 무의미하고 분포만 망가뜨린다.
+    thin = {c: k for c, k in cnt.items() if k < MIN_PER_CLASS}
+    if thin:
+        log(f"[중단] 라벨이 너무 적은 유형: {thin} — 유형마다 최소 {MIN_PER_CLASS}건 필요."
+            f" 해당 유형의 검토를 더 남긴 뒤 다시 실행하세요. 모델은 변경하지 않습니다.")
+        return {"trained": False, "labels": int(len(Xa)), "dist": dict(cnt), "note": "thin-class"}
+    # 가드 ②: 기존 모델이 알던 유형을 잃지 않는다 — 새 라벨에 없는 유형이 있으면 그 유형은
+    # 앞으로 절대 분류될 수 없게 되므로(4→2 클래스 축소 사고) 중단한다.
+    cur = _current_classes(out)
+    lost = [c for c in cur if c not in cnt]
+    if lost:
+        log(f"[중단] 현재 모델의 유형 {lost} 에 대한 라벨이 없습니다 — 재학습하면 그 유형이 사라집니다."
+            f" (현재 {cur} → 새 {sorted(cnt)}) 해당 유형의 검토를 남기거나,"
+            f" 유형을 폐지하려면 tools/merge_class.py 로 병합하세요. 모델은 변경하지 않습니다.")
+        return {"trained": False, "labels": int(len(Xa)), "dist": dict(cnt), "note": "class-loss"}
     if dry_run:
         log("[dry-run] 여기서 종료 — 모델·스냅샷 미변경.")
         return {"trained": False, "labels": int(len(Xa)), "dist": dict(cnt), "note": "dry-run"}
