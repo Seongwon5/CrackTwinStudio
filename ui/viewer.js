@@ -144,8 +144,9 @@ function relOf(h){
 }
 function gradeBadge(h){                            // 말풍선/상세용 한 줄(html)
   const g=gradeOf(h); if(!g) return '';
-  const r=relOf(h);
-  return '<span style="color:'+GRADE_COLOR[g]+';font-weight:600">등급 '+g+' '+GRADE_LABEL[g]+'</span>'
+  const r=relOf(h), sv=sevGrade(sevWidth(h));
+  return (sv ? '<span style="color:'+SEV_HEX[sv]+';font-weight:600">'+sv+' '+SEV_NAME[sv]+'</span> · ' : '')
+       + '<span style="color:'+GRADE_COLOR[g]+';font-weight:600">등급 '+g+'</span>'
        + ' · <span style="color:'+REL_COLOR[r]+'">신뢰 '+r+'</span>';
 }
 // 범례 채우기(임계값 실값 표기)
@@ -236,21 +237,50 @@ try {
 // 점이 뭉치면 격자처럼 보인다 → 원형으로 바꿔 크랙 형상이 읽히게 한다.
 // (검출 픽셀 점군 표시 기능은 제거 — 크랙 형상은 리본이 담당)
 
-// 폭(mm) → 심각도 색. 0.1mm(경미·초록) ~ 10mm(심각·빨강) 을 로그 스케일로 훑는다.
-// 로그만으론 부족해서 u^0.5 이징을 얹어, 0.1mm 직후 가파르게 빨개지고 그 뒤로는 완만해진다.
-//   0.1mm→0%   0.32mm→50%   1mm→71%   3.2mm→87%   10mm→100%
-const SEV_MIN_MM=0.1, SEV_MAX_MM=10;
-const SEV_STOPS=[[0.15,0.92,0.35],[0.70,1.00,0.12],[1.00,0.90,0.00],[1.00,0.42,0.00],[1.00,0.06,0.04]];
-function sevT(wmm){
-  const w=Math.max(1e-6, wmm==null?0:wmm);
-  const u=(Math.log10(w)-Math.log10(SEV_MIN_MM))/(Math.log10(SEV_MAX_MM)-Math.log10(SEV_MIN_MM));
-  return Math.pow(Math.min(1,Math.max(0,u)), 0.5);
+// ===== 심각도: 폭 0.5~10mm 의 로그 스케일 절대 5등급 (G1~G5) =====
+// 균열 위험도는 폭에 선형이 아니라 배수로 커진다 → 등급당 일정 배수(1.82배).
+// 예전 '길이×폭 상대 순위'는 보고서마다 색이 바뀌어 시점 간 비교가 불가능했다(절대 기준으로 교체).
+// 색: 연두 → 초록 → 노랑 → 주황 → 빨강. 보정(cmm) 반영 폭으로 계산하므로 캘리브레이션 시 즉시 갱신.
+const _SVR = (DATA.report_meta && DATA.report_meta.severity_range_mm) || [0.5, 10.0];
+const SEV_MIN_MM = _SVR[0], SEV_MAX_MM = _SVR[1];
+const SEV_BOUNDS = (DATA.report_meta && DATA.report_meta.severity_bounds_mm) || [0.9, 1.7, 3.0, 5.5];
+const SEV_LABELS = ['G1','G2','G3','G4','G5'];
+const SEV_NAME   = {G0:'기록 대상 외', G1:'경미', G2:'관찰', G3:'추적 조사', G4:'보수 계획', G5:'즉시 조치'};
+const SEV_HEX    = {G0:'#7590a6', G1:'#9ccb5b', G2:'#2e9e5b', G3:'#f0c419', G4:'#ee8a3c', G5:'#d9433c'};
+const SEV_STOPS  = [[0.61,0.80,0.36],[0.18,0.62,0.36],[0.94,0.77,0.10],[0.93,0.54,0.24],[0.85,0.26,0.24]];
+function sevT(wmm){                                   // 폭 → 0~1 (로그, 클램프)
+  const w = Math.max(1e-6, wmm == null ? 0 : wmm);
+  const u = (Math.log10(w) - Math.log10(SEV_MIN_MM)) / (Math.log10(SEV_MAX_MM) - Math.log10(SEV_MIN_MM));
+  return Math.min(1, Math.max(0, u));
 }
-function sevColor(wmm){
-  const t=sevT(wmm), n=SEV_STOPS.length-1;
-  const f=t*n, i=Math.min(n-1,Math.floor(f)), k=f-i, a=SEV_STOPS[i], b=SEV_STOPS[i+1];
+function sevGrade(wmm){                               // 폭 → 'G0'~'G5'
+  if(wmm == null) return null;
+  if(wmm < SEV_MIN_MM) return 'G0';
+  let k = 0; for(const b of SEV_BOUNDS) if(wmm >= b) k++;
+  return SEV_LABELS[k];
+}
+function sevColor(wmm){                               // 폭 → 등급 색(경계에서 등급 색과 일치)
+  if(wmm != null && wmm < SEV_MIN_MM) return new THREE.Color(SEV_HEX.G0);
+  const t = sevT(wmm), n = SEV_STOPS.length - 1;
+  const f = t * n, i = Math.min(n - 1, Math.floor(f)), k = f - i, a = SEV_STOPS[i], b = SEV_STOPS[i + 1];
   return new THREE.Color(a[0]+(b[0]-a[0])*k, a[1]+(b[1]-a[1])*k, a[2]+(b[2]-a[2])*k);
 }
+// 핫스팟의 대표 폭(보정 반영) — 심각도·색의 단일 입력
+function sevWidth(h){ return cmm(h.width_mm_p95 != null ? h.width_mm_p95
+                                : (h.width_mm_median != null ? h.width_mm_median : h.width_mm_max)); }
+// 심각도 범례(로그 5등급) — 경계값은 meta 에서 읽으므로 기준을 바꾸면 자동 반영된다.
+(function fillSevLegend(){
+  const el=document.getElementById('sevRows'); if(!el) return;
+  const b=[SEV_MIN_MM].concat(SEV_BOUNDS);
+  const rng=SEV_LABELS.map((g,i)=> i<SEV_BOUNDS.length ? `${b[i]}–${b[i+1]}` : `≥ ${b[i]}`);
+  el.innerHTML=SEV_LABELS.map((g,i)=>
+    '<span style="display:inline-flex;align-items:center;gap:5px;margin-right:9px;white-space:nowrap;">'
+    +'<span style="width:9px;height:9px;border-radius:3px;background:'+SEV_HEX[g]+'"></span>'
+    +g+' '+SEV_NAME[g]+' <span style="color:var(--tx-3)">'+rng[i]+'mm</span></span>').join('')
+    +'<span style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;">'
+    +'<span style="width:9px;height:9px;border-radius:3px;background:'+SEV_HEX.G0+'"></span>'
+    +'G0 '+SEV_NAME.G0+' <span style="color:var(--tx-3)">&lt; '+SEV_MIN_MM+'mm</span></span>';
+})();
 // ================= 크랙 리본 (표면 위, 실폭 반영 가변-반경 튜브) =================
 // poly(중심선 3D)를 poly_n(바깥 법선)으로 살짝 띄우고, 각 정점 반경을 실제 폭(poly_w)에 비례시켜
 // 그린다 → 튜브가 크랙 모양(넓/좁)을 그대로 따라간다. 굵기는 과장(EXAG), 색은 노랑 고정.
@@ -356,7 +386,7 @@ function buildRibbon(h, i){
   const hot=(h.hot!=null?h.hot:-1);
   const type=hotType(hot); ribType[i]=type; const G=ribGeoByType[type];   // 유형별 버퍼로 라우팅
   // 크랙 형상 색 = 심각도(상대 순위 색) — 정점색으로 병합 버퍼에 굽는다.
-  const base=(hot>=0 ? rankColor(rankFrac(hot)) : new THREE.Color(RIBBON_COLOR));
+  const base=(hot>=0 ? hotSevColor(hot) : new THREE.Color(RIBBON_COLOR));
   ribbonBase[i]=base.getHex(); ribHot[i]=hot;
   if(hot>=0){ (ribsByHot[hot]=ribsByHot[hot]||[]).push(i); }        // 핫스팟→리본 역매핑
   let run=[], rr=[]; const hitPts=[]; const runs=[];
@@ -427,22 +457,17 @@ function fmtWL(h, i){                               // 말풍선(호버): 평균
        + (gb?'<br>'+gb:'') + cmpLine(i);
 }
 // 크랙 정보는 '말풍선(mm 태그)'로만 — 다이아몬드 레티클은 제거(겹치고 클릭 혼란). 리본이 전체
-// 지도를 담당하고, 크랙을 호버/선택하면 그 크랙의 말풍선(폭·길이)이 뜬다. 색은 상대 심각도.
-const _hsev = DATA.hotspots.map(h => (h.length_mm||0) * (h.width_mm_median || h.width_mm_max || h.width_mm || 0));
-const _hrank = new Array(DATA.hotspots.length).fill(0);
-[...DATA.hotspots.keys()].sort((a,b)=>_hsev[b]-_hsev[a]).forEach((idx,r)=>_hrank[idx]=r);  // 0=가장 심각
-const _hN = Math.max(1, DATA.hotspots.length - 1);
-function rankFrac(i){ return 1 - _hrank[i]/_hN; }          // 1=심각 … 0=경미
-function rankColor(f){ const n=SEV_STOPS.length-1, x=Math.max(0,Math.min(1,f))*n,
-  k=Math.min(n-1,Math.floor(x)), t=x-k, a=SEV_STOPS[k], b=SEV_STOPS[k+1];
-  return new THREE.Color(a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t); }
+// 지도를 담당하고, 크랙을 호버/선택하면 그 크랙의 말풍선(폭·길이)이 뜬다.
+// 색 = 절대 심각도(폭 로그 등급). 예전의 상대 순위(rankFrac)는 보고서마다 색이 달라져 폐지.
+function hotSev(i){ return sevGrade(sevWidth(DATA.hotspots[i])); }
+function hotSevColor(i){ return sevColor(sevWidth(DATA.hotspots[i])); }
 
 // 리더선+말풍선 = DOM. 어차피 호버/선택된 1~2개만 보이므로 DOM 은 그때 처음 만든다(지연 생성).
 // 수만 개 크랙에서 미리 다 만들면 DOM 노드 수만 개 생성·순회로 로드·프레임이 모두 무너진다.
 DATA.hotspots.forEach((h,i)=>{ hudMarkers.push({el:null,h,i,sprite:null}); });
 function ensureMarkerEl(i){
   const m=hudMarkers[i]; if(m.el) return m.el;
-  const col=rankColor(rankFrac(i));               // 상대 심각도 색(빨강=상위 … 초록=하위)
+  const col=hotSevColor(i);                        // 절대 심각도 색(폭 로그 등급)
   const rgb='rgb('+Math.round(col.r*255)+','+Math.round(col.g*255)+','+Math.round(col.b*255)+')';
   const el=document.createElement('div'); el.className='hud-marker'; el.style.setProperty('--sev',rgb);
   el.innerHTML='<div class="leader"></div><div class="tag">'+fmtWL(m.h, m.i)+'</div>';
@@ -1756,13 +1781,13 @@ function clFilterSort(){
 }
 function clRow(i,h){
   const el=document.createElement('div'); el.className='clRow'; el.dataset.hi=i;
-  const c=rankColor(rankFrac(i));
+  const c=hotSevColor(i);
   const rgb='rgb('+Math.round(c.r*255)+','+Math.round(c.g*255)+','+Math.round(c.b*255)+')';
   const wmed=cmm(h.width_mm_median??h.width_mm_max), wmax=cmm(h.width_mm_max??h.width_mm), L=cmm(h.length_mm), T=ltot(h);
   const ty=hotType(i);
   const lenTitle=(T!=null&&L!=null&&T>L+0.5)?' title="최장경로 '+Math.round(L).toLocaleString()+'mm · 총연장 '+Math.round(T).toLocaleString()+'mm"':'';
-  const g=gradeOf(h), r_=relOf(h);
-  const gTitle=g?(' title="등급 '+g+' '+GRADE_LABEL[g]+' · 신뢰 '+r_
+  const g=gradeOf(h), r_=relOf(h), sv=sevGrade(sevWidth(h));
+  const gTitle=g?(' title="'+(sv?sv+' '+SEV_NAME[sv]+' · ':'')+'등급 '+g+' '+GRADE_LABEL[g]+' · 신뢰 '+r_
     +(relWhy(h).length?'('+relWhy(h).map(k=>REL_WHY[k]||k).join('·')+')':'')+'"'):'';
   const rv=revOf(i);
   const rvMark=rv&&rv.state?'<span style="color:'+REV_COLOR[rv.state]+'" title="'+REV_LABEL[rv.state]+'"> '
@@ -1873,14 +1898,14 @@ function flyToCrack(i){
 // CSV: 현재 필터·정렬 결과를 그대로(보정된 mm) — Excel 한글 호환 BOM 포함
 function clCsvText(){
   const fx=v=>v==null?'':(Math.round(v*1000)/1000);
-  const head=['id','grade','reliability','rel_reasons','review','review_type','review_note',
+  const head=['id','severity','grade','reliability','rel_reasons','review','review_type','review_note',
               'width_mm_median','width_mm_max','width_mm_p95','width_mm_3d','length_mm','length_total_mm',
               'views','conf','x','y','z','calib_scale','sources'];
   const lines=[head.join(',')];
   for(const [i,h] of clData){
     const _rv=revOf(i)||{};
     lines.push(['C-'+String(i+1).padStart(4,'0'),
-      gradeOf(h)||'', relOf(h)||'', '"'+relWhy(h).join('|')+'"',
+      sevGrade(sevWidth(h))||'', gradeOf(h)||'', relOf(h)||'', '"'+relWhy(h).join('|')+'"',
       _rv.state||'', _rv.type||'', '"'+String(_rv.note||'').replace(/"/g,'""')+'"',
       fx(cmm(h.width_mm_median)), fx(cmm(h.width_mm_max)), fx(cmm(h.width_mm_p95)), fx(cmm(h.width_mm_3d)),
       fx(cmm(h.length_mm)), fx(ltot(h)), (h.views||[]).length, h.conf??'',

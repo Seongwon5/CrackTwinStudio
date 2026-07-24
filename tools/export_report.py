@@ -45,6 +45,22 @@ def _type_of(h):
     return LEGACY_TYPE.get(t, t)
 
 
+SEV_HEX = {"G0": "#7590a6", "G1": "#9ccb5b", "G2": "#2e9e5b",
+           "G3": "#f0c419", "G4": "#ee8a3c", "G5": "#d9433c"}
+SEV_NAME = {"G0": "기록 대상 외", "G1": "경미", "G2": "관찰",
+            "G3": "추적 조사", "G4": "보수 계획", "G5": "즉시 조치"}
+
+
+def _sev(h, lo, bounds):
+    """대표 폭(p95) → 심각도 G0~G5(로그 절대 등급). meta 의 기준값을 그대로 쓴다."""
+    w = h.get("width_mm_p95") or h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
+    if w is None:
+        return None
+    if w < lo:
+        return "G0"
+    return ["G1", "G2", "G3", "G4", "G5"][sum(w >= b for b in bounds)]
+
+
 def _grade(h, thr):
     w = h.get("width_mm_p95") or h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
     if w is None:
@@ -83,9 +99,13 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
             if v.get("type"): hots[int(k)]["type"] = v["type"]
         except (IndexError, ValueError):
             pass
+    sev_lo, sev_hi = rm.get("severity_range_mm", [0.5, 10.0])
+    sev_bounds = rm.get("severity_bounds_mm", [0.9, 1.7, 3.0, 5.5])
     grades = [_grade(h, thr) for h in hots]
+    sevs = [_sev(h, sev_lo, sev_bounds) for h in hots]
     rels = [_rel(h)[0] for h in hots]
-    sev = np.array([(h.get("length_mm") or 0) * (h.get("width_mm_median") or h.get("width_mm_max") or 0)
+    # 정렬 기준: 심각도(절대 폭)가 1차. 예전의 길이×폭 상대값은 물리적 근거가 약해 폐지.
+    sev = np.array([(h.get("width_mm_p95") or h.get("width_mm_median") or h.get("width_mm_max") or 0)
                     for h in hots])
     # 대장·사진 순서: '크랙' 유형 우선 → 심각도. 검사원이 오탐(rejected) 판정한 것은 제외.
     is_crack = np.array([1 if _type_of(h) in (None, "crack") else 0 for h in hots])
@@ -118,10 +138,10 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         # 등급 분포 막대
         ax = fig.add_axes([0.07, 0.44, 0.40, 0.30])
         from collections import Counter
-        gc = Counter(g for g in grades if g)
-        ax.bar(["A", "B", "C", "D"], [gc.get(k, 0) for k in "ABCD"],
-               color=[GRADE_COLOR[k] for k in "ABCD"])
-        ax.set_title(f"판정 등급 분포 (p95 폭 기준 · 임계 {thr} mm)", fontsize=11)
+        sc = Counter(g for g in sevs if g)
+        keys = ["G0", "G1", "G2", "G3", "G4", "G5"]
+        ax.bar(keys, [sc.get(k, 0) for k in keys], color=[SEV_HEX[k] for k in keys])
+        ax.set_title(f"심각도 분포 (폭 p95 · 로그 5등급 {sev_lo}~{sev_hi}mm)", fontsize=11)
         for s in ("top", "right"): ax.spines[s].set_visible(False)
         # 신뢰/유형/검토 요약 텍스트
         rc = Counter(rels); tc = Counter(TYPE_LABEL.get(_type_of(h), "크랙") for h in hots)
@@ -155,22 +175,22 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
             P2 = np.column_stack([(V - c) @ e1, (V - c) @ e2])
             fig, ax = plt.subplots(figsize=A4L)
             ax.scatter(P2[:, 0], P2[:, 1], s=0.5, c="#c9d3da", linewidths=0)
-            for gsel in "ABCD":                                        # 등급별 LineCollection
+            for gsel in ["G1", "G2", "G3", "G4", "G5"]:                 # 심각도별 LineCollection
                 segs = []
                 for hi in range(n):
-                    if grades[hi] != gsel: continue
+                    if sevs[hi] != gsel: continue
                     for r in rb_by_hot.get(hi, []):
                         Q = np.asarray(r["poly"], float)[::4]
                         if len(Q) < 2: continue
                         q2 = np.column_stack([(Q - c) @ e1, (Q - c) @ e2])
                         segs.extend(np.stack([q2[:-1], q2[1:]], axis=1))
                 if segs:
-                    ax.add_collection(LineCollection(segs, colors=GRADE_COLOR[gsel],
-                                                     linewidths=1.1 if gsel in "CD" else 0.7,
-                                                     label=f"{gsel} {GRADE_LABEL[gsel]}"))
+                    ax.add_collection(LineCollection(segs, colors=SEV_HEX[gsel],
+                                                     linewidths=1.1 if gsel in ("G4", "G5") else 0.7,
+                                                     label=f"{gsel} {SEV_NAME[gsel]}"))
             ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
             ax.set_aspect("equal"); ax.axis("off")
-            ax.set_title("균열 위치도 — 구조물 지배 평면 투영 (등급색)", fontsize=13)
+            ax.set_title("균열 위치도 — 구조물 지배 평면 투영 (심각도색)", fontsize=13)
             _save(fig, "p2_map")
         except Exception as e:
             log(f"  (위치도 생략: {e})")
@@ -179,8 +199,8 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         rows_all = order[:max_rows]
         log(f"[3/4] 균열 대장(심각도순 상위 {len(rows_all)}행) …")
         PER = 26
-        cols = ["ID", "유형", "등급", "신뢰", "폭중앙", "p95", "최대", "길이", "총연장", "뷰", "검토", "메모"]
-        wcol = [0.07, 0.11, 0.05, 0.05, 0.07, 0.07, 0.07, 0.08, 0.08, 0.04, 0.06, 0.25]
+        cols = ["ID", "유형", "심각도", "등급", "신뢰", "폭중앙", "p95", "최대", "길이", "총연장", "뷰", "검토", "메모"]
+        wcol = [0.065, 0.10, 0.055, 0.045, 0.045, 0.065, 0.065, 0.065, 0.075, 0.075, 0.035, 0.055, 0.215]
         for pg in range(0, len(rows_all), PER):
             fig, ax = plt.subplots(figsize=A4L); ax.axis("off")
             ax.set_title(f"균열 대장 (심각도순 {pg+1}–{min(pg+PER,len(rows_all))} / 상위 {len(rows_all)} · 전체 {n:,})",
@@ -191,7 +211,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                 f1 = lambda x: (f"{x:.2f}" if isinstance(x, (int, float)) else "-")
                 f0 = lambda x: (f"{x:,.0f}" if isinstance(x, (int, float)) else "-")
                 cell.append([f"C-{hi+1:04d}", TYPE_LABEL.get(_type_of(h), "크랙"),
-                             grades[hi] or "-", rels[hi],
+                             sevs[hi] or "-", grades[hi] or "-", rels[hi],
                              f1(h.get("width_mm_median")), f1(h.get("width_mm_p95")), f1(h.get("width_mm_max")),
                              f0(h.get("length_mm")), f0(h.get("length_total_mm")),
                              str(len(h.get("views", []))), REV_LABEL.get(rv.get("state"), "-"),
@@ -202,7 +222,9 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                 c_.set_edgecolor("#d5dde4")
                 if r0 == 0:
                     c_.set_facecolor("#eef3f7"); c_.set_text_props(fontweight="bold", color="#234")
-                elif c0 == 2 and c_.get_text().get_text() in GRADE_COLOR:
+                elif c0 == 2 and c_.get_text().get_text() in SEV_HEX:
+                    c_.set_text_props(color=SEV_HEX[c_.get_text().get_text()], fontweight="bold")
+                elif c0 == 3 and c_.get_text().get_text() in GRADE_COLOR:
                     c_.set_text_props(color=GRADE_COLOR[c_.get_text().get_text()], fontweight="bold")
             _save(fig, f"p3_table_{pg//PER}")
 

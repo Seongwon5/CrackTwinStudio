@@ -58,13 +58,12 @@
       border:1px solid #5a4420;border-radius:var(--r-sm);padding:8px 10px;margin-top:8px;line-height:1.55;"></div>
     <!-- 심각도 색 범례: 실제 방식(길이×폭의 상대 순위)을 반영 -->
     <div id="sevLegend" style="margin-top:12px;font-size:var(--fs-cap);color:var(--tx-2);">
-      <div style="margin-bottom:5px;color:var(--tx-3)">심각도 <span style="color:var(--tx-3)">— 길이 × 폭의 상대 순위</span></div>
+      <div style="margin-bottom:5px;color:var(--tx-3)">심각도 <span style="color:var(--tx-3)">— 폭(p95·보정 mm) 로그 5등급</span></div>
       <div style="height:8px;border-radius:5px;
-        background:linear-gradient(90deg,rgb(38,235,89),rgb(179,255,31),rgb(255,229,0),rgb(255,107,0),rgb(255,15,10));"></div>
-      <div style="display:flex;justify-content:space-between;margin-top:3px;color:var(--tx-3);">
-        <span>경미(하위)</span><span>심각(상위)</span></div>
-      <div style="margin-top:5px;color:var(--tx-3);line-height:1.45;">
-        전체 크랙을 (길이 × 폭)으로 정렬한 순위 색 — 절대 mm 아님(스케일 미보정 대비 상대 비교).</div>
+        background:linear-gradient(90deg,#9ccb5b,#2e9e5b,#f0c419,#ee8a3c,#d9433c);"></div>
+      <div id="sevRows" style="margin-top:5px;line-height:1.75;"></div>
+      <div style="margin-top:4px;color:var(--tx-3);line-height:1.45;">
+        등급당 약 1.82배씩 커집니다(로그 스케일). 절대 기준이라 다른 보고서·다른 시점과 그대로 비교됩니다.</div>
       <div id="gradeLegend" style="margin-top:12px;">
         <div style="margin-bottom:5px;color:var(--tx-3)">판정 등급 <span style="color:var(--tx-3)">— 절대 폭(p95·보정 mm) 기준</span></div>
         <div id="gradeRows" style="line-height:1.8;"></div>
