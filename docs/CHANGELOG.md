@@ -11,13 +11,15 @@
 ## [Unreleased]
 
 ### 문서
-- **개발자 문서 신설** ([`docs/DEVELOPER_GUIDE.md`](docs/DEVELOPER_GUIDE.md)) — 설계 의도(왜),
+- **개발자 문서 신설** ([`DEVELOPER_GUIDE.md`](DEVELOPER_GUIDE.md)) — 설계 의도(왜),
   처리 순서(어떻게), 수정 지점(어디)을 담은 인수인계용 문서
-- **사용자 매뉴얼 신설** ([`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)) — 설치·조작·측정값 해석·문제 해결
+- **사용자 매뉴얼 신설** ([`USER_GUIDE.md`](USER_GUIDE.md)) — 설치·조작·측정값 해석·문제 해결
 - **CHANGELOG 신설** (이 문서)
 - README를 프로젝트 소개 + 문서 지도 역할로 정리
-- `DESIGN_twin_v2.md` 를 `docs/` 로 이동
-- 구 `CHANGELOG_2026-07-15.md`(특정일 개발 기록) 제거 — 요지는 이 문서와 개발자 문서에 반영
+- **문서를 `docs/` 로 통합** — 루트에는 `README.md` 만 남긴다
+- 구 개발 문서 2건 제거 — `CHANGELOG_2026-07-15.md`(특정일 개발 기록),
+  `DESIGN_twin_v2.md`(포맷 전환 설계). 두 문서의 핵심 내용과 실측치는
+  개발자 문서 §3-2·§10·§13 에 반영했다
 
 ---
 
@@ -156,6 +158,8 @@
 
 ## 이전 기록
 
-`.twin` v2 포맷 전환의 설계 근거와 실측 데이터는 별도 문서에 있다.
+초기 개발 과정(`.twin` v2 포맷 전환 설계, `embreex` 사고 조사 등)의 근거와 실측 데이터는
+[개발자 문서](DEVELOPER_GUIDE.md)에 통합했다 — §3-2(스트리밍 전환), §10(설계 결정 기록),
+§13(흔한 함정).
 
-- [`docs/DESIGN_twin_v2.md`](docs/DESIGN_twin_v2.md) — 포맷 전환 설계와 실측 데이터
+더 이전의 원본 기록이 필요하면 git 이력에서 찾을 수 있다.

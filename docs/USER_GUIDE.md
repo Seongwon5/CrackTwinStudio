@@ -483,5 +483,5 @@ XMP의 카메라 파라미터가 정확하지 않을 수 있습니다.
 ## 관련 문서
 
 - [개발자 문서](DEVELOPER_GUIDE.md) — 내부 동작 원리와 코드 수정
-- [데이터·구성요소 출처](../DATA_SOURCES.md) — 모델 계보와 라이선스
-- [변경 이력](../CHANGELOG.md)
+- [데이터·구성요소 출처](DATA_SOURCES.md) — 모델 계보와 라이선스
+- [변경 이력](CHANGELOG.md)

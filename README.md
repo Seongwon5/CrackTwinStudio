@@ -79,9 +79,8 @@ python app.py
 |---|---|---|
 | **[사용자 매뉴얼](docs/USER_GUIDE.md)** | 설치 · 데이터 준비 · 뷰어 조작 · 측정값 해석 · 문제 해결 | 프로그램을 **사용**하려는 분 |
 | **[개발자 문서](docs/DEVELOPER_GUIDE.md)** | 아키텍처 · 파이프라인 6단계 · 설계 의도와 버린 대안 · 수정 지점 지도 | 코드를 **고치거나 이어받는** 분 |
-| **[변경 이력](CHANGELOG.md)** | 날짜별 변경 사항 | 무엇이 언제 바뀌었는지 궁금한 분 |
-| [`.twin` v2 설계](docs/DESIGN_twin_v2.md) | 포맷 전환의 상세 근거와 실측 데이터 | 보고서 포맷을 다루는 분 |
-| [데이터·구성요소 출처](DATA_SOURCES.md) | 모델 계보 · 학습 데이터 · 라이선스 | **재배포·상용 이용** 전 필독 |
+| **[변경 이력](docs/CHANGELOG.md)** | 날짜별 변경 사항 | 무엇이 언제 바뀌었는지 궁금한 분 |
+| [데이터·구성요소 출처](docs/DATA_SOURCES.md) | 모델 계보 · 학습 데이터 · 라이선스 | **재배포·상용 이용** 전 필독 |
 
 ---
 
@@ -143,6 +142,6 @@ mm **절대값은 신뢰할 수 없으며**, 보고서에 `scale_warning` 으로
 - **신경망 `network/`** — [VainF/DeepLabV3Plus-Pytorch](https://github.com/VainF/DeepLabV3Plus-Pytorch) (MIT)
 - **3D 엔진 `libs/`** — [three.js](https://github.com/mrdoob/three.js) r160 (MIT)
 
-전체 출처·계보·학습 데이터셋과 라이선스 요건은 **[`DATA_SOURCES.md`](DATA_SOURCES.md)** 를 참조하세요.
+전체 출처·계보·학습 데이터셋과 라이선스 요건은 **[`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md)** 를 참조하세요.
 
 > 사용자 입력물(이미지·XMP·PLY 및 생성된 `.twin` 보고서)은 사용자 소유이며 이 저장소에 포함되지 않습니다.

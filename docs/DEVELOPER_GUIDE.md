@@ -134,8 +134,24 @@ app.py ──▶ backend.py ──▶ pipeline.py ──▶ cracktype.py
 | `window.atob` | 문자열 한계와 동일 | base64 1.6GB |
 | 파이썬 피크 메모리 | — | read→json.loads→replace→encode ≈ 파일의 5배 |
 
-지금은 **큰 덩어리가 문자열/JSON을 절대 거치지 않는다.** 자세한 근거와 실측치는
-[`DESIGN_twin_v2.md`](DESIGN_twin_v2.md)에 있다 (이 문서보다 먼저 쓰인 설계 문서).
+**데이터를 줄이는 방식으로는 해결되지 않았다.** 이미지 1,288장 × 0.43MB = 554MB로,
+메시가 0이어도 이미 한계를 넘는다. 구조를 바꿔야 했다.
+
+전환의 근거가 된 실측 두 가지:
+
+```
+① 브라우저 — ArrayBuffer 는 문자열 한계와 무관한가?  → 그렇다
+   ArrayBuffer 512MB ok · 800MB ok · 1200MB ok · 1600MB ok
+   String      800MB FAIL "Invalid string length"      ← 같은 크기에서 문자열은 죽는다
+
+② 파이썬 — zipfile 이 멤버를 스트리밍할 수 있는가?   → 그렇다
+   ZipFile.open + 1MB 청크로 419MB 멤버 전송 → 피크   2.2 MB
+   ZipFile.read() 로 통째로 읽기 (대조군)    → 피크 419.4 MB   (195배 차이)
+```
+
+그래서 지금은 **큰 덩어리가 문자열/JSON을 절대 거치지 않는다.** 메시는 `ArrayBuffer` 로,
+이미지는 개별 URL로 지연 로드하고, 백엔드는 zip 멤버를 청크로 흘려보낸다.
+결과적으로 **백엔드 피크 메모리가 파일 크기와 무관**해졌다 (약 11.5GB → 수십 MB).
 
 ---
 
@@ -573,7 +589,7 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 
 | # | 결정 | 버린 대안 | 이유 |
 |---|---|---|---|
-| 1 | `.twin` = ZIP + 스트리밍 | JSON에 base64 인라인 | V8 문자열 한계 536.9MB. 데이터를 줄여도 이미지만으로 554MB → 구조를 고쳐야 했다 ([상세](DESIGN_twin_v2.md)) |
+| 1 | `.twin` = ZIP + 스트리밍 | JSON에 base64 인라인 | V8 문자열 한계 536.9MB. 데이터를 줄여도 이미지만으로 554MB → 구조를 고쳐야 했다 ([§3-2](#3-2-보고서-열기)) |
 | 2 | 병합 반경 절대값(m) | 메시 대각선 비율 | 균열은 절대 크기 특징. 댐(622m)에서 6.2m 안이 전부 1개로 뭉쳤다 |
 | 3 | 복셀 연결성분 병합 | DBSCAN + 전역 서브샘플 | 594장에서 점이 3%로 깎여 뷰 간 병합 전멸 |
 | 4 | 라플라시안 스무딩 | 이방성 주곡선 융합 | 주곡선이 실제 크랙 형상을 왜곡했다 |
@@ -732,6 +748,5 @@ py -c "import ast,sys; [ast.parse(open(f,encoding='utf-8').read()) for f in ['ap
 ## 관련 문서
 
 - [사용자 매뉴얼](USER_GUIDE.md) — 설치·조작·문제 해결
-- [`.twin` v2 설계 문서](DESIGN_twin_v2.md) — 포맷 전환의 상세 근거와 실측 데이터
-- [데이터·구성요소 출처](../DATA_SOURCES.md) — 모델 계보와 라이선스
-- [변경 이력](../CHANGELOG.md)
+- [데이터·구성요소 출처](DATA_SOURCES.md) — 모델 계보와 라이선스
+- [변경 이력](CHANGELOG.md)
