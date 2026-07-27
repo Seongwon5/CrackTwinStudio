@@ -3,8 +3,9 @@
   const $ = (id) => document.getElementById(id);
   let folder = null, ply = null, polling = null;
 
+  // 파일/폴더 선택창을 띄우고 고른 경로를 돌려준다(취소·오류면 null).
+  // 브라우저 <input type=file> 은 실제 경로를 주지 않으므로 백엔드가 Windows 네이티브 다이얼로그를 띄운다.
   async function pick(kind) {
-    // 백엔드가 Windows 네이티브 다이얼로그를 띄우고 경로를 반환
     const url = kind === "folder" ? "/api/pick_folder" : "/api/pick_file?kind=" + encodeURIComponent(kind);
     try {
       const d = await (await fetch(url)).json();
@@ -26,6 +27,7 @@
     const p = await pick("ply");
     if (p) { ply = p; $("plyLbl").textContent = p; checkReady(); }
   };
+  // 폴더와 PLY 가 둘 다 정해졌을 때만 '분석 시작'을 활성화한다.
   function checkReady() { $("btnCreate").disabled = !(folder && ply); }
 
   $("btnCreate").onclick = async () => {
@@ -41,6 +43,8 @@
     } catch (e) { alert("생성 실패: " + e); $("btnCreate").disabled = false; }
   };
 
+  // 분석 잡을 0.7초마다 폴링해 진행바·로그를 갱신하고, 끝나면 목록을 새로 고친다.
+  // (분석은 수 분~수십 분이라 요청 하나로 붙들 수 없다 → 백엔드가 job_id 만 주고 여기서 따라간다)
   function pollJob(job, out) {
     clearInterval(polling);
     polling = setInterval(async () => {
@@ -60,8 +64,8 @@
     }, 700);
   }
 
+  // .twin 을 뷰어로 연다 — pywebview 면 새 네이티브 창, 브라우저면 새 창(여러 개 동시에).
   function openReport(path) {
-    // pywebview: 새 네이티브 창 / 브라우저: 새 창 (여러 개 동시에)
     const a = (window.pywebview && window.pywebview.api) || null;
     if (a && a.open_report) { a.open_report(path); }
     else { window.open("/viewer?report=" + encodeURIComponent(path), "_blank", "width=1360,height=860"); }
@@ -82,6 +86,8 @@
   };
 
   let _reports = [];
+  // reports/ 의 .twin 목록을 받아 최신순으로 그린다(항목마다 열기·PDF 버튼).
+  // 비교 셀렉트도 같은 목록을 쓰므로 마지막에 함께 채운다.
   async function loadReports() {
     const list = $("reportList"); list.innerHTML = "";
     try {
@@ -126,7 +132,10 @@
     mk($("cmpB"), _reports.length >= 1 ? 0 : null);    //       이번=최신
     cmpCheck();
   }
+  // 셀렉트에서 고른 보고서를 {path, mtime} 로 꺼낸다(미선택이면 null).
   function cmpSel(sel) { const o = sel.selectedOptions[0]; return o && o.value ? {path: o.value, mtime: +o.dataset.mtime} : null; }
+  // 두 선택을 검사해 경고를 띄우고 '비교 실행' 활성 여부를 정한다.
+  // 같은 보고서는 막고, 시간 역순은 막지 않되 자동 정렬됨을 알린다.
   function cmpCheck() {
     const a = cmpSel($("cmpA")), b = cmpSel($("cmpB"));
     const note = $("cmpNote"); let msg = "";
@@ -154,6 +163,7 @@
   };
 
   let cmpPolling = null;
+  // 비교 잡 폴링(0.5초). 완료되면 자산 목록을 갱신하고 비교 뷰어 열기를 제안한다.
   function pollCompare(job, out) {
     clearInterval(cmpPolling);
     cmpPolling = setInterval(async () => {
@@ -171,6 +181,8 @@
     }, 500);
   }
 
+  // PDF 생성 잡을 띄우고 그 버튼 자체를 진행 표시로 쓴다(단계 표기 [n/4]).
+  // 완료되면 /api/download 로 새 창을 열어 내려받는다.
   async function exportPdf(path, btn) {
     const old = btn.innerHTML;
     btn.disabled = true; btn.innerHTML = "생성 중…";
@@ -191,12 +203,14 @@
     } catch (e) { alert("PDF 생성 실패: " + e); btn.disabled = false; btn.innerHTML = old; }
   }
 
+  // asset.json 을 비교(자산) 모드 뷰어로 연다 — 상태색·이전 검사 고스트가 켜진 채로 뜬다.
   function openAsset(path) {
     const a = (window.pywebview && window.pywebview.api) || null;
     if (a && a.open_asset) { a.open_asset(path); }
     else { window.open("/viewer?asset=" + encodeURIComponent(path), "_blank", "width=1360,height=860"); }
   }
 
+  // 영속 균열 대장(asset.json) 목록을 최신순으로 그린다. 아직 없으면 조용히 비워 둔다.
   async function loadAssets() {
     const list = $("assetList"); list.innerHTML = "";
     try {

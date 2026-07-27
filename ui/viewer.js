@@ -23,7 +23,7 @@ const PITCH_LIMIT = Math.PI/2 - 0.02;           // 수직(±90°)에서 lookAt �
 const BASE_FOV = 60, SCOPE_FOV = 22;            // 우클릭 스코프 확대 FOV
 let scoping = false;                            // 우클릭 홀드 중?
 const _ld = new THREE.Vector3();
-function clampPitch(p){ return Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p)); }
+function clampPitch(p){ return Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p)); }  // 수직 특이점 직전에서 자름
 function lookDir(out){                            // yaw/pitch → 단위 시선 벡터(Z-up)
   const cp = Math.cos(camPitch);
   return out.set(cp*Math.cos(camYaw), cp*Math.sin(camYaw), Math.sin(camPitch));
@@ -52,6 +52,8 @@ const _q = encodeURIComponent(REPORT);
 const api = (kind, extra = '') => `/api/report/${kind}?p=${_q}${extra}`;
 const imgUrl = (cam, kind) => api('img', `&id=${cam.id}&kind=${kind}`);
 
+// 보고서 API 호출 공통 래퍼. as='json' 이면 JSON, 아니면 ArrayBuffer(메시용).
+// 404/500 을 조용히 넘기지 않고 본문까지 붙여 던진다 — 부팅 실패 원인이 화면에 보이게.
 async function _fetch(url, as) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url.split('?')[0]} → ${r.status} ${await r.text()}`);
@@ -83,7 +85,10 @@ for(const [k,v] of Object.entries(REVIEW.reviews||{})){
   const h = DATA.hotspots[+k];
   if(h && v.type) h.type = v.type;                 // 검사원 수정 유형이 AI 판정을 덮는다
 }
+// 균열 i 의 검토 기록(없으면 null).
 function revOf(i){ return (REVIEW.reviews||{})[String(i)] || null; }
+// 검토를 서버 사이드카에 저장하고 로컬 REVIEW 도 함께 갱신한다(state:'clear' 면 삭제).
+// 저장 성공분만 반영하므로 화면과 파일이 어긋나지 않는다.
 async function saveReview(i, patch){
   const r = await fetch('/api/review', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify(Object.assign({p: REPORT, idx: i}, patch))});
@@ -129,8 +134,8 @@ function sevGrade(w){                                // 폭(mm) → 'S1'~'S6'
   let k = 0; for(const b of SEV_B) if(w >= b) k++;
   return SEV_KEYS[k];
 }
-function hotSev(i){ return sevGrade(sevWidth(DATA.hotspots[i])); }
-function hotSevColor(i){
+function hotSev(i){ return sevGrade(sevWidth(DATA.hotspots[i])); }   // 균열 i 의 심각도 등급
+function hotSevColor(i){                             // 균열 i 의 심각도 색(등급 없으면 회색)
   const s = hotSev(i);
   return new THREE.Color(s ? SEV_HEX[s] : '#8899aa');
 }
@@ -145,7 +150,7 @@ function confBand(h){                              // 0=낮음 · 1=보통 · 2=
   if(c == null) return null;
   return c >= CONF_B[1] ? 2 : (c >= CONF_B[0] ? 1 : 0);
 }
-function confBadge(h){
+function confBadge(h){                             // 신뢰도 배지 한 조각(html) — 색 + 이름 + 실제 확률
   const b = confBand(h); if(b == null) return '';
   return '<span style="color:'+CONF_HEX[b]+'">균열 신뢰도 '+CONF_NAME[b]
        + ' ' + Number(h.conf).toFixed(2) + '</span>';
@@ -316,6 +321,8 @@ const CRACK_TYPES=['crack','joint','blob'];
 const TYPE_LABEL={crack:'크랙',joint:'조인트·시공선',blob:'얼룩'};
 const TYPE_COLOR={crack:'#d0a000',joint:'#e05050',blob:'#b98cff'};
 const LEGACY_TYPE={craze:'crack'};                   // 폐지된 유형 → 대체 유형
+// 핫스팟 인덱스 → 유형 키. 폐지 유형·미지정·범위 밖은 모두 'crack' 으로 수렴시켜
+// 어떤 보고서를 열어도 CRACK_TYPES 밖의 값이 나오지 않게 한다.
 function hotType(hot){
   const h=(hot>=0?DATA.hotspots[hot]:null); let t=h&&h.type;
   if(LEGACY_TYPE[t]) t=LEGACY_TYPE[t];
@@ -351,6 +358,9 @@ function tubeInto(G, pts, radii, radialSeg, color){  // variableTube 와 동일 
   }
   G.vbase += N*radialSeg;
 }
+// 리본 하나를 유형별 병합 버퍼에 굽는다(자체 메시를 만들지 않는다 — 드로우콜 절약).
+// 중심선을 면 법선 방향으로 RIBBON_OFFSET_M 만큼 띄워 메시에 파묻히지 않게 하고,
+// 폭 프로파일을 반경으로 바꿔 가변-반경 튜브로 만든다.
 function buildRibbon(h, i){
   const poly=h.poly, pn=h.poly_n, pw=h.poly_w||[];
   if(!poly || poly.length<2) return;
@@ -439,6 +449,8 @@ function fmtWL(h, i){                               // 말풍선(호버): 평균
 // 리더선+말풍선 = DOM. 어차피 호버/선택된 1~2개만 보이므로 DOM 은 그때 처음 만든다(지연 생성).
 // 수만 개 크랙에서 미리 다 만들면 DOM 노드 수만 개 생성·순회로 로드·프레임이 모두 무너진다.
 DATA.hotspots.forEach((h,i)=>{ hudMarkers.push({el:null,h,i,sprite:null}); });
+// 균열 i 의 말풍선 DOM 을 필요할 때 처음 만들어 캐시한다(호버/선택된 것만 생긴다).
+// 만들면서 호버·선택 리스너와, 말풍선 위에서 시작한 드래그도 시점 회전이 되게 하는 처리를 함께 건다.
 function ensureMarkerEl(i){
   const m=hudMarkers[i]; if(m.el) return m.el;
   const col=hotSevColor(i);                        // 절대 심각도 색(폭 로그 등급)
@@ -486,6 +498,8 @@ const confVisible={0:true,1:true,2:true};
 const _typeCount={crack:0,joint:0,blob:0};
 const _sevCount={S1:0,S2:0,S3:0,S4:0,S5:0,S6:0};
 const _confCount={0:0,1:0,2:0};
+// 심각도·신뢰도 구간별 개수를 다시 센다(칩에 표시되는 숫자).
+// 캘리브레이션이 바뀌면 폭이 달라져 등급도 달라지므로 그때마다 다시 부른다.
 function recountBands(){
   for(const k in _sevCount) _sevCount[k]=0;
   for(const k in _confCount) _confCount[k]=0;
@@ -503,6 +517,8 @@ function hotPasses(i){                               // 세 필터를 모두 통
   const c=confBand(h); if(c!=null && confVisible[c]===false) return false;
   return true;
 }
+// 세 필터를 화면에 반영한다. 지오메트리를 다시 만들지 않고 정점 알파만 0/1 로 바꾸므로
+// 수만 개 크랙에서도 즉시 적용된다(드로우콜 불변).
 function applyTypeFilter(){
   // ① 리본: 정점 알파 갱신(리본별 정점 범위는 ribVRange 에 기록돼 있다)
   const attr={}; for(const t of CRACK_TYPES){ if(ribMeshByType[t]) attr[t]=ribMeshByType[t].geometry.getAttribute('color'); }
@@ -525,6 +541,7 @@ function applyTypeFilter(){
 }
 // 상단 필터 바: 유형 · 심각도 · 신뢰도 칩
 const _typeChipEl={}, _sevChipEl={}, _confChipEl={};
+// 칩들의 on/off 표시를 현재 필터 상태와 맞춘다('전체' 칩은 셋 다 모두 켜졌을 때만 on).
 function _syncTypeChips(){
   for(const t of CRACK_TYPES){ _typeChipEl[t].classList.toggle('on', typeVisible[t]); _typeChipEl[t].classList.toggle('off', !typeVisible[t]); }
   for(const g of SEV_KEYS){ if(_sevChipEl[g]){ _sevChipEl[g].classList.toggle('on', sevVisible[g]); _sevChipEl[g].classList.toggle('off', !sevVisible[g]); } }
@@ -532,12 +549,12 @@ function _syncTypeChips(){
   document.getElementById('tbAll').classList.toggle('on',
     CRACK_TYPES.every(t=>typeVisible[t]) && SEV_KEYS.every(g=>sevVisible[g]) && [0,1,2].every(b=>confVisible[b]));
 }
-function _sep(box){
+function _sep(box){                                  // 필터 바에 세로 구분선 하나 추가
   const d=document.createElement('span');
   d.style.cssText='border-left:1px solid var(--line-2);align-self:stretch;margin:7px 3px;';
   box.appendChild(d);
 }
-function _label(box, txt){
+function _label(box, txt){                           // 필터 바에 그룹 이름표 하나 추가
   const l=document.createElement('span'); l.className='lb'; l.textContent=txt; box.appendChild(l);
 }
 (function buildFilterUI(){
@@ -599,7 +616,9 @@ const CMP_LABEL={new:'신규', grown:'성장', stable:'불변', shrunk:'감소?'
 const CMP_DIM=new THREE.Color('#232d36');
 let cmpColorOn = !!CMP;                              // 자산 모드면 기본 상태색
 const cmpEmph={new:true, grown:true, stable:true, shrunk:true};
-function cmpStatus(hot){ return (CMP && CMP.stByHot[hot]) || 'stable'; }
+function cmpStatus(hot){ return (CMP && CMP.stByHot[hot]) || 'stable'; }   // 비교 상태(기본 '불변')
+// 리본 색을 통째로 다시 굽는다. 색 기준이 바뀔 때마다 부른다
+// (비교 모드 on/off · 강조 토글 · 캘리브레이션으로 심각도가 달라졌을 때).
 function repaintRibbons(){
   // 병합 버퍼의 정점색을 리본 단위로 다시 굽는다: 비교 모드=상태색(강조 해제 시 어둡게), 아니면 심각도색.
   const attr={}; for(const t of CRACK_TYPES){ if(ribMeshByType[t]) attr[t]=ribMeshByType[t].geometry.getAttribute('color'); }
@@ -621,6 +640,8 @@ function repaintRibbons(){
 // 매칭된 것=은은한 파랑(맥락) · 미검출=밝은 파랑(주목: '지난번엔 여기 있었다').
 const ghostGroup=new THREE.Group(); scene.add(ghostGroup); ghostGroup.visible=false;
 let ghostMissing=null, ghostMatched=null, _ghostLoaded=false;
+// 이전 검사의 리본을 받아 현재 좌표계로 변환해 고스트 라인으로 얹는다(최초 1회만).
+// 두 검사는 좌표계가 다르므로 자산에 기록된 정합 행렬로 이전→현재 변환 M 을 만들어 적용한다.
 async function loadGhost(){
   if(_ghostLoaded || !CMP) return; _ghostLoaded=true;
   try{
@@ -692,11 +713,13 @@ async function loadGhost(){
 const hlGroup=new THREE.Group(); ribbonGroup.add(hlGroup);
 const HL_MAT=new THREE.MeshBasicMaterial({color:RIBBON_HL,
   polygonOffset:true, polygonOffsetFactor:-6, polygonOffsetUnits:-6});
+// 균열 i 를 선택 상태로(이전 선택은 해제). 말풍선을 띄우고 리본을 흰색으로 강조한다.
 function selectHotspot(i){
   if(selIdx>=0 && selIdx!==i) deselectHotspot();
   selIdx=i;
   if(i>=0){ ensureMarkerEl(i).classList.add('active','show'); refreshRibbonColor(i); }   // 선택 크랙 흰색
 }
+// 선택을 해제하고 색을 원래대로 되돌린다(호버 중이면 호버 강조는 남는다).
 function deselectHotspot(){
   if(selIdx<0) return;
   const m=hudMarkers[selIdx];
@@ -708,6 +731,8 @@ function deselectHotspot(){
 }
 // 호버/선택된 1~2개의 리더선+말풍선(DOM)만 크랙 위치(h.xyz)를 따라다닌다 — 활성분만 순회.
 let _hudShown=new Set();
+// 활성 말풍선(호버·선택·태그호버)만 3D 좌표를 화면 좌표로 투영해 위치를 갱신한다.
+// 화면 밖으로 나간 것은 숨기고, 활성에서 빠진 것도 숨긴다 — 매 프레임 전체를 순회하지 않는다.
 function updateHUD(){
   if(hud.style.display==='none') return;
   const W=innerWidth,H=innerHeight, v=new THREE.Vector3();
@@ -746,6 +771,8 @@ function distortXY(cam, x, y){
   return [x*rad + 2*p1*x*y + p2*(r2+2*x*x),
           y*rad + p1*(r2+2*y*y) + 2*p2*x*y];
 }
+// 3D 점 → 그 카메라 사진의 정규화 좌표(u,v ∈ 0~1). 카메라 뒤이거나 화면 밖이면 null.
+// 파이썬 쪽 cracktype.project_to_cam 과 같은 규약이어야 한다(왜곡 재적용 포함).
 function projectToCam(cam, X){
   if(cam.fx === undefined) return null;
   const rx=X[0]-cam.pos[0], ry=X[1]-cam.pos[1], rz=X[2]-cam.pos[2];
@@ -805,6 +832,8 @@ function drawCrackPaths(ctx, paths, mapUV, lw){     // 노란 발광(가는 선 
 // 해법: 그 크랙이 '검출된' 뷰에서만 그리고, 투영점을 그 사진의 마스크 최근접 크랙 픽셀로
 // 스냅(반경 제한). 스냅 성공률이 낮으면 그 뷰에선 그리지 않는다(오도 방지).
 const _maskData={};                                  // cam.id → {on,W,H} | null(없음/실패)
+// 그 카메라의 검출 마스크를 비트맵({on,W,H})으로 만들어 cb 에 넘긴다(캐시·비동기).
+// 마스크가 없거나 로드에 실패하면 null 을 넘겨 호출부가 스냅 없이 진행하게 한다.
 function withMaskData(cam, cb){
   const key=cam.id;
   if(key in _maskData){ cb(_maskData[key]); return; }
@@ -824,6 +853,7 @@ function withMaskData(cam, cb){
   im.onerror=()=>{ _maskData[key]=null; cb(null); };
   im.src=imgUrl(cam,'mask');
 }
+// (x,y) 에서 가장 가까운 크랙 픽셀을 반경 R 안에서 정사각 링을 넓혀가며 찾는다(없으면 null).
 function _nearestOn(md, x, y, R){
   const {on,W,H}=md;
   if(x>=0&&y>=0&&x<W&&y<H&&on[y*W+x]) return [x,y];
@@ -836,6 +866,8 @@ function _nearestOn(md, x, y, R){
   }
   return null;
 }
+// 투영 폴리라인을 그 사진의 검출 마스크에 맞춰 정렬한다.
+// 반환: 원본(이미 맞음) · 평행이동한 사본 · null(이 뷰에선 그리지 말 것).
 function snapPaths(paths, md){
   // 정점별 독립 스냅은 근처의 다른 검출 덩어리로 흩어져 사각형·지그재그로 모양을 망가뜨린다.
   // → '강체 이동 정렬': 전체 정점의 최근접 오프셋 중앙값(dx,dy) 하나로만 평행이동해
@@ -920,7 +952,7 @@ function buildCameras(diag){
     camGroup.add(g); camBySource[c.source]=g; c._group=g;
   });
 }
-function setCamColor(g,color){ if(g&&g.userData.materials) g.userData.materials.forEach(m=>m.color.setHex(color)); }
+function setCamColor(g,color){ if(g&&g.userData.materials) g.userData.materials.forEach(m=>m.color.setHex(color)); }  // 콘+프러스텀 색 동시 변경
 
 // ================= 카메라 선택/강조/정보 =================
 function selectCamera(c, fly){
@@ -945,6 +977,7 @@ function lerpAngle(a, b, t){                        // yaw 최단경로 보간(�
   if(d < -Math.PI) d += Math.PI*2;
   return a + d*t;
 }
+// 그 사진을 찍은 위치·시선으로 0.7초에 걸쳐 이동하는 애니메이션을 예약한다(실제 보간은 tickAnim).
 function flyToCamera(c){
   const P=new THREE.Vector3(c.pos[0],c.pos[1],c.pos[2]);
   const f=new THREE.Vector3(c.fwd[0],c.fwd[1],c.fwd[2]).normalize();
@@ -953,6 +986,7 @@ function flyToCamera(c){
   anim={t:0, dur:0.7, p0:camera.position.clone(), p1:P.clone(),
         yaw0:camYaw, yaw1, pitch0:camPitch, pitch1};                  // fov 는 스코프가 따로 관리
 }
+// 매 프레임 비행 애니메이션을 한 스텝 진행한다(easeInOutQuad, 끝나면 anim 해제).
 function tickAnim(dt){
   if(!anim) return;
   anim.t=Math.min(1, anim.t + dt/anim.dur);
@@ -969,6 +1003,7 @@ function cancelAnim(){ anim=null; }               // 사용자가 조작을 시�
 // 썸네일은 70×50 에 object-fit:cover 라 원본이 잘려 들어간다. 정규화 좌표(u,v)를 그대로
 // 70×50 에 곱하면 어긋나므로 cover 의 스케일·크롭 오프셋을 그대로 재현해 얹는다.
 const TW = 70, TH = 50;
+// 정규화 좌표(u,v) → 썸네일 안의 픽셀 위치. cover 크롭으로 잘려나간 영역이면 null(점을 찍지 않는다).
 function uvToThumbPx(cam, uv){
   const a = cam.w / cam.h, b = TW / TH;
   const dw = (a > b) ? TH * a : TW;          // cover: 더 큰 쪽에 맞춰 채우고 나머지를 자른다
@@ -994,6 +1029,9 @@ function showCameraImage(c){
   box.oncontextmenu=e=>{ e.preventDefault(); openImageModal(c, null, null, true); };   // noHL
   items.appendChild(box);
 }
+// 우측 이미지 패널을 다시 그린다. 셋 중 한 모드로 쓰인다:
+//   전체(인자 없음) · 핫스팟(그 균열을 검출한 뷰들) · 지점 검사(info + uvmap).
+// uvmap 이 있으면 썸네일 위에 해당 지점을 노란 점으로 찍는다.
 function renderImageList(cams, hotspot, uvmap, info){
   const items=document.getElementById('imgItems'); items.innerHTML='';
   document.getElementById('imgTitle').textContent = info ? '지점 연결 이미지' : (hotspot ? '핫스팟 이미지' : '전체 이미지');
@@ -1027,6 +1065,7 @@ function renderImageList(cams, hotspot, uvmap, info){
 // ②는 '자기 가림'(앞을 막는 구조물)까지는 못 거른다. 정확히 하려면 카메라마다 메시 레이캐스트가
 // 필요한데 브라우저에선 1회 196ms(실측)라 594대면 116초 → 불가능. 필요해지면 서버(embreex)로.
 let inspectMode=false;
+// 지점 검사 모드를 켜고 끈다(측정 모드와 배타 — 클릭 하나에 두 동작이 걸리면 안 된다).
 function setInspect(on){
   inspectMode = !!on;
   if(inspectMode && measureMode) setMode(measureMode);        // 측정 모드와 배타
@@ -1040,6 +1079,8 @@ function setInspect(on){
     renderImageList(allCams, null);
   }
 }
+// 클릭한 표면 점을 찍은 사진들을 골라 우측에 띄운다(가까운 순).
+// 프러스텀 안 + 표면 법선 앞쪽인 카메라만 남긴다 — 법선 검사가 없으면 벽 반대편 사진까지 딸려온다.
 function inspectAt(e){
   const hit = pickMesh(e);
   if(!hit){ document.getElementById('inspectMsg').textContent='구조물 표면을 클릭하세요.'; return; }
@@ -1078,6 +1119,7 @@ function makeCrop(container, cam, u, v, cropFrac){
   if(mask) mask.style.cssText='position:absolute;left:0;top:0;max-width:none;pointer-events:none;';
   const hlv=document.createElement('canvas');       // 선택 크랙 노란 하이라이트 오버레이
   hlv.style.cssText='position:absolute;left:0;top:0;pointer-events:none;';
+  // 크롭 배율·위치를 계산해 원본·마스크·하이라이트를 겹쳐 배치한다(이미지 로드/리사이즈 때마다).
   function layout(){
     const CW=box.clientWidth||280, CH=box.clientHeight||210;
     const s=CW/(im.naturalWidth*cropFrac);
@@ -1129,6 +1171,7 @@ function buildReviewRow(i){
     +'border-radius:4px;padding:5px 8px;font-size:var(--fs-cap);font-family:inherit;box-sizing:border-box;">'
     +'</div>';
 }
+// 유형별 개수를 다시 세어 칩 숫자에 반영한다(검사원이 유형을 수정하면 분포가 바뀌므로).
 function recomputeTypeCounts(){
   for(const t of CRACK_TYPES) _typeCount[t]=0;
   DATA.hotspots.forEach((h,i)=>{ _typeCount[hotType(i)]++; });
@@ -1137,15 +1180,20 @@ function recomputeTypeCounts(){
     if(el) el.textContent=_typeCount[t].toLocaleString();
   }
 }
+// 상단 '검토 n/전체' 진행 표시를 갱신한다.
 function updateRevProg(){
   const el=document.getElementById('revProg'); if(!el) return;
   const n=Object.keys(REVIEW.reviews||{}).length;
   el.textContent='검토 '+n.toLocaleString()+'/'+DATA.hotspots.length.toLocaleString();
 }
+// 검토를 저장한 뒤 화면 세 곳(상세 패널·진행 표시·크랙 목록)을 한꺼번에 되그린다.
 function _revRefresh(i, h){
   showHotspotRep(h); updateRevProg();
   if(typeof clRefresh==='function' && document.getElementById('cracklist').style.display==='flex') clRefresh();
 }
+// 방금 그린 검토 행(확인·오탐·해제·유형·메모)에 핸들러를 건다.
+// 유형 수정은 저장 후 h.type 을 즉시 바꿔 목록·칩·필터가 바로 반응하게 한다
+// (3D 리본 색은 병합 버퍼에 구워져 있어 다음 로드에 반영된다).
 function wireReviewRow(i, h){
   if(i==null || i<0) return;
   const g=id=>document.getElementById(id);
@@ -1166,6 +1214,8 @@ function wireReviewRow(i, h){
     await saveReview(i,{note:e.target.value, state:keep}); _revRefresh(i,h);
   };
 }
+// 균열 상세를 우측 패널에 띄운다 — 폭(중앙/p95/최대/3D)·길이·심각도·신뢰도·비교 이력,
+// 검토 행, 그리고 가장 잘 보이는 뷰의 확대 크롭.
 function showHotspotRep(h){
   document.getElementById('imgTitle').textContent='대표 크랙 이미지';
   document.getElementById('imgReset').style.display='inline-block';
@@ -1260,6 +1310,7 @@ function crackMarkerOpacity(){
 
 // kind='inspect' 면 지점 검사에서 온 표식(노랑). noHL=true 면 크랙 하이라이트 억제(카메라 이미지 보기).
 let modalNoHL=false;
+// 원본 사진 확대 모달을 연다(마스크 오버레이·선택 크랙 하이라이트·지점 표식을 상황에 맞게 켠다).
 function openImageModal(c, markUV, kind, noHL){
   modalCam=c; modalMark = markUV || null; modalNoHL = !!noHL;
   document.getElementById('imTitle').textContent=c.source;
@@ -1299,6 +1350,7 @@ function drawModalHL(){
   drawCrackHL(modalCam, cvs.getContext('2d'),
     q=>[q.u*cvs.width, q.v*cvs.height], Math.max(1.5, cvs.width*0.0011));
 }
+// 모달 위 지점 표식(노란 원)을 제자리에 놓는다. 균열은 마스크로 보여주므로 지점 검사일 때만 표시.
 function placeCrackMarker(){
   const mk=document.getElementById('imCrackMarker'), img=document.getElementById('imImg');
   // 크랙(빨간 원)은 검출 마스크로 대체 → 지점검사(노란 원, inspect)일 때만 표시
@@ -1309,12 +1361,14 @@ function placeCrackMarker(){
     mk.style.opacity=crackMarkerOpacity();
   } else { mk.style.display='none'; }
 }
-function closeModal(){ document.getElementById('imgmodal').style.display='none'; modalCam=null; }
+function closeModal(){ document.getElementById('imgmodal').style.display='none'; modalCam=null; }   // 모달 닫기
+// 현재 줌·팬(mv)을 스테이지 transform 에 반영한다 — 이미지·마스크·하이라이트가 함께 움직인다.
 function applyModal(){
   document.getElementById('imStage').style.transform='translate('+mv.tx+'px,'+mv.ty+'px) scale('+mv.scale+')';
   const mk=document.getElementById('imCrackMarker');
   if(mk && mk.style.display!=='none') mk.style.opacity=crackMarkerOpacity();
 }
+// 이미지 전체가 보이도록 배율·위치를 초기화한다(로드 직후·리사이즈 시).
 function fitModal(){
   const img=document.getElementById('imImg'), view=document.getElementById('imView');
   if(!img.naturalWidth) return;
@@ -1323,11 +1377,13 @@ function fitModal(){
   mv={scale:s, tx:(view.clientWidth-img.naturalWidth*s)/2, ty:(view.clientHeight-img.naturalHeight*s)/2};
   applyModal();
 }
+// 마우스 위치(mx,my)를 고정점으로 배율을 fac 배 한다(그 점 아래 픽셀이 제자리에 남는다).
 function zoomModal(mx,my,fac){
   const ns=Math.max(0.05, Math.min(30, mv.scale*fac));
   mv.tx=mx-(mx-mv.tx)*(ns/mv.scale); mv.ty=my-(my-mv.ty)*(ns/mv.scale); mv.scale=ns; applyModal();
 }
 
+// 지점 검사에서 클릭한 3D 지점에 분홍 구를 놓는다(지연 생성, 화면상 크기 고정).
 function placeWorldMarker(p){
   if(!worldMarker){
     worldMarker=new THREE.Mesh(new THREE.SphereGeometry(1,16,16),
@@ -1361,8 +1417,10 @@ function placeWorldMarker(p){
 })();
 
 let baseScale=1;
+// 메시 크기를 재서 모델 의존 값들을 한 번에 정한다 — 화면상 크기 기준(baseScale),
+// 카메라 글리프, 바닥 그리드와 좌표축. 메시 로드가 끝난 뒤 한 번 부른다.
 function fitSizes(){
-  const box = new THREE.Box3().setFromObject(globalMesh || scene); 
+  const box = new THREE.Box3().setFromObject(globalMesh || scene);
   const d = box.getSize(new THREE.Vector3()).length();
   baseScale = d * 0.005;
   modelDiag = d; buildCameras(d);
@@ -1416,6 +1474,8 @@ renderer.domElement.addEventListener('mouseleave',()=>mIn=false);
 // 크랙(hot) 하이라이트 갱신: 호버·선택된 크랙의 리본만 흰 오버레이 튜브로 재생성.
 // (병합 버퍼는 건드리지 않는다 — 인자는 호환용이고 현재 hoverHot/selIdx 상태로 전체 동기화)
 let _hlHots=new Set();
+// 흰색 강조 오버레이를 현재 호버·선택 상태와 동기화한다(바뀐 게 없으면 즉시 반환).
+// 인자는 호환용으로만 남아 있고, 실제로는 hoverHot/selIdx 를 보고 전체를 다시 맞춘다.
 function refreshRibbonColor(_hot){
   const want=new Set();
   if(hoverHot>=0) want.add(hoverHot);
@@ -1429,6 +1489,7 @@ function refreshRibbonColor(_hot){
         hlGroup.add(new THREE.Mesh(variableTube(run.pts, run.rr, RIBBON_RADIAL), HL_MAT));
   }
 }
+// 호버 중인 균열을 바꾼다(-1 = 없음). 이전 것은 원래 색으로, 새 것은 흰색 강조로.
 function setHoverHot(hot){
   if(hot===hoverHot) return;
   const prev=hoverHot; hoverHot=hot;
@@ -1460,6 +1521,8 @@ function pickRibbonHot(){
   return bestHot;
 }
 let _lastPickT=0, _lastPickHot=-1;                    // 호버 피킹 스로틀 상태
+// 매 프레임 커서 아래를 보고 호버 상태·커서 모양을 갱신한다.
+// 리본 피킹은 비싸서 60ms 로 스로틀한다(수만 크랙에서 매 프레임은 낭비).
 function updateHover(){
   if(measureMode||!mIn){ renderer.domElement.style.cursor='default'; hoverIdx=-1; setHoverHot(-1); return; }
   ray.setFromCamera(mouse,camera);
@@ -1565,27 +1628,30 @@ const HOT_LIFT = 0.004;        // 카메라 쪽으로 거리의 0.4% 당김. 핫
 const _hp = new THREE.Vector3();
 // 다이아몬드 레티클 제거 — 3D 스프라이트 갱신은 더 이상 없다(정보는 말풍선 DOM 이 담당).
 
-function setMeasResult(html){ document.getElementById('measResult').innerHTML=html; }
-function modePrompt(){
+function setMeasResult(html){ document.getElementById('measResult').innerHTML=html; }   // 측정 결과/안내 문구 표시
+function modePrompt(){                               // 현재 측정 모드의 다음 단계 안내 문구
   if(measureMode==='distance') return '① 첫 번째 점을 클릭하세요.';
   if(measureMode==='radius')   return '① 원의 중심을 클릭하세요.';
   if(measureMode==='calib')    return '① 기준 거리의 첫 번째 점을 클릭하세요.';
   return '측정 모드를 선택하세요.';
 }
-function updateModeButtons(){
+function updateModeButtons(){                        // 세 측정 버튼의 active 표시를 현재 모드와 맞춤
   document.getElementById('btnDist').classList.toggle('active', measureMode==='distance');
   document.getElementById('btnRad').classList.toggle('active', measureMode==='radius');
   document.getElementById('btnCalib').classList.toggle('active', measureMode==='calib');
 }
+// three 객체의 GPU 자원(지오메트리·머티리얼·텍스처)을 해제한다 — 측정 객체는 자주 만들고 지운다.
 function disposeObj(o){
   if(o.geometry) o.geometry.dispose();
   if(o.material){ if(o.material.map) o.material.map.dispose(); o.material.dispose(); }
 }
+// 찍은 점과 그려진 측정 객체를 모두 지운다(clearText:false 면 안내 문구는 그대로 둔다).
 function resetMeasure(clearText){
   measPts=[]; measNormals=[]; lastMeasure=null;
   while(measureGroup.children.length){ disposeObj(measureGroup.children.pop()); }
   if(clearText!==false) setMeasResult(modePrompt());
 }
+// 측정 모드를 켜고 끈다(같은 버튼을 다시 누르면 해제). 지점 검사 모드와는 배타.
 function setMode(m){
   measureMode = (measureMode===m) ? null : m;
   if(measureMode && inspectMode) setInspect(false);          // 지점 검사와 배타
@@ -1609,6 +1675,7 @@ function pickMesh(e){
   return {point:h.point.clone(), normal};
 }
 
+// 측정 끝점 구슬 하나(깊이 테스트 없음 → 메시에 가려지지 않는다, 화면상 크기 고정).
 function addMarker(pos,color){
   const m=new THREE.Mesh(new THREE.SphereGeometry(1,16,16),
       new THREE.MeshBasicMaterial({color, depthTest:false}));
@@ -1616,6 +1683,7 @@ function addMarker(pos,color){
   m.scale.setScalar(MARK_PX * worldPerPixel(camera.position.distanceTo(pos)));
   measureGroup.add(m); return m;
 }
+// 두 점을 잇는 측정선(역시 항상 앞에 보이게 그린다).
 function addLine(a,b,color){
   const l=new THREE.Line(new THREE.BufferGeometry().setFromPoints([a,b]),
       new THREE.LineBasicMaterial({color, depthTest:false}));
@@ -1666,10 +1734,12 @@ function fmtUnit(meters){
   if(mm<1000)  return f(cm,2)+' cm';
   return f(meters,4)+' m';
 }
+// 같은 값을 mm·cm·m 세 단위로 한 줄에(보조 표시용).
 function allUnits(meters){
   meters = meters * calibScale;
   return (meters*1000).toFixed(2)+' mm · '+(meters*100).toFixed(2)+' cm · '+meters.toFixed(4)+' m';
 }
+// 마지막 측정값을 좌측 패널에 표시한다(반경은 지름도 함께).
 function showResult(){
   if(!lastMeasure) return;
   if(lastMeasure.type==='distance'){
@@ -1684,6 +1754,7 @@ function showResult(){
       '<span style="color:#888;">'+allUnits(r)+'</span>');
   }
 }
+// 3D 숫자 라벨을 다시 만든다(단위 변경·캘리브레이션으로 표기가 달라졌을 때).
 function relabel(){
   if(!lastMeasure) return;
   if(lastMeasure.label){ measureGroup.remove(lastMeasure.label); disposeObj(lastMeasure.label); }
@@ -1692,6 +1763,8 @@ function relabel(){
       lastMeasure.type==='radius' ? '#ff9800' : '#00e5ff');
 }
 
+// 측정 모드에서의 표면 클릭 처리. 세 모드 모두 '점 2개'로 완성되며, 세 번째 클릭은 새 측정을 시작한다.
+//   distance 두 점 사이 거리 · radius 중심+가장자리 → 반경 · calib 두 점을 실측값과 대응시켜 배율 산출
 function onMeasureClick(e){
   const hit=pickMesh(e);
   if(!hit){ setMeasResult('⚠ 모델 표면을 클릭하세요 (빈 공간이 선택됨).'); return; }
@@ -1776,6 +1849,7 @@ refreshCalibUI();
 // 수만 개 크랙을 표로 탐색: 300행씩 청크 렌더(스크롤 시 추가), 행 클릭 → 해당 크랙으로 비행.
 const clPanel=document.getElementById('cracklist'), clRowsEl=document.getElementById('clRows');
 let clData=[], clShown=0; const CL_CHUNK=300;
+// 표시할 균열을 골라 정렬해 clData 에 담는다(숨긴 유형 제외, 최소 폭·길이 필터는 보정된 mm 기준).
 function clFilterSort(){
   const minW=parseFloat(document.getElementById('clMinW').value)||0;
   const minL=parseFloat(document.getElementById('clMinL').value)||0;
@@ -1791,6 +1865,7 @@ function clFilterSort(){
   });
   clData.sort((a,b)=>get(b[1])-get(a[1]));
 }
+// 목록 행 하나(번호·검토표시·유형·심각도·폭·길이·뷰 수). 클릭하면 그 균열로 날아간다.
 function clRow(i,h){
   const el=document.createElement('div'); el.className='clRow'; el.dataset.hi=i;
   const c=hotSevColor(i);
@@ -1816,6 +1891,7 @@ function clRow(i,h){
     el.classList.add('sel'); flyToCrack(i); };
   return el;
 }
+// 다음 300개를 이어 그린다(무한 스크롤). 수만 개를 한 번에 만들면 DOM 이 감당하지 못한다.
 function clRenderMore(){
   const end=Math.min(clData.length, clShown+CL_CHUNK);
   const frag=document.createDocumentFragment();
@@ -1825,6 +1901,7 @@ function clRenderMore(){
     ? clShown.toLocaleString()+' / '+clData.length.toLocaleString()+'개 표시 — 스크롤하면 더 불러옵니다'
     : clData.length.toLocaleString()+'개 표시'+(calibScale!==1?' · 보정 ×'+calibScale.toFixed(4):'');
 }
+// 목록을 처음부터 다시 만든다(정렬·필터 변경, 검토 저장, 캘리브레이션 변경 시).
 function clRefresh(){
   clFilterSort(); clRowsEl.innerHTML=''; clShown=0; clRenderMore();
   document.getElementById('clCount').textContent =
@@ -1840,6 +1917,7 @@ document.getElementById('clClose').onclick=()=>showPane(null);
 // ================= 상단 메뉴 ↔ 좌측 도크 (같은 메뉴 재클릭 = 닫기) =================
 const PANES=['pane-info','pane-view','cracklist','pane-inspect','pane-measure','pane-calib'];
 let activePane='pane-info';
+// 좌측 도크에 패널 하나만 띄운다. 같은 메뉴를 다시 누르거나 null 이면 도크를 닫는다.
 function showPane(id){
   activePane = (id!=null && activePane!==id) ? id : null;
   for(const p of PANES){ const el=document.getElementById(p);
@@ -1859,6 +1937,8 @@ document.querySelectorAll('#topbar .tmenu').forEach(b=>b.onclick=()=>showPane(b.
     if(s.r) root.style.setProperty('--rightw', s.r+'px'); }catch(e){}
   const curL=()=>parseInt(getComputedStyle(root).getPropertyValue('--leftw'))||340;
   const curR=()=>parseInt(getComputedStyle(root).getPropertyValue('--rightw'))||300;
+  // 그립 하나에 드래그 리사이즈를 건다. apply(clientX) 가 실제 폭 계산을 맡고,
+  // 드래그가 끝나면 좌우 폭을 localStorage 에 기억한다.
   function grip(el, apply){
     el.addEventListener('pointerdown', e=>{
       e.preventDefault(); el.classList.add('drag');
@@ -1890,6 +1970,8 @@ function nearestMemberCam(h){
   }
   return best;
 }
+// 균열 i 를 선택하고 상세를 띄운 뒤, 그 균열을 검출한 가장 가까운 카메라 시점으로 날아간다.
+// 멤버 카메라가 없으면(예외) 현 시선을 유지한 채 균열 크기에 비례한 거리에서 바라본다.
 function flyToCrack(i){
   const h=DATA.hotspots[i]; if(!h) return;
   selectHotspot(i); showHotspotRep(h);
@@ -1964,6 +2046,8 @@ addEventListener('keydown', e => {
   if(e.key === 'F2'){ _st.on = !_st.on; _st.el.style.display = _st.on ? 'block' : 'none'; }
 });
 const _now = () => performance.now();
+// 성능 오버레이를 0.5초마다 갱신한다(FPS·구간별 프레임 시간·드로우콜·삼각형 수).
+// 최적화 작업의 근거를 눈으로 보기 위한 것 — 평상시엔 꺼 둔다.
 function _statsTick(){
   _st.n++;
   const now = _now(), dt = now - _st.t0;
@@ -1995,6 +2079,7 @@ function _statsTick(){
 // 속도는 모델 크기에 비례(모델이 622m든 50m든 체감 일정). Space/Ctrl 은 화면 시선과 무관하게 월드 상하.
 const _keys = new Set();
 const _MOVE = ['KeyW','KeyA','KeyS','KeyD','Space','ControlLeft','ControlRight'];
+// 지금 입력 칸에 타이핑 중인가 — 맞으면 WASD 를 이동으로 가로채지 않는다.
 function _typingTarget(){
   const t = document.activeElement, tag = t && t.tagName;
   return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
@@ -2011,6 +2096,8 @@ const _fwd=new THREE.Vector3(), _right=new THREE.Vector3(), _move=new THREE.Vect
 let _flyRamp = 0;                                 // 0→1 가속 램프
 const FLY_ACCEL = 1.2;                            // 최대 속도까지 걸리는 시간(초)
 const FLY_MIN = 0.05;                             // 시작 속도 = 최대의 5% (천천히 출발)
+// 눌린 키에 따라 카메라 위치를 옮긴다(방향은 건드리지 않는다 — applyLook 이 매 프레임 유지).
+// 멈췄다 다시 누르면 램프가 0부터라 항상 천천히 출발한다. Shift 는 4배 가속.
 function updateFly(dt){
   const f = (_keys.has('KeyW')?1:0) - (_keys.has('KeyS')?1:0);
   const r = (_keys.has('KeyD')?1:0) - (_keys.has('KeyA')?1:0);
@@ -2032,6 +2119,7 @@ function updateFly(dt){
 
 // ================= 토스트 알림 =================
 let _toastT=null;
+// 화면 하단에 잠깐 뜨는 알림(같은 요소를 재사용하므로 연달아 부르면 마지막 것만 남는다).
 function toast(msg, ms=2200){
   const el=document.getElementById('toast');
   el.innerHTML='<svg class="ic"><use href="#i-check"/></svg><span></span>';
@@ -2050,6 +2138,7 @@ const GZ = (function(){
   const NS='http://www.w3.org/2000/svg';
   const svg=document.createElementNS(NS,'svg'); svg.setAttribute('viewBox','0 0 88 88'); host.appendChild(svg);
   const els=[];
+  // SVG 요소 하나를 속성과 함께 만든다(기즈모 전용 축약 헬퍼).
   function mk(t,a){ const e=document.createElementNS(NS,t); for(const k in a) e.setAttribute(k,a[k]); return e; }
   // 각 축마다 +/- 두 방향 노드(양=채움 라벨, 음=빈 원)
   const nodes=[];
@@ -2067,6 +2156,8 @@ const GZ = (function(){
       nodes.push({ax,s,line,g,circ,txt});
     }
   }
+  // 현재 카메라 자세로 축 노드 위치를 다시 계산해 그린다(매 프레임).
+  // z 순으로 재정렬해 앞쪽 축이 위에 오게 하고, 뒤쪽은 흐리게 표시한다.
   function update(){
     const q=camera.quaternion.clone().invert();      // 월드축 → 카메라(뷰) 좌표
     const proj=nodes.map(n=>{ const p=n.ax.v.clone().multiplyScalar(n.s).applyQuaternion(q);
