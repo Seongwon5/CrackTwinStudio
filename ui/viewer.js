@@ -187,7 +187,7 @@ function fmtHotText(h){
     + ` · ${fmtLen(h)}`;
 }
 
-// 보고서 메타데이터 표시 (v2 에만 있음 — v1 은 report_meta 가 없으니 건너뜀)
+// 보고서 메타데이터 표시 (report_meta 가 없는 구형 보고서는 건너뜀)
 function renderMeta(){
   const m = DATA.report_meta;
   if(!m || !Object.keys(m).length) return;
@@ -1018,10 +1018,6 @@ function renderImageList(cams, hotspot, uvmap, info){
     items.appendChild(el);
   });
 }
-function filterByHotspot(h){
-  const srcs=new Set((h.views||[]).map(v=>v.source));
-  renderImageList(allCams.filter(c=>srcs.has(c.source)), h);
-}
 
 // ================= 지점 검사 모드 =================
 // 임의의 표면 지점을 클릭 → 그 점이 찍힌 사진들을 찾아 목록에 띄우고, 각 썸네일에 점 위치를 표시.
@@ -1332,19 +1328,6 @@ function zoomModal(mx,my,fac){
   mv.tx=mx-(mx-mv.tx)*(ns/mv.scale); mv.ty=my-(my-mv.ty)*(ns/mv.scale); mv.scale=ns; applyModal();
 }
 
-// 클릭한 이미지 픽셀 → 3D 좌표 (카메라 광선 ∩ 메시). 왜곡(dist)은 무시.
-function imageToWorld(cam, nx, ny){
-  if(!globalMesh) return null;
-  const px=nx*cam.w, py=ny*cam.h;
-  const x=(px-cam.cx)/cam.fx, y=(py-cam.cy)/cam.fy;
-  const P=new THREE.Vector3(cam.pos[0],cam.pos[1],cam.pos[2]);
-  const rt=new THREE.Vector3(cam.right[0],cam.right[1],cam.right[2]);
-  const up=new THREE.Vector3(cam.up[0],cam.up[1],cam.up[2]);
-  const f=new THREE.Vector3(cam.fwd[0],cam.fwd[1],cam.fwd[2]);
-  const dir=rt.multiplyScalar(x).addScaledVector(up,-y).add(f).normalize();
-  const hit=new THREE.Raycaster(P, dir).intersectObject(globalMesh,false);
-  return hit.length ? hit[0].point.clone() : null;
-}
 function placeWorldMarker(p){
   if(!worldMarker){
     worldMarker=new THREE.Mesh(new THREE.SphereGeometry(1,16,16),
@@ -1355,7 +1338,7 @@ function placeWorldMarker(p){
   worldMarker.scale.setScalar(MARK_PX*worldPerPixel(camera.position.distanceTo(p)));
 }
 // (제거됨) 모달에서 점 클릭 → 3D 좌표 계산 기능 — 지점 검사는 3D 화면의 '지점 검사 모드'로 수행.
-// imageToWorld/placeWorldMarker 는 지점 검사 등 다른 경로에서 계속 사용한다.
+// placeWorldMarker 는 지점 검사 모드에서 계속 사용한다.
 (function(){
   const view=document.getElementById('imView');
   view.addEventListener('pointerdown', e=>{ mDrag={x:e.clientX,y:e.clientY,tx:mv.tx,ty:mv.ty}; mMoved=false; view.setPointerCapture(e.pointerId); });
@@ -1490,15 +1473,6 @@ function updateHover(){
   hoverIdx = hot;                                    // 말풍선(폭·길이) 표시
   setHoverHot(hot);                                  // 그 크랙의 리본 빨강
   renderer.domElement.style.cursor = (c.length||hot>=0) ? 'pointer' : 'default';
-}
-
-// 스프라이트는 눈에만 안 보일 뿐 레이캐스트에는 잡히므로, 클릭 때만 메시를 쏴서
-// 메시가 먼저 맞으면(=레티클이 뒤에 있으면) 무시한다. 200만 면 1회 ≈ 200ms 라 클릭에서만 감당.
-function hotBlocked(dist){
-  if(!globalMesh) return false;
-  const f=ray.far; ray.far=dist*0.995;
-  const hit=ray.intersectObject(globalMesh,false).length>0;
-  ray.far=f; return hit;
 }
 
 // 짧은 탭(클릭)일 때만 선택: 측정/검사 모드 우선, 아니면 핫스팟 → 카메라 순으로 레이캐스트
