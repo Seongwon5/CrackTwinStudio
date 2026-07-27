@@ -89,7 +89,7 @@ ui/               대시보드 + three.js 뷰어(viewer.html)
 libs/             three.js r160 오프라인 번들 (인터넷 불필요)
 network/          best.pt 언피클용 DeepLabV3+ 신경망 패키지
 model/best.pt     크랙 검출 가중치 (FP16, 약 113MB · Git LFS)
-tools/            보조 스크립트 (convert_twin.py 등)
+tools/            대시보드 기능 모듈 (검사 비교 · PDF 내보내기 · 유형 재학습)
 reports/          생성된 .twin 보고서 (Git 미포함)
 ```
 

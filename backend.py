@@ -18,7 +18,6 @@ import os
 import re
 import json
 import uuid
-import base64
 import shutil
 import zipfile
 import threading
@@ -74,62 +73,25 @@ def _run_export_job(job_id, twin, out_pdf, rows, photos):
     finally:
         j["done"] = True
 
-# 구형식(v1: 단일 JSON) 을 백엔드가 통째로 파싱해도 되는 상한. v1 은 이 크기를 넘으면 열지 않고
-# 변환을 안내한다(파싱만으로 파일의 4~5배 메모리를 쓰기 때문).
-LEGACY_MAX = 400 * 1024 * 1024
-_v1_cache = {"path": None, "mtime": None, "data": None}   # v1 은 재파싱이 비싸 1개만 캐시
-
-
 def twin_version(path):
-    """매직바이트로 형식 판별.  2 = zip 컨테이너,  1 = 구형식 단일 JSON."""
+    """매직바이트로 형식 검증. 2 = zip 컨테이너(현행 유일 형식).
+    구형식(v1: 단일 JSON)은 더 이상 지원하지 않는다 — 재분석해 새로 생성해야 한다."""
     with open(path, "rb") as f:
         head = f.read(4)
     if head[:4] == b"PK\x03\x04":
         return 2
     if head[:1] == b"{":
-        return 1
+        raise ValueError(
+            "구형식(v1) 보고서는 더 이상 지원하지 않습니다: " + os.path.basename(path) + "\n"
+            "  대시보드에서 원본 이미지·PLY 로 다시 분석해 새로 생성하세요.")
     raise ValueError("알 수 없는 .twin 형식입니다: " + os.path.basename(path))
 
 
-def _load_v1(path):
-    """구형식 .twin 을 파싱해 캐시. 뷰어가 meta/mesh/이미지를 각각 요청하므로 캐시가 없으면
-    요청마다 전체를 다시 파싱하게 된다."""
-    mt = os.path.getmtime(path)
-    if _v1_cache["path"] == path and _v1_cache["mtime"] == mt:
-        return _v1_cache["data"]
-    size = os.path.getsize(path)
-    if size > LEGACY_MAX:
-        raise ValueError(
-            f"구형식 보고서가 너무 큽니다({size/1e6:.0f}MB). 브라우저 문자열 한계(536.9MB)로 열 수 없습니다.\n"
-            f"  py tools/convert_twin.py \"{path}\"  로 새 형식(v2)으로 변환하세요.")
-    with open(path, "r", encoding="utf-8") as f:
-        d = json.load(f)
-    _v1_cache.update(path=path, mtime=mt, data=d)
-    return d
-
-
-def _v1_img_bytes(cam, kind):
-    """구형식 카메라의 data-URI( data:image/jpeg;base64,... ) → 원본 JPEG 바이트."""
-    uri = cam.get(kind) or ""
-    i = uri.find(",")
-    return base64.b64decode(uri[i + 1:]) if i >= 0 else b""
-
-
 def report_meta(path):
-    """뷰어용 메타(JSON). 이미지·메시 같은 큰 덩어리는 빼고 기하만 담는다.
-    v1/v2 어느 쪽이든 같은 모양을 돌려주므로 뷰어 코드는 한 갈래로 유지된다."""
-    if twin_version(path) == 2:
-        with zipfile.ZipFile(path) as z:
-            return z.read("meta.json").decode("utf-8")
-    d = _load_v1(path)
-    cams = [{k: v for k, v in c.items() if k not in ("thumb", "full")} for c in d.get("cameras", [])]
-    for i, c in enumerate(cams):
-        c.setdefault("id", i)
-    return json.dumps({"version": 1,
-                       "counts": {"cameras": len(cams), "hotspots": len(d.get("hotspots", []))},
-                       "text_points": d.get("text_points", []),
-                       "cameras": cams,
-                       "hotspots": d.get("hotspots", [])}, ensure_ascii=False)
+    """뷰어용 메타(JSON). 이미지·메시 같은 큰 덩어리는 빼고 기하만 담는다."""
+    twin_version(path)                           # 형식 검증(구형식이면 여기서 예외)
+    with zipfile.ZipFile(path) as z:
+        return z.read("meta.json").decode("utf-8")
 
 
 def _ps_dialog(script):
@@ -314,40 +276,29 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "보고서 파일 없음: " + p, "text/plain; charset=utf-8"); return None
         return p
 
-    # ---- 보고서 조각 API (v1/v2 공통 모양) ----
+    # ---- 보고서 조각 API ----
     def _report_mesh(self, path):
         """메시를 '바이너리'로 내려준다. base64/JSON 을 거치지 않으므로 문자열 한계와 무관."""
-        if twin_version(path) == 2:
-            with zipfile.ZipFile(path) as z:                     # 스트리밍: 피크 메모리 ≈ 청크
-                info = z.getinfo("mesh.ply")
-                with z.open("mesh.ply") as src:
-                    return self._stream(src, info.file_size, "application/octet-stream")
-        raw = base64.b64decode(_load_v1(path).get("mesh_base64", ""))    # v1 은 디코드해서 동일 형태로
-        return self._send(200, raw, "application/octet-stream")
+        twin_version(path)                                       # 형식 검증
+        with zipfile.ZipFile(path) as z:                         # 스트리밍: 피크 메모리 ≈ 청크
+            info = z.getinfo("mesh.ply")
+            with z.open("mesh.ply") as src:
+                return self._stream(src, info.file_size, "application/octet-stream")
 
     def _report_img(self, path, cid, kind):
         if kind not in ("thumb", "full", "mask"):
             return self._send(400, "kind 는 thumb|full|mask", "text/plain; charset=utf-8")
         ext = "png" if kind == "mask" else "jpg"                  # 마스크는 투명 PNG
         mime = "image/png" if kind == "mask" else "image/jpeg"
-        if twin_version(path) == 2:
-            name = f"img/{cid:04d}_{kind}.{ext}"
-            with zipfile.ZipFile(path) as z:
-                try:
-                    info = z.getinfo(name)
-                except KeyError:
-                    return self._send(404, "이미지 없음: " + name, "text/plain; charset=utf-8")
-                with z.open(name) as src:
-                    return self._stream(src, info.file_size, mime)
-        if kind == "mask":
-            return self._send(404, "v1 은 마스크 미지원", "text/plain; charset=utf-8")
-        cams = _load_v1(path).get("cameras", [])
-        cam = next((c for c in cams if c.get("id") == cid), None)
-        if cam is None and 0 <= cid < len(cams):
-            cam = cams[cid]
-        if cam is None:
-            return self._send(404, "카메라 없음: " + str(cid), "text/plain; charset=utf-8")
-        return self._send(200, _v1_img_bytes(cam, kind), "image/jpeg")
+        twin_version(path)                                        # 형식 검증
+        name = f"img/{cid:04d}_{kind}.{ext}"
+        with zipfile.ZipFile(path) as z:
+            try:
+                info = z.getinfo(name)
+            except KeyError:
+                return self._send(404, "이미지 없음: " + name, "text/plain; charset=utf-8")
+            with z.open(name) as src:
+                return self._stream(src, info.file_size, mime)
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path); r = u.path; q = urllib.parse.parse_qs(u.query)

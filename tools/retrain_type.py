@@ -174,8 +174,8 @@ def run(reports_dir=REPORTS_DIR, out=MODEL_JSON, trainset=TRAIN_NPZ,
     lost = [c for c in cur if c not in cnt]
     if lost:
         log(f"[중단] 현재 모델의 유형 {lost} 에 대한 라벨이 없습니다 — 재학습하면 그 유형이 사라집니다."
-            f" (현재 {cur} → 새 {sorted(cnt)}) 해당 유형의 검토를 남기거나,"
-            f" 유형을 폐지하려면 tools/merge_class.py 로 병합하세요. 모델은 변경하지 않습니다.")
+            f" (현재 {cur} → 새 {sorted(cnt)}) 해당 유형의 검토를 남겨 라벨을 확보하세요."
+            f" 모델은 변경하지 않습니다.")
         return {"trained": False, "labels": int(len(Xa)), "dist": dict(cnt), "note": "class-loss"}
     if dry_run:
         log("[dry-run] 여기서 종료 — 모델·스냅샷 미변경.")

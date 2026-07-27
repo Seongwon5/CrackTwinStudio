@@ -218,35 +218,6 @@ def cluster_voxel(pts, radius):
     return np.array(centers), []
 
 
-def cluster_hotspots(pts, radius):
-    """3D 점들을 radius 격자의 26이웃 연결로 묶어 (군집중심, 멤버인덱스들) 리스트 반환."""
-    pts = np.asarray(pts, float)
-    if len(pts) == 0:
-        return []
-    keys = np.floor(pts / radius).astype(np.int64)
-    cell = {}
-    for i, k in enumerate(map(tuple, keys)):
-        cell.setdefault(k, []).append(i)
-    cell_keys = list(cell.keys()); kindex = {k: c for c, k in enumerate(cell_keys)}
-    parent = list(range(len(cell_keys)))
-    def find(a):
-        while parent[a] != a:
-            parent[a] = parent[parent[a]]; a = parent[a]
-        return a
-    neigh = [(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)]
-    for c, k in enumerate(cell_keys):
-        for d in neigh:
-            nk = (k[0] + d[0], k[1] + d[1], k[2] + d[2])
-            if nk in kindex:
-                ra, rb = find(c), find(kindex[nk])
-                if ra != rb:
-                    parent[ra] = rb
-    groups = {}
-    for c, k in enumerate(cell_keys):
-        groups.setdefault(find(c), []).extend(cell[k])
-    return [(pts[idxs].mean(axis=0), idxs) for idxs in groups.values()]
-
-
 def dbscan(pts, eps, min_samples):
     """scipy cKDTree 기반 DBSCAN. 라벨 배열 반환(-1=노이즈). sklearn 불필요.
     코어점(이웃 ≥ min_samples)을 통해 밀도 도달 가능한 점을 한 군집으로 묶는다."""
@@ -327,17 +298,6 @@ def graph_length(pts, eps):
         if len(fin):
             best = max(best, float(fin.max()))
     return best
-
-
-def arc_length_mm(poly, max_gap=0.3):
-    """순서 있는 3D 폴리라인의 호 길이(mm). 연속 정점 거리 합 — 순서를 알 때 가장 자연스럽다.
-    한 구간이 max_gap(=30cm, 역투영 유령 점프)보다 크면 제외한다. graph_length 는 eps 연결성이
-    성긴 정점(>eps)에서 끊겨 길이를 과소평가하지만, 호 길이는 순서를 그대로 써서 그 문제가 없다."""
-    p = np.asarray(poly, float)
-    if len(p) < 2:
-        return 0.0
-    seg = np.linalg.norm(np.diff(p, axis=0), axis=1)
-    return float(seg[seg <= max_gap].sum()) * 1000.0
 
 
 def fuse_points(pts, ws, ns, voxel):
@@ -494,10 +454,6 @@ class CrackSegmenter:
         wsum[wsum == 0] = 1e-6
         return acc / wsum
 
-    def predict_mask(self, img_bgr):
-        """이진 크랙 마스크(0/255) 반환."""
-        return (self.predict_prob_batched(img_bgr) >= self.thr).astype(np.uint8) * 255
-
 
 # ==================================================================
 # 3. 크랙 정량화 (중심선 길이 + 거리변환 기반 직교 폭)
@@ -557,18 +513,6 @@ def _elong(ys, xs):
     cov = np.cov(np.vstack([xs, ys]).astype(float))
     ev = np.linalg.eigvalsh(cov)
     return float(np.sqrt(max(ev[1], 1e-9) / max(ev[0], 1e-9)))
-
-
-def _skeleton_length(skel):
-    """중심선 총 길이(px): 인접 스켈레톤 쌍의 유클리드 거리 합(대각선 √2 반영)."""
-    total = 0.0; H, W = skel.shape
-    ys, xs = np.nonzero(skel)
-    for y, x in zip(ys, xs):
-        for (dy, dx), d in zip(_OFF, _OFF_D):
-            ny, nx = y + dy, x + dx
-            if 0 <= ny < H and 0 <= nx < W and skel[ny, nx] and (ny * W + nx) > (y * W + x):
-                total += d
-    return float(total)
 
 
 def _prune_spurs(skel, min_len):
@@ -873,23 +817,6 @@ def build_scale_map(shape, uv, locs, ray_idx, tri_idx, d_world, C, fx, mesh, fal
     ok = (yy >= 0) & (yy < H) & (xx >= 0) & (xx < W)
     scale[yy[ok], xx[ok]] = mmpp[ok].astype(np.float32)
     return scale
-
-
-def crack_length_3d(skeleton_mask, K, dist, R, C, mesh):
-    """[정련용] 중심선 픽셀을 3D로 역투영해 인접 스켈레톤 간 3D 거리를 합산 → 실표면 길이(m).
-    원근·경사·곡면을 모두 자동 보정한다(향후 스케일맵 길이 대체/검증용)."""
-    ys, xs = np.where(np.asarray(skeleton_mask) > 0)
-    if len(xs) == 0:
-        return 0.0
-    uv = np.column_stack([xs, ys]).astype(float)
-    locs, ray_idx, _, _ = backproject(uv, K, dist, R, C, mesh)
-    P = {(int(uv[ray_idx[k], 1]), int(uv[ray_idx[k], 0])): locs[k] for k in range(len(ray_idx))}
-    total = 0.0
-    for (y, x), p in P.items():
-        for dy, dx in ((0, 1), (1, 0), (1, 1), (1, -1)):
-            if (y + dy, x + dx) in P:
-                total += float(np.linalg.norm(p - P[(y + dy, x + dx)]))
-    return total
 
 
 # ==================================================================
