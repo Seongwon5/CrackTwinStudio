@@ -16,7 +16,8 @@
 - **사용자 매뉴얼 신설** ([`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)) — 설치·조작·측정값 해석·문제 해결
 - **CHANGELOG 신설** (이 문서)
 - README를 프로젝트 소개 + 문서 지도 역할로 정리
-- 기존 문서를 `docs/` 로 이동 — `DESIGN_twin_v2.md`, `DEVLOG_2026-07-15.md`(구 `CHANGELOG_2026-07-15.md`)
+- `DESIGN_twin_v2.md` 를 `docs/` 로 이동
+- 구 `CHANGELOG_2026-07-15.md`(특정일 개발 기록) 제거 — 요지는 이 문서와 개발자 문서에 반영
 
 ---
 
@@ -155,7 +156,6 @@
 
 ## 이전 기록
 
-`.twin` v2 포맷 전환 설계와 `embreex` 사고 조사 등 초기 개발 과정의 상세 기록은 별도 문서에 있다.
+`.twin` v2 포맷 전환의 설계 근거와 실측 데이터는 별도 문서에 있다.
 
 - [`docs/DESIGN_twin_v2.md`](docs/DESIGN_twin_v2.md) — 포맷 전환 설계와 실측 데이터
-- [`docs/DEVLOG_2026-07-15.md`](docs/DEVLOG_2026-07-15.md) — 보고서 생성 전멸 사고(`embreex`) 조사 기록

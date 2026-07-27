@@ -733,6 +733,5 @@ py -c "import ast,sys; [ast.parse(open(f,encoding='utf-8').read()) for f in ['ap
 
 - [사용자 매뉴얼](USER_GUIDE.md) — 설치·조작·문제 해결
 - [`.twin` v2 설계 문서](DESIGN_twin_v2.md) — 포맷 전환의 상세 근거와 실측 데이터
-- [개발 로그 2026-07-15](DEVLOG_2026-07-15.md) — `embreex` 사고 조사 기록
 - [데이터·구성요소 출처](../DATA_SOURCES.md) — 모델 계보와 라이선스
 - [변경 이력](../CHANGELOG.md)
