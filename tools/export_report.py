@@ -70,6 +70,12 @@ def _conf_band(h, bounds):
 
 
 def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=None):
+    """.twin 하나로 검사 보고서 PDF 를 만든다(라이브러리 진입점).
+
+    구성: 표지·요약 → 위치도 → 균열 대장(폭 내림차순 max_rows 개) → 사진 대지(top_photos 장).
+    검토 사이드카(<twin>.review.json)가 있으면 상태·수정 유형·메모를 대장에 반영한다.
+    수치는 파이프라인 무보정 mm 기준이다(뷰어의 2점 캘리브레이션은 로컬 설정이라 미반영).
+    log 콜백으로 진행 상황을 전달한다(백엔드 잡 로그용). debug_png 를 주면 각 면을 PNG 로도 남긴다."""
     z = zipfile.ZipFile(twin)
     meta = json.loads(z.read("meta.json"))
     hots = meta.get("hotspots", [])
@@ -104,6 +110,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
     n = len(hots)
     pngs = []
 
+    # 완성된 figure 한 장을 PDF 에 넣고 닫는다(debug_png 지정 시 PNG 도 함께 저장).
     def _save(fig, name):
         pdf.savefig(fig)
         if debug_png:
@@ -258,6 +265,8 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
 
 
 def main():
+    """CLI 진입점. 인자를 파싱해 build_pdf() 를 부른다(출력 경로 미지정 시 .twin 옆에 만든다).
+    앱에서는 backend 가 build_pdf 를 직접 호출하므로 이 경로를 타지 않는다."""
     ap = argparse.ArgumentParser()
     ap.add_argument("twin")
     ap.add_argument("-o", "--out", default=None)

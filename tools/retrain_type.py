@@ -222,6 +222,8 @@ def run(reports_dir=REPORTS_DIR, out=MODEL_JSON, trainset=TRAIN_NPZ,
 
 
 def main():
+    """CLI 진입점. 인자를 파싱해 run() 을 부른다(--dry-run 이면 라벨 집계만).
+    앱에서는 backend 가 run 을 직접 호출하므로 이 경로를 타지 않는다."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--reports-dir", default=REPORTS_DIR)
     ap.add_argument("--out", default=MODEL_JSON)

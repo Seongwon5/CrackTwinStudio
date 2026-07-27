@@ -81,6 +81,8 @@ def register(Va, Vb, diag):
 
 
 def apply_T(T, P):
+    """4×4 동차 변환 T 를 점군 P(N×3)에 적용한다 — 회전·스케일(3×3) 후 평행이동.
+    정합으로 구한 T 로 이전 검사의 좌표를 이번 검사 좌표계에 얹을 때 쓴다."""
     P = np.asarray(P, float)
     return P @ T[:3, :3].T + T[:3, 3]
 
@@ -209,7 +211,8 @@ def _judge(prev, cur):
 def run(twin_a, twin_b, out, ida="T1", idb="T2", name=None, log=print):
     """비교 본체(라이브러리 진입점). asset dict 를 반환하고 out 에 저장한다.
     정합 실패 시 RegistrationError. log 콜백으로 진행 로그 전달(백엔드 잡 로그용)."""
-    class _A:                                            # argparse 결과와 동일 모양
+    class _A:
+        """argparse 네임스페이스 대역. CLI 와 라이브러리 호출이 같은 코드를 타게 한다."""
         pass
     a = _A(); a.twin_a = twin_a; a.twin_b = twin_b; a.out = out
     a.ida = ida; a.idb = idb; a.name = name
@@ -363,6 +366,8 @@ def extend(asset_path, twin_new, idn="T?", log=print):
 
 
 def main():
+    """CLI 진입점. 인자를 파싱해 run()(신규 비교) 또는 extend()(기존 자산에 이어 붙이기)를 부른다.
+    앱에서는 backend 가 run/extend 를 직접 호출하므로 이 경로를 타지 않는다."""
     ap = argparse.ArgumentParser()
     ap.add_argument("twin_a", help=".twin(이전) 또는 --extend 시 asset.json")
     ap.add_argument("twin_b", help=".twin(이번/새 검사)")

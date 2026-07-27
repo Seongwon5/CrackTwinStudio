@@ -84,6 +84,11 @@ CONF_BOUNDS = (0.7, 0.9)          # 낮음 < 0.7 ≤ 보통 < 0.9 ≤ 높음
 # 1. 이미지 / 카메라 기하
 # ==================================================================
 def find_pairs(folder):
+    """폴더에서 (이미지, XMP) 짝을 찾아 파일명 순으로 돌려준다.
+
+    명명 규칙 두 가지를 모두 받는다: `photo.jpg.xmp`(Zephyr 기본) 와 `photo.xmp`.
+    짝이 없는 이미지도 (경로, None) 으로 포함한다 — 호출부가 '제외됨'으로 집계해
+    사용자에게 알리기 위해서다(예전엔 말없이 버려 1,288장 중 594장만 분석된 걸 몰랐다)."""
     files = os.listdir(folder)
     
     # XMP 파일 목록 확보
@@ -391,6 +396,10 @@ class CrackSegmenter:
     중앙값 2.8px 라 경계 1px 흔들림만으로 그 정도가 빠진다. ±1px 허용 시 IoU 0.991 로 사실상 동일.
     처리 픽셀은 36.7M→25.2M, 타일 수는 140→24 로 줄어든다."""
     def __init__(self, model, device, thr=CRACK_THR, tile=1024, overlap=128, crack_index=1):
+        """로드된 모델을 추론 전용으로 준비한다(eval + 지정 device 이동).
+
+        model 은 이미 FP16/FP32 로 변환된 상태로 들어온다 — dtype 을 파라미터에서 읽어
+        입력 텐서를 맞추므로 어느 쪽이든 동작한다. crack_index 는 출력 4채널 중 크랙 채널(=1)."""
         import torch  # noqa
         self.model = model.eval().to(device)
         self.device = device
@@ -488,6 +497,7 @@ def _order_skeleton(skel, max_pts=256):
     pts = set(zip(yl, xl))
     start = next(((y, x) for y, x in zip(yl, xl) if nc_at(skel, y, x) == 1), (yl[0], xl[0]))
 
+    # 점 p 의 8이웃 중 아직 안 밟은 골격 픽셀 하나(없으면 None) — DFS 로 중심선을 잇는 데 쓴다.
     def _unvisited(p, seen):
         return next(((p[0] + dy, p[1] + dx) for dy, dx in _OFF
                      if (p[0] + dy, p[1] + dx) in pts and (p[0] + dy, p[1] + dx) not in seen), None)
@@ -567,8 +577,17 @@ def _scaled_length(skel, scale_map):
 
 
 class CrackMetrics:
-    """정량화 결과 컨테이너(속성 접근용)."""
+    """정량화 결과 컨테이너(속성 접근용).
+
+    quantify_crack() 이 만든 dict 를 그대로 속성으로 노출한다.
+      unit          "mm"(스케일맵 있음) 또는 "px"
+      n_instances   균열 인스턴스 수
+      total_length  전체 총연장 · max/mean/p95_width  집계 폭 · max_width_xy 최대폭 지점(px)
+      instances[]   인스턴스별 dict — id · centerline · width_profile · edge_l/edge_r ·
+                    max_width · max_width_xy · length(총연장) · length_path(최장경로).
+                    폭 내림차순으로 정렬돼 있고 id 는 그 순위(1부터)다."""
     def __init__(self, d):
+        """dict 의 키를 그대로 속성으로 펼친다(m.instances 처럼 쓰기 위함)."""
         self.__dict__.update(d)
 
 
@@ -828,6 +847,9 @@ def build_scale_map(shape, uv, locs, ray_idx, tri_idx, d_world, C, fx, mesh, fal
 # 키에 넣지 않는다(마스크가 아니라 확률맵을 캐시). 캐시 실패는 전부 무해(추론으로 폴백).
 
 def _prob_cache_key(img_path, dw, dh, tile, overlap):
+    """확률맵 캐시의 키(sha1). 이미지 내용·표시해상도·모델 파일·타일 설정을 모두 섞는다.
+    어느 하나라도 바뀌면 키가 달라져 자동으로 미스가 되므로, 낡은 결과를 재사용할 위험이 없다.
+    전체 해시는 비싸서 앞 256KB + 끝 64KB 만 읽는다(크기·이름과 함께라면 충돌은 사실상 없다)."""
     import hashlib
     st = os.stat(img_path)
     ms = os.stat(CRACK_WEIGHTS)
@@ -842,6 +864,8 @@ def _prob_cache_key(img_path, dw, dh, tile, overlap):
 
 
 def _prob_cache_load(key, shape):
+    """캐시된 확률맵을 float32(0~1)로 되살린다. 없거나 형태가 다르면 None(→ 호출부가 추론).
+    미스·손상 모두 조용히 None 을 돌려준다 — 캐시는 어디까지나 가속 수단이라 실패가 무해해야 한다."""
     try:
         p = os.path.join(PROB_CACHE_DIR, key + ".png")
         if not os.path.isfile(p):                      # 미스는 조용히(경고 없이)
@@ -855,6 +879,9 @@ def _prob_cache_load(key, shape):
 
 
 def _prob_cache_save(key, prob):
+    """확률맵을 uint8(1/255) 양자화 PNG 로 저장한다(장당 1~4MB).
+    tmp 에 쓴 뒤 os.replace 로 교체 — 저장 중 중단돼도 반쪽짜리 캐시가 남지 않는다.
+    로더 스레드에서 비동기로 불리며, 실패해도 조용히 넘어간다."""
     try:
         os.makedirs(PROB_CACHE_DIR, exist_ok=True)
         u8 = np.clip(np.rint(prob * 255.0), 0, 255).astype(np.uint8)
@@ -1034,7 +1061,9 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
     with ThreadPoolExecutor(max_workers=2) as loader, ThreadPoolExecutor(max_workers=1) as poster:
         load_q = deque(); next_i = 0
 
-        def _fill():                                   # 프리페치 깊이 3 — 원본 배열 메모리 상한
+        # 로드 대기열을 3개까지 채운다(프리페치). 깊이를 늘리면 디코드된 원본 배열이
+        # 그만큼 메모리에 쌓이므로, GPU 를 놀리지 않을 최소값으로 잡았다.
+        def _fill():
             nonlocal next_i
             while next_i < len(pairs) and len(load_q) < 3:
                 i = next_i; next_i += 1

@@ -41,6 +41,7 @@ def _run_retrain_job(job_id, out=None, trainset=None):
     """백그라운드 유형 분류기 재학습. 성공 시 cracktype 모델 캐시를 리셋해
     앱 재시작 없이 다음 분석부터 새 모델이 적용된다."""
     j = _jobs[job_id]
+    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
     def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
     try:
         import retrain_type as RT
@@ -63,6 +64,7 @@ def _run_retrain_job(job_id, out=None, trainset=None):
 def _run_export_job(job_id, twin, out_pdf, rows, photos):
     """백그라운드 PDF 보고서 생성(표지·요약/위치도/대장/사진 대지)."""
     j = _jobs[job_id]
+    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
     def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
     try:
         import export_report as ER
@@ -211,6 +213,7 @@ def _run_compare_job(job_id, twin_a, twin_b, ida, idb, out_path, extend_asset=No
     """백그라운드에서 검사 간 비교(asset.json 생성/확장)를 수행하고 로그/결과를 갱신한다.
     extend_asset 이 주어지면 새 자산을 만들지 않고 그 자산에 twin_b 를 N번째 검사로 승계."""
     j = _jobs[job_id]
+    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
     def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
     try:
         if extend_asset:
@@ -232,7 +235,9 @@ def _run_compare_job(job_id, twin_a, twin_b, ida, idb, out_path, extend_asset=No
 def _run_job(job_id, folder, ply, out_path, detect):
     """백그라운드에서 크랙 분석 보고서를 생성하고 진행률/로그/결과를 갱신한다."""
     j = _jobs[job_id]
+    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
     def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
+    # 진행률 갱신(0.0~1.0). 파이프라인이 이미지 c/t 를 넘겨준다.
     def prog(c, t): j["progress"] = (c / t) if t else 0.0
     try:
         j["result"] = P.build_report(folder, ply, out_path, log, prog, detect=detect); j["progress"] = 1.0
@@ -243,10 +248,21 @@ def _run_job(job_id, folder, ply, out_path, detect):
 
 
 class Handler(BaseHTTPRequestHandler):
+    """대시보드·뷰어의 모든 HTTP 요청을 처리하는 핸들러.
+
+    크게 세 갈래다:
+      · 정적 자원 — dashboard/viewer 의 HTML·JS·CSS 와 three.js 번들
+      · 보고서 조각 API — .twin 안의 meta/mesh/이미지를 스트리밍(_report_*)
+      · 잡 API — 분석·비교·PDF·재학습을 백그라운드로 띄우고 진행률을 폴링
+    응답은 항상 no-store 다(로컬 앱이라 캐시 이득이 없고, 보고서 교체 시 낡은 데이터가 보이면 곤란)."""
+
     def log_message(self, *a):
+        """기본 액세스 로그를 끈다 — 분석 로그가 콘솔에서 묻히지 않게."""
         pass
 
     def _send(self, code, body, ctype="application/octet-stream"):
+        """본문을 메모리에 다 올린 채 한 번에 응답한다(작은 응답 전용).
+        큰 덩어리는 반드시 _stream() 을 쓸 것."""
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code); self.send_header("Content-Type", ctype)
@@ -254,9 +270,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(body)
 
     def _json(self, obj, code=200):
+        """dict/list 를 UTF-8 JSON 으로 응답한다(한글을 이스케이프하지 않는다)."""
         self._send(code, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8")
 
     def _file(self, path, ctype):
+        """디스크의 파일 하나를 그대로 응답한다(정적 자원용). 없으면 404."""
         if not os.path.exists(path):
             return self._send(404, "not found", "text/plain")
         with open(path, "rb") as f:
@@ -286,6 +304,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._stream(src, info.file_size, "application/octet-stream")
 
     def _report_img(self, path, cid, kind):
+        """카메라 id 의 이미지 한 장을 스트리밍한다.
+        kind=thumb(목록용 축소) · full(원본 ≤1920px) · mask(검출 마스크, full 과 픽셀 일치).
+        뷰어가 보이는 것만 요청하므로 1,000장짜리 보고서도 메모리에 다 올리지 않는다."""
         if kind not in ("thumb", "full", "mask"):
             return self._send(400, "kind 는 thumb|full|mask", "text/plain; charset=utf-8")
         ext = "png" if kind == "mask" else "jpg"                  # 마스크는 투명 PNG
@@ -301,6 +322,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._stream(src, info.file_size, mime)
 
     def do_GET(self):
+        """GET 라우팅. 정적 자원 → 뷰어 HTML → 보고서 조각 API → 목록·잡 조회 순으로 매칭한다.
+        어떤 예외든 500 으로 감싸 응답한다(핸들러가 죽으면 창이 통째로 멈추기 때문)."""
         u = urllib.parse.urlparse(self.path); r = u.path; q = urllib.parse.parse_qs(u.query)
         try:
             if r in ("/", "/index.html", "/dashboard.html"):
@@ -432,6 +455,13 @@ class Handler(BaseHTTPRequestHandler):
             import traceback; traceback.print_exc(); self._send(500, "error: " + str(e), "text/plain; charset=utf-8")
 
     def do_POST(self):
+        """POST 라우팅. 상태를 바꾸는 요청만 여기로 온다.
+
+          /api/review   검토 저장 — 유일하게 즉시 처리(사이드카 파일 쓰기 한 번)
+          /api/create   보고서 생성 ┐
+          /api/compare  검사 간 비교 ├ 모두 백그라운드 잡 → job_id 만 즉시 응답하고
+          /api/export   PDF 내보내기 │ 진행률은 GET /api/job 으로 폴링한다
+          /api/retrain  분류기 재학습 ┘"""
         rp = urllib.parse.urlparse(self.path).path
         if rp == "/api/review":
             # 검토 저장: {p, idx, state?, type?, note?} — state="clear" 는 해당 균열 검토 삭제.

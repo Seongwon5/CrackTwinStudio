@@ -21,6 +21,7 @@ _quitting = False       # 종료 확인을 이미 받았는지(중복 대화상�
 class Api:
     """JS(window.pywebview.api)에서 호출: 보고서를 새 창으로 연다(멀티윈도우)."""
     def __init__(self, port):
+        """백엔드가 실제로 물린 포트를 기억한다(0 으로 요청해 OS 가 정해준 값)."""
         self.port = port
 
     def open_report(self, path):

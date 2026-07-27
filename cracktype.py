@@ -159,6 +159,11 @@ def parallel_fraction(centroids, axes, near, ang_deg=PAR_ANG_DEG):
 _MODEL = None
 _MODEL_NP = None
 def _load():
+    """분류기 JSON(model/crack_type.json)을 1회 읽어 캐시한다.
+
+    파일이 없거나 깨졌으면 False 를 캐시해 매 호출마다 재시도하지 않는다
+    (호출부는 falsy 를 보고 '분류 불가'로 넘어가며, 전부 'crack' 으로 폴백된다).
+    재학습이 모델을 교체하면 backend 가 _MODEL/_MODEL_NP 를 None 으로 리셋한다."""
     global _MODEL
     if _MODEL is None:
         try:
