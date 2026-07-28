@@ -104,10 +104,21 @@ const REV_COLOR={confirmed:'#3fbf7f', rejected:'#e0574e', edited:'#ffb454'};
 // ===== 스케일 캘리브레이션: 기준 거리(실측)로 모든 mm 수치를 보정하는 전역 계수 =====
 // 파이프라인의 mm 는 전부 '메시 1단위=1m' 전제에서 나온 선형량 → 한 계수로 일괄 보정 가능.
 const CALIB_KEY = 'ctw_calib::' + (new URLSearchParams(location.search).get('report') || location.pathname);
-let calibScale = 1.0, calibInfo = null;             // calibInfo={measured_m, real_mm}
+let calibScale = 1.0, calibInfo = null;             // calibInfo={scale, measured_m, real_mm}
+// 1차 저장소는 사이드카(REVIEW.calib) — PC/브라우저가 바뀌어도 유지되고 PDF 도 같은 값을 쓴다.
+// 사이드카에 없고 localStorage(구버전 저장소)에만 있으면 1회 마이그레이션해 올린다.
 try{
-  const s = JSON.parse(localStorage.getItem(CALIB_KEY) || 'null');
-  if(s && s.scale > 0){ calibScale = s.scale; calibInfo = s; }
+  const sc = REVIEW.calib;
+  if(sc && sc.scale > 0){ calibScale = sc.scale; calibInfo = sc; }
+  else {
+    const s = JSON.parse(localStorage.getItem(CALIB_KEY) || 'null');
+    if(s && s.scale > 0){
+      calibScale = s.scale; calibInfo = s;
+      fetch('/api/calib', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({p: REPORT, scale: s.scale, measured_m: s.measured_m, real_mm: s.real_mm})})
+        .catch(()=>{});                             // 실패해도 이번 세션 표시는 정상(다음 부팅에 재시도)
+    }
+  }
 }catch(e){}
 function cmm(x){ return x==null ? null : x * calibScale; }   // 데이터 mm → 보정 mm
 // 총연장(가지 포함) — 구 .twin 은 length_total_mm 이 없어 length_mm(최장경로)로 폴백
@@ -118,6 +129,19 @@ function fmtLen(h){
   const base='길이 '+(L!=null?Math.round(L).toLocaleString():'?')+'mm';
   return (T!=null && L!=null && T>L+0.5) ? base+' (총연장 '+Math.round(T).toLocaleString()+')' : base;
 }
+// ===== 측정 바닥(분해능 한계) =====
+// 폭 < 2×GSD 면 그 폭은 분해능 안에서 잰 값이 아니라 '상한값'이다 — "≤"로 검열 표기해
+// 가짜 정밀도를 없앤다. gsd_mm(대표 뷰의 픽셀당 mm)은 파이프라인이 기록하며,
+// 캘리브레이션은 선형 보정이라 GSD 에도 같은 계수가 곱해진다. 구 .twin(gsd_mm 없음)은 그대로 표기.
+function wFloor(h){ return (h && h.gsd_mm != null) ? cmm(h.gsd_mm) * 2 : null; }
+// '보정된' 폭 w 하나를 표기 — 바닥 미만이면 "≤바닥".
+function fmtW(h, w, d=1){
+  if(w == null) return '?';
+  const f = wFloor(h);
+  return (f != null && w < f) ? '≤' + f.toFixed(d) : w.toFixed(d);
+}
+// 뷰 간 산포 불확실도(±IQR/2, 뷰 3장 이상일 때만 파이프라인이 기록).
+function fmtUnc(h){ return (h && h.w_unc_mm != null) ? ' ±' + cmm(h.w_unc_mm).toFixed(2) : ''; }
 // ===== 심각도(절대 폭 기준, 단일 체계) =====
 // 예전엔 '심각도(상대 순위)'와 '판정 등급 A~D'가 따로 있어 기준이 둘이었다 → 하나로 통일.
 // 보정(cmm)된 폭으로 매번 재계산하므로 캘리브레이션 즉시 반영된다.
@@ -186,8 +210,8 @@ function sevRange(k){
 // 핫스팟 요약문(파이프라인이 구워둔 h.text 대신 — 보정 계수를 반영해 매번 생성)
 function fmtHotText(h){
   if(h.width_mm_median==null) return h.text || '크랙';
-  const f=(x,d=1)=>(x!=null?Number(cmm(x)).toFixed(d):'?');
-  return `크랙 폭 중앙 ${f(h.width_mm_median)}mm (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
+  const f=(x,d=1)=>fmtW(h, x!=null?Number(cmm(x)):null, d);
+  return `크랙 폭 중앙 ${f(h.width_mm_median)}mm${fmtUnc(h)} (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
     + (h.width_mm_3d!=null?` · 3D폭 ${f(h.width_mm_3d)}`:'')
     + ` · ${fmtLen(h)}`;
 }
@@ -439,7 +463,7 @@ function cmpLine(i){                                // 비교 모드: 상태 + �
 function fmtWL(h, i){                               // 말풍선(호버): 평균 폭 + 길이 + 등급·신뢰(최대·p95 는 클릭 시)
   const w=cmm(h.width_mm_median!=null?h.width_mm_median:(h.width_mm_max!=null?h.width_mm_max:h.width_mm));
   const gb=gradeBadge(h);
-  return '평균 폭 '+(w!=null?Number(w).toFixed(2):'?')+'mm<br>'+fmtLen(h)
+  return '평균 폭 '+fmtW(h, w!=null?Number(w):null, 2)+'mm'+fmtUnc(h)+'<br>'+fmtLen(h)
        + (gb?'<br>'+gb:'') + cmpLine(i);
 }
 // 크랙 정보는 '말풍선(mm 태그)'로만 — 다이아몬드 레티클은 제거(겹치고 클릭 혼란). 리본이 전체
@@ -1219,8 +1243,8 @@ function wireReviewRow(i, h){
 function showHotspotRep(h){
   document.getElementById('imgTitle').textContent='대표 크랙 이미지';
   document.getElementById('imgReset').style.display='inline-block';
-  // 클릭 시엔 평균 폭 + p95·최대(상세) + 크랙 총 길이 모두 표시 (캘리브레이션 반영)
-  const f=(x,d=1)=>(x!=null?Number(cmm(x)).toFixed(d):'?');
+  // 클릭 시엔 평균 폭 + p95·최대(상세) + 크랙 총 길이 모두 표시 (캘리브레이션·측정바닥 반영)
+  const f=(x,d=1)=>fmtW(h, x!=null?Number(cmm(x)):null, d);
   const _hi = DATA.hotspots.indexOf(h);
   let _cmp='';
   if(CMP && _hi>=0 && CMP.histByHot[_hi]){            // 검사 이력: 전체 시점 체인(T1 → … → TN)
@@ -1233,11 +1257,16 @@ function showHotspotRep(h){
   { const sv=sevGrade(sevWidth(h)), cb=confBadge(h);
     if(sv) _gr=' · <span style="color:'+SEV_HEX[sv]+';font-weight:600">'+SEV_NAME[sv]+'</span>'+(cb?' · '+cb:'');
     else if(cb) _gr=' · '+cb; }
+  // 측정 바닥 안내: 표기가 "≤"(상한값)인 이유를 상세 패널에서 한 줄로 설명
+  let _fl='';
+  { const fl=wFloor(h), wm=cmm(h.width_mm_median!=null?h.width_mm_median:h.width_mm_max);
+    if(fl!=null && wm!=null && wm<fl)
+      _fl=' · <span style="color:#ffb84d" title="폭이 이 뷰의 픽셀 분해능(2×GSD) 미만이라 실폭을 분해하지 못했습니다 — 표기값은 상한">분해능 한계(GSD '+cmm(h.gsd_mm).toFixed(2)+'mm/px)</span>'; }
   const wtxt = ((h.width_mm_median!=null)
-    ? `크랙 평균 폭 ${f(h.width_mm_median)}mm (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
+    ? `크랙 평균 폭 ${f(h.width_mm_median)}mm${fmtUnc(h)} (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
       + (h.width_mm_3d!=null?` · 3D폭 ${f(h.width_mm_3d)}`:'')
       + ` · ${fmtLen(h)}`
-    : (h.text||'크랙')) + _gr + cmpLine(_hi) + _cmp;
+    : (h.text||'크랙')) + _gr + _fl + cmpLine(_hi) + _cmp;
   document.getElementById('imgHot').innerHTML =
     '▶ '+wtxt+'<br><span style="color:#888">X '+h.xyz[0].toFixed(2)+'  Y '+h.xyz[1].toFixed(2)+'  Z '+h.xyz[2].toFixed(2)+'</span>'
     + buildReviewRow(_hi);
@@ -1831,7 +1860,12 @@ document.getElementById('btnCalibApply').onclick=()=>{
   const real_mm = v*mul;
   calibScale = real_mm / (calibPending*1000);       // (실제 mm) / (공칭 mm)
   calibInfo = {scale:calibScale, measured_m:calibPending, real_mm};
-  try{ localStorage.setItem(CALIB_KEY, JSON.stringify(calibInfo)); }catch(e){}
+  try{ localStorage.setItem(CALIB_KEY, JSON.stringify(calibInfo)); }catch(e){}   // 오프라인 폴백 캐시
+  // 사이드카에 영속 — PDF·다른 PC 도 같은 보정을 쓴다
+  fetch('/api/calib', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({p: REPORT, scale: calibScale, measured_m: calibPending, real_mm})})
+    .then(r=>r.json()).then(d=>{ if(d.error) toast('보정 저장 실패: '+d.error); })
+    .catch(e=>toast('보정 저장 실패: '+e));
   document.getElementById('calibForm').style.display='none';
   setMode(null); resetMeasure(true); refreshCalibUI();
   setMeasResult('스케일 보정 적용: <b style="color:var(--accent)">×'+calibScale.toFixed(4)+'</b>');
@@ -1840,6 +1874,8 @@ document.getElementById('btnCalibApply').onclick=()=>{
 document.getElementById('btnCalibClear').onclick=()=>{
   calibScale=1.0; calibInfo=null; calibPending=null;
   try{ localStorage.removeItem(CALIB_KEY); }catch(e){}
+  fetch('/api/calib', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({p: REPORT, scale: 0})}).catch(()=>{});   // 사이드카에서도 해제
   document.getElementById('calibForm').style.display='none';
   refreshCalibUI(); setMeasResult('스케일 보정을 해제했습니다.');
 };
@@ -1883,8 +1919,8 @@ function clRow(i,h){
     +'<span><span class="tychip" style="color:'+TYPE_COLOR[ty]+'">'+TYPE_LABEL[ty].slice(0,2)+'</span></span>'
     +'<span'+gTitle+' style="color:'+(sv?SEV_HEX[sv]:'inherit')+';font-weight:600">'+(sv?SEV_NAME[sv]:'?')
       +(cb_===0?'<span style="color:'+CONF_HEX[0]+'" title="균열 신뢰도 낮음">?</span>':'')+'</span>'
-    +'<span>'+(wmed!=null?wmed.toFixed(2):'?')+'</span>'
-    +'<span>'+(wmax!=null?wmax.toFixed(2):'?')+'</span>'
+    +'<span>'+fmtW(h, wmed, 2)+'</span>'
+    +'<span>'+fmtW(h, wmax, 2)+'</span>'
     +'<span'+lenTitle+'>'+(L!=null?Math.round(L).toLocaleString():'?')+(lenTitle?' *':'')+'</span>'
     +'<span>'+(h.views||[]).length+'</span>';
   el.onclick=()=>{ clRowsEl.querySelectorAll('.clRow.sel').forEach(x=>x.classList.remove('sel'));

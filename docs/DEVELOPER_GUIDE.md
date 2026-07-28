@@ -412,7 +412,10 @@ report.twin
                  "fx","fy","cx","cy", "dist":[k1,k2,p1,p2,k3], "has_mask" }],
   "hotspots": [{ "text", "conf", "xyz", "width_mm", "width_mm_max/median/p95",
                  "width_mm_3d", "length_mm", "length_total_mm",
-                 "sev", "type", "type_conf", "views":[{source,conf,w,L}] }]
+                 "sev", "type", "type_conf",
+                 "gsd_mm",       // 대표 뷰의 픽셀당 mm — 폭 < 2×gsd 면 "≤" 검열 표기(측정 바닥)
+                 "w_unc_mm",     // 뷰 간 폭 산포(IQR/2, 뷰 3장 이상일 때만) — ± 불확실도
+                 "views":[{source,conf,w,L}] }]
 }
 ```
 
@@ -520,8 +523,9 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 - **2D 하이라이트는 투영만 믿지 않는다**: 멤버 뷰인지 확인하고 검출 마스크에 스냅한다.
   투영만 쓰면 정합 오차로 빗나간다
 - **스케일 캘리브레이션**: 뷰어에서 2점 실측 거리를 입력하면 모든 mm를 보정한다.
-  `localStorage`(`CALIB_KEY`)에 **보고서별로** 저장되는 **로컬 설정**이라
-  `.twin` 이나 PDF에는 반영되지 않는다
+  1차 저장소는 **사이드카**(`<twin>.review.json` 의 `calib` 키, `POST /api/calib`) —
+  PDF도 같은 값을 읽어 적용한다. `localStorage` 는 구버전 폴백이며 부팅 시
+  사이드카로 1회 마이그레이션된다
 
 ### 8-3. 심각도·신뢰도는 뷰어가 재계산한다
 
@@ -562,7 +566,9 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 
 표지·요약 / 위치도 / 균열 대장 / 사진 대지. matplotlib `Agg` 백엔드 + `PdfPages`.
 검토 사이드카가 있으면 상태·수정 유형·메모를 대장에 반영한다.
-**뷰어의 2점 캘리브레이션은 로컬 설정이라 반영되지 않으며, 표지에 그 사실을 명시한다.**
+사이드카의 캘리브레이션(`calib.scale`)이 있으면 **모든 mm 수치·심각도에 적용**하고
+표지에 보정 계수·기준 실측을 명시한다. 없으면 "무보정 값" 경고를 표시한다.
+폭이 측정 바닥(2×GSD) 미만인 균열은 `≤상한` 으로 검열 표기한다.
 
 ### 9-3. 유형 재학습 (`tools/retrain_type.py`)
 
@@ -699,8 +705,8 @@ python -c "import trimesh.ray; print(trimesh.ray.has_embree)"
 - **`.twin` v1**은 열리지 않는다. 재분석해서 새로 생성해야 한다
 - **`cache/prob`** 는 파생 데이터다. 지워도 되지만 다음 분석이 느려진다
 - **`_jobs` 는 휘발성**이다. 앱 재시작 시 진행률 추적이 끊긴다
-- **캘리브레이션은 브라우저 `localStorage`** 에 있다. PC를 바꾸거나 캐시를 지우면 사라지고,
-  PDF에도 반영되지 않는다
+- **캘리브레이션은 사이드카**(`<twin>.review.json`)에 있다. `.twin` 만 옮기고 사이드카를
+  빠뜨리면 보정·검토가 함께 사라진다 — 두 파일을 세트로 취급할 것
 
 ---
 

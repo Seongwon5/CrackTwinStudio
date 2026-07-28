@@ -1048,6 +1048,16 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                       for i in range(min(len(el), len(er))) if i in lhit and i in rhit]
                 if w3:
                     width_mm_3d = round(max(w3), 3)
+            # 이 뷰에서의 GSD(픽셀당 mm, 중심선 중앙값) — '측정 바닥' 판정 근거.
+            # 폭이 2×GSD 미만이면 그 폭은 분해능 안에서 잰 값이 아니라 상한값이다(뷰어·PDF 가 "≤" 표기).
+            gsd = None
+            if cl:
+                cyx = np.array(cl, float).astype(int)
+                cyx[:, 0] = np.clip(cyx[:, 0], 0, dw - 1); cyx[:, 1] = np.clip(cyx[:, 1], 0, dh - 1)
+                gv = smap[cyx[:, 1], cyx[:, 0]]
+                gv = gv[np.isfinite(gv) & (gv > 0)]
+                if len(gv):
+                    gsd = round(float(np.median(gv)), 4)
             hots.append({"conf": round(conf, 3),
                          "xyz": [float(p3[0]), float(p3[1]), float(p3[2])],
                          "width_mm": round(float(inst["max_width"]), 3),
@@ -1055,6 +1065,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                          "length_mm": round(float(inst.get("length_path", inst["length"])), 2),  # 최장경로(대표)
                          "length_total_mm": round(float(inst["length"]), 2),                     # 총연장(가지 포함)
                          "quality": round(cosq / max(z, 1e-6), 6),
+                         "gsd_mm": gsd,
                          "poly": poly, "poly_w": poly_w, "poly_n": poly_n, "source": name})
         return {"mask_png": mask_png, "crack_pts": crack_pts, "hotspots": hots}
 
@@ -1207,6 +1218,14 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                                           "L": round(float(m.get("length_mm", 0.0)), 1)}
             # 심각도(절대 폭 p95 기준, 단일 체계)
             sev = severity_of(w_p95)
+            # 측정 바닥: 대표 폭(w_med·w_p95)은 best_view 프로파일에서 나오므로 그 뷰의 GSD 를 싣는다.
+            gsd = best_view.get("gsd_mm")
+            # 뷰 간 산포 → 불확실도(±): 뷰별 최대폭의 IQR/2. 뷰 3개 이상일 때만 의미가 있다.
+            wlist = [v["w"] for v in views.values() if v.get("w") is not None]
+            w_unc = None
+            if len(wlist) >= 3:
+                q1, q3 = np.percentile(wlist, [25, 75])
+                w_unc = round(float(q3 - q1) / 2.0, 3)
             w3_txt = f" · 3D폭 {w_max_3d:.1f}" if w_max_3d is not None else ""
             tot_txt = f" (총연장 {L_tot:.0f})" if L_tot > L + 0.5 else ""
             merged.append({"text": f"크랙 폭 중앙 {w_med:.1f}mm (p95 {w_p95:.1f} · 최대 {w_max:.1f}){w3_txt} · 길이 {L:.0f}mm{tot_txt}",
@@ -1217,7 +1236,8 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                            "length_mm": round(float(L), 2),               # 최장경로(대표)
                            "length_total_mm": round(float(L_tot), 2),      # 총연장(가지 포함)
                            "sev": sev,                                     # 심각도 S1~S6(무보정 mm 기준 — 뷰어는 보정 재계산)
-
+                           "gsd_mm": gsd,                                  # 대표 뷰 GSD — 폭<2×GSD 면 "≤" 검열 표기
+                           "w_unc_mm": w_unc,                              # 뷰 간 산포(IQR/2, 뷰≥3)
                            "_members": member_idxs,   # 이 크랙(핫스팟)에 속한 뷰별 인스턴스 idx(리본 매핑용)
                            "views": sorted(views.values(), key=lambda v: -v["conf"])})
         merged.sort(key=lambda h: -h["width_mm_max"])

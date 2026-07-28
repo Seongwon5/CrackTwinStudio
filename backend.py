@@ -457,12 +457,44 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         """POST 라우팅. 상태를 바꾸는 요청만 여기로 온다.
 
-          /api/review   검토 저장 — 유일하게 즉시 처리(사이드카 파일 쓰기 한 번)
+          /api/review   검토 저장 ┐ 즉시 처리(사이드카 파일 쓰기 한 번)
+          /api/calib    캘리브레이션 저장 ┘
           /api/create   보고서 생성 ┐
           /api/compare  검사 간 비교 ├ 모두 백그라운드 잡 → job_id 만 즉시 응답하고
           /api/export   PDF 내보내기 │ 진행률은 GET /api/job 으로 폴링한다
           /api/retrain  분류기 재학습 ┘"""
         rp = urllib.parse.urlparse(self.path).path
+        if rp == "/api/calib":
+            # 스케일 캘리브레이션 저장: {p, scale, measured_m, real_mm} — scale 없거나 0/음수면 해제.
+            # 검토와 같은 사이드카(<twin>.review.json)의 "calib" 키에 영속 → 뷰어·PDF 가 같은 값을 본다.
+            # (예전엔 브라우저 localStorage 에만 있어 PDF 와 화면 수치가 달랐다.)
+            try:
+                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+                p = d.get("p", "")
+                if not p or not os.path.exists(p):
+                    return self._json({"error": "보고서 없음"}, 400)
+                rp2 = p + ".review.json"
+                data = {"version": 1, "reviews": {}}
+                if os.path.exists(rp2):
+                    with open(rp2, encoding="utf-8") as f:
+                        data = json.load(f)
+                sc = d.get("scale")
+                if not sc or float(sc) <= 0:
+                    data.pop("calib", None); ent = None
+                else:
+                    import datetime
+                    ent = {"scale": float(sc),
+                           "measured_m": d.get("measured_m"), "real_mm": d.get("real_mm"),
+                           "at": datetime.datetime.now().isoformat(timespec="seconds")}
+                    data["calib"] = ent
+                tmp = rp2 + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=1)
+                os.replace(tmp, rp2)
+                return self._json({"ok": True, "calib": ent})
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                return self._json({"error": str(e)}, 500)
         if rp == "/api/review":
             # 검토 저장: {p, idx, state?, type?, note?} — state="clear" 는 해당 균열 검토 삭제.
             # 사이드카에 원자적(tmp→replace) 기록. 이 파일이 곧 분류기 재학습 라벨의 축적처다.

@@ -53,12 +53,12 @@ SEV_HEX = {"S1": "#9ccb5b", "S2": "#2e9e5b", "S3": "#f0c419",
            "S4": "#ee8a3c", "S5": "#d9433c", "S6": "#8a6bc4"}
 
 
-def _sev(h, bounds):
-    """대표 폭(p95) → 심각도 S1~S6. meta 의 경계값을 그대로 쓴다."""
+def _sev(h, bounds, cal=1.0):
+    """대표 폭(p95) → 심각도 S1~S6. meta 의 경계값을 그대로 쓰고, 캘리브레이션 계수를 반영한다."""
     w = h.get("width_mm_p95") or h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
     if w is None:
         return None
-    return SEV_KEYS[sum(w >= b for b in bounds)]
+    return SEV_KEYS[sum(w * cal >= b for b in bounds)]
 
 
 def _conf_band(h, bounds):
@@ -73,8 +73,9 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
     """.twin 하나로 검사 보고서 PDF 를 만든다(라이브러리 진입점).
 
     구성: 표지·요약 → 위치도 → 균열 대장(폭 내림차순 max_rows 개) → 사진 대지(top_photos 장).
-    검토 사이드카(<twin>.review.json)가 있으면 상태·수정 유형·메모를 대장에 반영한다.
-    수치는 파이프라인 무보정 mm 기준이다(뷰어의 2점 캘리브레이션은 로컬 설정이라 미반영).
+    검토 사이드카(<twin>.review.json)가 있으면 상태·수정 유형·메모를 대장에 반영하고,
+    사이드카의 캘리브레이션(calib.scale)이 있으면 모든 mm 수치·심각도에 적용해 표지에 명시한다.
+    폭이 측정 바닥(2×GSD) 미만인 균열은 "≤상한" 으로 검열 표기한다(가짜 정밀도 방지).
     log 콜백으로 진행 상황을 전달한다(백엔드 잡 로그용). debug_png 를 주면 각 면을 PNG 로도 남긴다."""
     z = zipfile.ZipFile(twin)
     meta = json.loads(z.read("meta.json"))
@@ -88,6 +89,19 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         with open(twin + ".review.json", encoding="utf-8") as f:
             review = json.load(f)
     revs = review.get("reviews", {})
+    # 사이드카 캘리브레이션(뷰어 2점 실측) — 있으면 모든 mm·심각도에 적용(뷰어와 수치 일치)
+    calinfo = review.get("calib") or {}
+    cal = float(calinfo["scale"]) if calinfo.get("scale") and float(calinfo["scale"]) > 0 else 1.0
+
+    def _fw(h, x, d=2):
+        """보정·측정바닥 반영 폭 표기 — 폭 < 2×GSD 면 '≤상한'(분해능 한계, 캘리브레이션 동일 적용)."""
+        if not isinstance(x, (int, float)):
+            return "-"
+        w = x * cal
+        g = h.get("gsd_mm")
+        if isinstance(g, (int, float)) and w < 2 * g * cal:
+            return f"≤{2 * g * cal:.{d}f}"
+        return f"{w:.{d}f}"
 
     # 검토 유형 수정 반영(뷰어 부트와 동일 규칙)
     for k, v in revs.items():
@@ -96,7 +110,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         except (IndexError, ValueError):
             pass
     sev_bounds = rm.get("severity_bounds_mm", [0.5, 1.0, 3.0, 5.0, 10.0])
-    sevs = [_sev(h, sev_bounds) for h in hots]
+    sevs = [_sev(h, sev_bounds, cal) for h in hots]
     cbnd = rm.get("conf_bounds", [0.7, 0.9])
     confs = [_conf_band(h, cbnd) for h in hots]
     # 정렬 기준: 심각도(절대 폭)가 1차. 예전의 길이×폭 상대값은 물리적 근거가 약해 폐지.
@@ -144,14 +158,25 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         rc = Counter(confs); tc = Counter(TYPE_LABEL.get(_type_of(h), "크랙") for h in hots)
         rvc = Counter(v.get("state") for v in revs.values())
         ty_txt = " · ".join(f"{k} {v:,}" for k, v in tc.most_common())
+        # 측정 바닥 이하(폭 < 2×GSD) 개수 — 표기값이 상한("≤")인 균열이 얼마나 되는지 요약에 명시
+        n_floor = sum(1 for h in hots
+                      if isinstance(h.get("gsd_mm"), (int, float))
+                      and isinstance(h.get("width_mm_median") or h.get("width_mm_max"), (int, float))
+                      and (h.get("width_mm_median") or h.get("width_mm_max")) < 2 * h["gsd_mm"])
         txt = (f"총 균열 {n:,}개\n\n"
                f"균열 신뢰도  높음 {rc.get('높음',0):,} · 보통 {rc.get('보통',0):,} · 낮음 {rc.get('낮음',0):,}\n"
                f"유형        {ty_txt}\n"
-               f"검사원 검토 {len(revs):,}/{n:,} (확인 {rvc.get('confirmed',0)} · 수정 {rvc.get('edited',0)} · 오탐 {rvc.get('rejected',0)})")
+               f"검사원 검토 {len(revs):,}/{n:,} (확인 {rvc.get('confirmed',0)} · 수정 {rvc.get('edited',0)} · 오탐 {rvc.get('rejected',0)})"
+               + (f"\n분해능 한계 {n_floor:,}개 — 폭이 2×GSD 미만이라 '≤상한' 으로 표기" if n_floor else ""))
         fig.text(0.54, 0.68, txt, fontsize=11.5, va="top", linespacing=1.9, color="#234")
-        warn = ("※ 본 보고서의 mm 수치는 무보정(메시 1단위=1m 가정) 값입니다. "
-                "현장 캘리브레이션 확정 전에는 상대 비교·우선순위 판단용으로만 사용하십시오.")
-        if rm.get("scale_warning"):
+        if cal != 1.0:
+            warn = (f"※ 뷰어에서 지정한 스케일 캘리브레이션 ×{cal:.4f} 이 모든 mm 수치·심각도에 적용되었습니다"
+                    + (f" (기준 실측 {calinfo.get('real_mm'):,}mm · {calinfo.get('at','')})."
+                       if isinstance(calinfo.get("real_mm"), (int, float)) else "."))
+        else:
+            warn = ("※ 본 보고서의 mm 수치는 무보정(메시 1단위=1m 가정) 값입니다. "
+                    "현장 캘리브레이션 확정 전에는 상대 비교·우선순위 판단용으로만 사용하십시오.")
+        if rm.get("scale_warning") and cal == 1.0:
             warn += "\n※ scale_warning: 비현실적 폭(>50mm)이 검출됨 — 실척 전제 재확인 필요."
         fig.text(0.07, 0.30, warn, fontsize=10, color="#a3541e",
                  bbox=dict(boxstyle="round,pad=0.6", fc="#fdf3e7", ec="#e2b98a"))
@@ -196,23 +221,26 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         rows_all = order[:max_rows]
         log(f"[3/4] 균열 대장(심각도순 상위 {len(rows_all)}행) …")
         PER = 26
-        cols = ["ID", "유형", "심각도", "신뢰도", "폭중앙", "p95", "최대", "길이", "총연장", "뷰", "검토", "메모"]
-        wcol = [0.065, 0.10, 0.075, 0.05, 0.065, 0.065, 0.065, 0.075, 0.075, 0.035, 0.055, 0.235]
+        cols = ["ID", "유형", "심각도", "신뢰도", "폭중앙", "±", "p95", "최대", "길이", "총연장", "뷰", "검토", "메모"]
+        wcol = [0.065, 0.10, 0.075, 0.05, 0.065, 0.05, 0.065, 0.065, 0.075, 0.075, 0.035, 0.055, 0.185]
         for pg in range(0, len(rows_all), PER):
             fig, ax = plt.subplots(figsize=A4L); ax.axis("off")
-            ax.set_title(f"균열 대장 (심각도순 {pg+1}–{min(pg+PER,len(rows_all))} / 상위 {len(rows_all)} · 전체 {n:,})",
+            ax.set_title(f"균열 대장 (심각도순 {pg+1}–{min(pg+PER,len(rows_all))} / 상위 {len(rows_all)} · 전체 {n:,})"
+                         + (f" · 보정 ×{cal:.4f}" if cal != 1.0 else ""),
                          fontsize=12, loc="left")
             cell = []
             for hi in rows_all[pg:pg + PER]:
                 h = hots[hi]; rv = revs.get(str(hi), {})
-                f1 = lambda x: (f"{x:.2f}" if isinstance(x, (int, float)) else "-")
-                f0 = lambda x: (f"{x:,.0f}" if isinstance(x, (int, float)) else "-")
+                f0 = lambda x: (f"{x * cal:,.0f}" if isinstance(x, (int, float)) else "-")
+                unc = h.get("w_unc_mm")                          # 뷰 간 산포(IQR/2, 뷰≥3)
                 cell.append([f"C-{hi+1:04d}", TYPE_LABEL.get(_type_of(h), "크랙"),
                              SEV_NAME.get(sevs[hi], "-"), confs[hi],
-                             f1(h.get("width_mm_median")), f1(h.get("width_mm_p95")), f1(h.get("width_mm_max")),
+                             _fw(h, h.get("width_mm_median")),
+                             (f"{unc * cal:.2f}" if isinstance(unc, (int, float)) else "-"),
+                             _fw(h, h.get("width_mm_p95")), _fw(h, h.get("width_mm_max")),
                              f0(h.get("length_mm")), f0(h.get("length_total_mm")),
                              str(len(h.get("views", []))), REV_LABEL.get(rv.get("state"), "-"),
-                             (rv.get("note") or "")[:26]])
+                             (rv.get("note") or "")[:22]])
             tb = ax.table(cellText=cell, colLabels=cols, colWidths=wcol, loc="upper center", cellLoc="center")
             tb.auto_set_font_size(False); tb.set_fontsize(7.6); tb.scale(1, 1.35)
             for (r0, c0), c_ in tb.get_celld().items():
@@ -254,9 +282,10 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                     except Exception as e:
                         ax.text(0.5, 0.5, f"이미지 없음\n({e})", ha="center", va="center", fontsize=8, color="#999")
                     sv = sevs[hi]
+                    _L = h.get("length_mm")
                     ax.set_title(f"C-{hi+1:04d} · {TYPE_LABEL.get(_type_of(h),'크랙')} · "
-                                 f"{SEV_NAME.get(sv,'')}\n폭 {h.get('width_mm_median','-')}mm · "
-                                 f"길이 {h.get('length_mm','-')}mm",
+                                 f"{SEV_NAME.get(sv,'')}\n폭 {_fw(h, h.get('width_mm_median'), 1)}mm · "
+                                 f"길이 {(f'{_L * cal:,.0f}' if isinstance(_L, (int, float)) else '-')}mm",
                                  fontsize=8.5, color=SEV_HEX.get(sv, "#333"))
                 _save(fig, f"p4_photo_{pg//PPP}")
 
