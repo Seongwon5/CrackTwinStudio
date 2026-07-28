@@ -1178,6 +1178,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
 
     log("크랙 병합 및 정량화 집계 (DBSCAN)...")
     merged = []; inst2hot = {}
+    reg_med = reg_p90 = None; _reg_view_errs = []      # 뷰 간 정합 오차(핫스팟 없으면 표본 없음)
     if all_hotspots:
         eps = DBSCAN_EPS_M
         # 1) 각 핫스팟의 중심선(poly, 없으면 대표점 xyz)을 조밀화하고 소속 핫스팟 idx 를 태깅
@@ -1220,6 +1221,33 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             a, b = bounds[bi], bounds[bi + 1]
             vals, cnts = np.unique(sl[a:b], return_counts=True)
             clusters.setdefault(int(vals[cnts.argmax()]), []).append(int(so[a]))
+        # 3.5) 뷰 간 정합 오차 실측 — "이 포토그래메트리를 믿어도 되는가"를 숫자로.
+        # 같은 군집(=같은 균열)에 들어온 서로 다른 뷰의 중심선이 3D 에서 얼마나 어긋나는지 잰다:
+        # 각 뷰의 중심선(서브샘플 ≤50점)에서 '다른 뷰들의 점'까지 최근접 거리의 중앙값 = 그 뷰의 어긋남.
+        # 주의(생존 편향): eps 를 넘게 어긋난 뷰는 애초에 다른 군집으로 갈라져 여기 안 잡힌다 —
+        # 그래서 이 값은 하한 추정이며, 아래 '조각남 의심 쌍'이 그 사각지대를 보완한다.
+        _reg_view_errs = []
+        for _mis in clusters.values():
+            by_src = {}
+            for _i in _mis:
+                _h = all_hotspots[_i]
+                if _h.get("poly"):
+                    by_src.setdefault(_h["source"], []).extend(_h["poly"])
+            _srcs = list(by_src)
+            if len(_srcs) < 2:
+                continue
+            for _s in _srcs:
+                P_ = np.asarray(by_src[_s], float)
+                O_ = np.asarray([p for t in _srcs if t != _s for p in by_src[t]], float)
+                if len(P_) < 2 or len(O_) < 2:
+                    continue
+                d_, _ = cKDTree(O_).query(P_[::max(1, len(P_) // 50)])
+                _reg_view_errs.append(float(np.median(d_)) * 1000.0)   # m → mm
+        reg_med = round(float(np.median(_reg_view_errs)), 1) if _reg_view_errs else None
+        reg_p90 = round(float(np.percentile(_reg_view_errs, 90)), 1) if _reg_view_errs else None
+        if reg_med is not None:
+            log(f"  뷰 간 정합 오차: 중앙 {reg_med}mm · p90 {reg_p90}mm (뷰 표본 {len(_reg_view_errs)}개"
+                f" · 병합 eps {DBSCAN_EPS_M*1000:.0f}mm)")
         # 4) 군집별 산출: 폭=2D 최대(유지) · 길이=군집 전체 기하의 그래프 최장경로 · views 합침
         for key, member_idxs in clusters.items():
             members = [all_hotspots[i] for i in member_idxs]
@@ -1312,6 +1340,11 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         "severity_bounds_mm": list(SEV_BOUNDS_MM),
         "severity_names": list(SEV_NAMES),
         "conf_bounds": list(CONF_BOUNDS),          # 균열 신뢰도 구간(낮음/보통/높음)
+        # 뷰 간 정합 오차(실측) — 병합·위치 신뢰의 근거. eps 대비로 읽는다(주의: 생존 편향 하한).
+        "merge_eps_mm": round(DBSCAN_EPS_M * 1000, 1),
+        "view_reg_mm_median": reg_med,
+        "view_reg_mm_p90": reg_p90,
+        "view_reg_n": len(_reg_view_errs),
     }
     # 리본 = '크랙(핫스팟)당 1개'. 서로 다른 이미지에서 검출한 같은 크랙의 여러 뷰 중심선을
     # fuse_points 로 융합(복셀 병합 + MST 순서화)한다 → 겹침 없는 단일 3D 객체 → 클릭 명확.
@@ -1336,6 +1369,28 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             log(f"    융합 {mi + 1}/{_nfuse} ({(mi + 1) / _nfuse * 100:.0f}%) · {time.time() - _t_fuse:.0f}s")
     log(f"  리본: 뷰별 인스턴스 {len(all_hotspots)}개 → 크랙당 융합 {len(all_ribbons)}개"
         f"(핫스팟 {len(merged)}) · {time.time() - _t_fuse:.0f}s")
+
+    # 조각남 의심 쌍: 서로 다른 '병합된 크랙' 둘이 3×eps 안까지 접근해 있으면, 정합 오차가
+    # eps 급일 때 같은 균열이 갈라졌을 가능성이 있다 — 위 정합 오차 실측의 생존 편향(eps 를
+    # 넘게 어긋난 뷰는 아예 다른 군집이 됨) 사각지대를 보완하는 신호다.
+    split_suspects = 0
+    if len(all_ribbons) >= 2:
+        _pts = []; _ids = []
+        for _r in all_ribbons:
+            _P = np.asarray(_r["poly"], float)
+            _P = _P[::max(1, len(_P) // 80)]           # 리본당 ≤80점이면 근접 판정에 충분
+            _pts.append(_P); _ids.append(np.full(len(_P), _r["hot"]))
+        _pts = np.vstack(_pts); _ids = np.concatenate(_ids)
+        _pairs = cKDTree(_pts).query_pairs(r=DBSCAN_EPS_M * 3, output_type="ndarray")
+        if len(_pairs):
+            _a, _b = _ids[_pairs[:, 0]], _ids[_pairs[:, 1]]
+            _diff = _a != _b
+            if _diff.any():
+                _pr = np.sort(np.stack([_a[_diff], _b[_diff]], axis=1), axis=1)
+                split_suspects = int(len(np.unique(_pr, axis=0)))
+        if split_suspects:
+            log(f"  조각남 의심: 3×eps({DBSCAN_EPS_M*3000:.0f}mm) 안까지 접근한 크랙 쌍 {split_suspects}개")
+    report_meta["split_suspect_pairs"] = split_suspects
 
     # ---- 크랙 유형 분류 (크랙 / 조인트·시공선 / 실금 / 얼룩) ----
     # 융합 중심선(기하) + 대표 뷰 이미지(겉모습)로 각 크랙에 type/type_conf 부여.

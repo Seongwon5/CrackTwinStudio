@@ -415,7 +415,13 @@ report.twin
   "counts": { "cameras": N, "hotspots": M },
   "report_meta": { "created", "mesh_diag_m", "images_found/analyzed/skipped",
                    "width_mm_range", "scale_warning",
-                   "severity_bounds_mm", "severity_names", "conf_bounds" },
+                   "severity_bounds_mm", "severity_names", "conf_bounds",
+                   // 뷰 간 정합 오차 실측 — 포토그래메트리 품질 자기진단.
+                   // 같은 균열로 병합된 서로 다른 뷰의 중심선이 3D 에서 어긋난 거리(mm).
+                   // 생존 편향 주의: eps 를 넘게 어긋난 뷰는 다른 군집으로 갈라져 하한 추정이다 —
+                   // split_suspect_pairs(3×eps 안까지 접근한 크랙 쌍)가 그 사각지대를 보완한다.
+                   "merge_eps_mm", "view_reg_mm_median", "view_reg_mm_p90",
+                   "view_reg_n", "split_suspect_pairs" },
   "text_points": [[x,y,z], ...],          // 크랙 점군(복셀 다운샘플)
   "ribbons":  [{ "poly", "poly_w", "poly_n", "hot" }],   // 형상
   "cameras":  [{ "id", "source", "pos","fwd","up","right", "fov","aspect","w","h",

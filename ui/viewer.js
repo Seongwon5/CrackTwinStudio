@@ -231,6 +231,13 @@ function renderMeta(){
   }
   if(m.width_mm_range) rows.push(`크랙 폭: ${cmm(m.width_mm_range[0]).toFixed(2)}~${cmm(m.width_mm_range[1]).toFixed(2)}mm`
     + (calibScale!==1 ? ' <span style="color:#7fffd4">(보정됨)</span>' : ''));
+  // 뷰 간 정합 오차(실측) — 병합 eps 대비 3/4 를 넘으면 병합·위치 신뢰가 흔들리는 신호
+  if(m.view_reg_mm_median != null){
+    const bad = m.merge_eps_mm && m.view_reg_mm_median > m.merge_eps_mm * 0.75;
+    rows.push(`뷰 간 정합: 중앙 ${m.view_reg_mm_median}mm · p90 ${m.view_reg_mm_p90}mm`
+      + (bad ? ` <span style="color:#ffb84d" title="정합 오차가 병합 기준(eps ${m.merge_eps_mm}mm)에 근접 — 같은 균열이 갈라지거나 위치가 흔들릴 수 있습니다">⚠</span>` : '')
+      + (m.split_suspect_pairs ? ` · <span style="color:#ffb84d" title="서로 3×eps 안까지 접근한 크랙 쌍 — 정합 오차로 갈라진 같은 균열일 수 있습니다">조각남 의심 ${m.split_suspect_pairs}쌍</span>` : ''));
+  }
   document.getElementById('reportMeta').innerHTML = rows.join('<br>');
   const warn = document.getElementById('scaleWarn');
   if(calibScale !== 1){                              // 보정 적용됨 → 경고 대신 보정 상태 표시
