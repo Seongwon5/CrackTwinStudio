@@ -962,16 +962,33 @@ function drawCrackHL(cam, ctx, mapUV, lw){           // 하이라이트 공통 �
     else drawCrackPaths(ctx, paths, mapUV, lw);      // 마스크 로드 실패 시 원시 투영 폴백
   });
 }
-// 핫스팟의 대표 뷰: views(신뢰도순) 중 크랙이 화면 안에 들어오는 첫 뷰
+// 핫스팟의 대표 뷰: 크랙 '중심선을 가장 많이 보는' 멤버 뷰(커버리지 최대).
+// 예전엔 중심점(h.xyz) 하나가 보이는 첫 뷰를 골랐는데, 긴 크랙은 각 멤버 뷰가 끝부분만
+// 보므로 중심점이 어느 화면에도 안 들어가 폴백(화면 정중앙 크롭)으로 떨어졌다 —
+// "대표 뷰를 못 찾는" 증상. 커버리지 방식은 부분만 보여도 가장 잘 보는 뷰를 항상 찾는다.
 function pickRepView(h){
-  let fb = null;
+  const hot = DATA.hotspots.indexOf(h);
+  let P = [];                                        // 크랙 전체 기하(융합 리본) — 없으면 중심점 하나
+  for(const ri of (ribsByHot[hot]||[])) for(const p of (_ribs[ri].poly||[])) P.push(p);
+  if(!P.length) P = [h.xyz];
+  const step = Math.max(1, Math.floor(P.length/64)); // ≤64점 서브샘플이면 순위 판단에 충분
+  const Ps = []; for(let i=0;i<P.length;i+=step) Ps.push(P[i]);
+  let best = null;
   for(const vw of (h.views||[])){
     const cam = camDataBySource[vw.source]; if(!cam) continue;
-    if(!fb) fb = {cam, u:0.5, v:0.5};
-    const pr = projectToCam(cam, h.xyz);
-    if(pr) return {cam, u:pr.u, v:pr.v};
+    if(!best) best = {cam, u:0.5, v:0.5, frac:0};    // 최후 폴백: 아무 데도 안 보여도 뷰는 보여준다
+    const uvs = [];
+    for(const p of Ps){ const pr = projectToCam(cam, p); if(pr) uvs.push(pr); }
+    if(!uvs.length) continue;
+    const frac = uvs.length/Ps.length;
+    if(frac <= best.frac) continue;                  // 동률이면 앞선 뷰(신뢰도순) 유지
+    // 크롭 중심 = '이 뷰에 보이는 구간'의 중앙값 — 전체 중심이 화면 밖이어도 크롭이 크랙 위에 앉는다.
+    const us = uvs.map(q=>q.u).sort((a,b)=>a-b), vs = uvs.map(q=>q.v).sort((a,b)=>a-b);
+    const span = Math.max(us[us.length-1]-us[0], vs[vs.length-1]-vs[0]);
+    best = {cam, u:us[us.length>>1], v:vs[vs.length>>1], frac,
+            crop: Math.min(0.9, Math.max(0.32, span*1.3))};   // 보이는 구간이 크면 크롭도 넓게
   }
-  return fb;
+  return best;
 }
 
 const CAM_SIZE_M = 0.30;    // 카메라 글리프 실측 크기(프러스텀 깊이 ≈ 30cm). 옛 방식(대각선 비율)은
@@ -1304,10 +1321,12 @@ function showHotspotRep(h){
   const rep=pickRepView(h);
   if(!rep){ items.innerHTML='<div style="color:#888;padding:8px">대표 이미지를 찾지 못했습니다.</div>'; return; }
   const crop=document.createElement('div'); items.appendChild(crop);
-  makeCrop(crop, rep.cam, rep.u, rep.v, 0.32);
+  makeCrop(crop, rep.cam, rep.u, rep.v, rep.crop || 0.32);
   const lbl=document.createElement('div');
   lbl.style.cssText='font-size:11px;color:#9cf;margin:7px 0;';
-  lbl.textContent='대표 뷰: '+rep.cam.source+'  (좌클릭: 시점 이동 · 우클릭: 자세히)';
+  // 부분만 보이는 긴 크랙이면 몇 % 구간인지 밝힌다(다른 뷰에서 나머지를 볼 수 있다는 힌트)
+  const covTxt = (rep.frac!=null && rep.frac>0 && rep.frac<0.995) ? ' · 크랙의 '+Math.round(rep.frac*100)+'% 구간' : '';
+  lbl.textContent='대표 뷰: '+rep.cam.source+covTxt+'  (좌클릭: 시점 이동 · 우클릭: 자세히)';
   items.appendChild(lbl);
   const others=(h.views||[]).filter(v=>!rep.cam || v.source!==rep.cam.source);
   if(others.length){
