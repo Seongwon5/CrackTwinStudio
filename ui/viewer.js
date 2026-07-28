@@ -212,7 +212,7 @@ function fmtHotText(h){
   if(h.width_mm_median==null) return h.text || '크랙';
   const f=(x,d=1)=>fmtW(h, x!=null?Number(cmm(x)):null, d);
   return `크랙 폭 중앙 ${f(h.width_mm_median)}mm${fmtUnc(h)} (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
-    + (h.width_mm_3d!=null?` · 3D폭 ${f(h.width_mm_3d)}`:'')
+    + (h.width_mm_3d!=null && h.width_src!=='3d' ? ` · 3D폭 ${f(h.width_mm_3d)}` : '')   // 1차가 3D 면 중복 생략
     + ` · ${fmtLen(h)}`;
 }
 
@@ -1315,9 +1315,14 @@ function showHotspotRep(h){
   { const fl=wFloor(h), wm=cmm(h.width_mm_median!=null?h.width_mm_median:h.width_mm_max);
     if(fl!=null && wm!=null && wm<fl)
       _fl=' · <span style="color:#ffb84d" title="폭이 이 뷰의 픽셀 분해능(2×GSD) 미만이라 실폭을 분해하지 못했습니다 — 표기값은 상한">분해능 한계(GSD '+cmm(h.gsd_mm).toFixed(2)+'mm/px)</span>'; }
+  // 폭 방식 불일치: 3D 실측과 스케일맵이 30% 이상 다르면 착지·스케일 문제 신호
+  if(h.width_flag && h.width_mm_median_alt!=null)
+    _fl+=' · <span style="color:#ffb84d" title="'+(h.width_src==='3d'?'1차: 3D 엣지 실측 · 대조: 스케일맵':'1차: 스케일맵(3D 표본 부족) · 대조: 3D 실측')
+      +' — 두 방식이 30% 이상 다릅니다. 광선 착지나 국소 스케일 문제일 수 있으니 참고값과 함께 판단하세요">폭 방식 불일치(대조 '
+      +cmm(h.width_mm_median_alt).toFixed(2)+'mm)</span>';
   const wtxt = ((h.width_mm_median!=null)
     ? `크랙 평균 폭 ${f(h.width_mm_median)}mm${fmtUnc(h)} (p95 ${f(h.width_mm_p95)} · 최대 ${f(h.width_mm_max)})`
-      + (h.width_mm_3d!=null?` · 3D폭 ${f(h.width_mm_3d)}`:'')
+      + (h.width_mm_3d!=null && h.width_src!=='3d' ? ` · 3D폭 ${f(h.width_mm_3d)}` : '')   // 1차가 3D 면 중복 생략
       + ` · ${fmtLen(h)}`
     : (h.text||'크랙')) + _gr + _fl + cmpLine(_hi) + _cmp;
   document.getElementById('imgHot').innerHTML =

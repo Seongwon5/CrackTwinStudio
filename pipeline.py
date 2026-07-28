@@ -55,6 +55,15 @@ SCALE_MAP_CAP = 60000             # 스케일맵/점군용 크랙 픽셀 역투�
 COS_CLAMP = 0.2                   # 경사(grazing)에서 스케일 폭주 방지 cosθ 하한
 WIDTH_CAP_PX = 60                 # 수직 폭 프로파일의 편측 최대 탐색 반경(px). 옆 크랙으로 새는 것 방지
 WIDTH_STEP_PX = 0.5               # 수직 폭 샘플 간격(px). 서브픽셀 보간 → 실효 분해능
+# ---- 폭의 1차 소스: 3D 엣지 쌍 실측 (스케일맵 mm/px 곱은 폴백) ----
+# 좌·우 경계를 각각 역투영한 |L3d-R3d| 는 등방 cosθ 근사가 없고 이방성 foreshortening 까지
+# 실측된다. 관건은 광선 오착지(개구부 너머·메시 구멍 → 조용한 25cm 폭주)를 걸러내는 것 —
+# 아래 게이트에 걸린 점은 '측정 실패'로 명시적으로 버린다(실패가 보이는 측정계).
+W3_DZ_ABS_M, W3_DZ_REL = 0.10, 0.05       # ① 좌·우 착지 깊이차 ≤ max(10cm, 5%·z) — 양 끝이 다른 표면
+W3_ZMED_ABS_M, W3_ZMED_REL = 0.15, 0.10   # ② 쌍 깊이 vs 중심선 중앙 깊이 — 쌍이 통째로 먼 표면에 샘
+W3_MIN_SAMPLES = 5                # 유효 쌍이 이보다 적으면 스케일맵(2D)으로 폴백
+W3_DIVERGE_RATIO = 1.3            # 3D/2D 중앙값이 이 배율 이상 다르면 width_flag(불일치 경고)
+SCALE_GATE_RATIO = 3.0            # [2D 폴백 방어] 국소 스케일 > 3×중심선 중앙 스케일 → 그 점의 폭 무효
 # ---- 판정 등급(절대 폭 기준, mm) — ACI 349.3R 계열 허용폭 관행을 참고한 기본 프레임 ----
 # A(허용) < 0.3 ≤ B(관찰) < 0.5 ≤ C(보수 검토) < 1.0 ≤ D(보수 필요). p95 폭 기준(단일픽셀
 # 최대의 노이즈와 중앙값의 국소확폭 둔감을 절충한 보수적 대표값). 임계값은 meta 에 기록해
@@ -1058,43 +1067,57 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             # 크랙 중심선 → 3D 폴리라인(poly): 메시에 맞은 점만 순서 유지
             cl = inst.get("centerline") or []
             wp = inst.get("width_profile") or []
-            poly = []; poly_w = []; poly_n = []; hit = {}
+            poly = []; poly_w = []; poly_n = []; poly_w3 = []; hit = {}
+            width_mm_3d = None; gsd = None
             if cl:
                 cuv = np.array(cl, float)
                 clocs, cray, _ct, _cd = backproject(cuv, K, dist, R, C, mesh)
                 hit = {int(cray[k]): clocs[k] for k in range(len(cray))}
                 tri_of = {int(cray[k]): int(_ct[k]) for k in range(len(cray))}  # 정점→맞은 면
+                zc = {i: float(np.linalg.norm(C - p)) for i, p in hit.items()}  # 중심선 착지 깊이
+                z_med = float(np.median(list(zc.values()))) if zc else med_depth
+                # 중심선 국소 스케일(mm/px): GSD(측정 바닥)와 2D 폭 게이트에 함께 쓴다
+                cyx = cuv.astype(int)
+                cyx[:, 0] = np.clip(cyx[:, 0], 0, dw - 1); cyx[:, 1] = np.clip(cyx[:, 1], 0, dh - 1)
+                sm_cl = smap[cyx[:, 1], cyx[:, 0]]
+                sm_ok = sm_cl[np.isfinite(sm_cl) & (sm_cl > 0)]
+                sm_med = float(np.median(sm_ok)) if len(sm_ok) else None
+                if sm_med:
+                    gsd = round(sm_med, 4)
+                # 3D 폭(1차 소스): 좌·우 경계점을 각각 역투영해 |L3d-R3d|.
+                # 게이트 ①② 에 걸린 점은 오착지로 보고 버린다 — 설정값 주석(W3_*) 참조.
+                w3_of = {}
+                el = inst.get("edge_l") or []; er = inst.get("edge_r") or []
+                if el and er:
+                    ll, lray, _lt, _ld = backproject(np.array(el, float), K, dist, R, C, mesh)
+                    rl, rray, _rt, _rd = backproject(np.array(er, float), K, dist, R, C, mesh)
+                    lhit = {int(lray[k]): ll[k] for k in range(len(lray))}
+                    rhit = {int(rray[k]): rl[k] for k in range(len(rray))}
+                    for i in range(min(len(el), len(er))):
+                        if i not in lhit or i not in rhit:
+                            continue
+                        zl = float(np.linalg.norm(C - lhit[i])); zr = float(np.linalg.norm(C - rhit[i]))
+                        if abs(zl - zr) > max(W3_DZ_ABS_M, W3_DZ_REL * min(zl, zr)):
+                            continue                     # ① 좌·우가 다른 표면에 착지 → 측정 실패
+                        if abs(0.5 * (zl + zr) - z_med) > max(W3_ZMED_ABS_M, W3_ZMED_REL * z_med):
+                            continue                     # ② 쌍이 통째로 먼 표면에 착지(개구부 너머)
+                        w3_of[i] = round(1000.0 * float(np.linalg.norm(lhit[i] - rhit[i])), 3)
+                if w3_of:
+                    width_mm_3d = max(w3_of.values())
                 for i in range(len(cuv)):                 # 메시에 맞은 정점만, 순서·폭·법선 유지
                     if i in hit:
                         poly.append([round(float(hit[i][0]), 5), round(float(hit[i][1]), 5), round(float(hit[i][2]), 5)])
-                        poly_w.append(round(float(wp[i]), 3) if i < len(wp) else None)
+                        w2 = round(float(wp[i]), 3) if i < len(wp) else None
+                        # [2D 폴백 방어] 국소 스케일이 중앙의 3배 초과면 그 점의 스케일맵 폭은 오염
+                        if (w2 is not None and sm_med
+                                and np.isfinite(sm_cl[i]) and sm_cl[i] > SCALE_GATE_RATIO * sm_med):
+                            w2 = None
+                        poly_w.append(w2)
+                        poly_w3.append(w3_of.get(i))      # 게이트 통과한 3D 폭(없으면 None)
                         nrm = mesh.face_normals[tri_of[i]].astype(float)
                         if float(np.dot(nrm, C - hit[i])) < 0:     # 카메라(바깥) 쪽으로 향하게
                             nrm = -nrm
                         poly_n.append([round(float(nrm[0]), 4), round(float(nrm[1]), 4), round(float(nrm[2]), 4)])
-            # 3D 폭: 좌·우 경계점을 각각 역투영해 |L3d-R3d| (한쪽×2 대칭가정 없이 양쪽 실측).
-            # 경사·곡면의 이방성 foreshortening 을 실측으로 반영(2D 방식의 등방 cosθ 근사 대체).
-            width_mm_3d = None
-            el = inst.get("edge_l") or []; er = inst.get("edge_r") or []
-            if cl and el and er:
-                ll, lray, _lt, _ld = backproject(np.array(el, float), K, dist, R, C, mesh)
-                rl, rray, _rt, _rd = backproject(np.array(er, float), K, dist, R, C, mesh)
-                lhit = {int(lray[k]): ll[k] for k in range(len(lray))}
-                rhit = {int(rray[k]): rl[k] for k in range(len(rray))}
-                w3 = [1000.0 * float(np.linalg.norm(lhit[i] - rhit[i]))   # 좌↔우 전폭 ×1000(m→mm)
-                      for i in range(min(len(el), len(er))) if i in lhit and i in rhit]
-                if w3:
-                    width_mm_3d = round(max(w3), 3)
-            # 이 뷰에서의 GSD(픽셀당 mm, 중심선 중앙값) — '측정 바닥' 판정 근거.
-            # 폭이 2×GSD 미만이면 그 폭은 분해능 안에서 잰 값이 아니라 상한값이다(뷰어·PDF 가 "≤" 표기).
-            gsd = None
-            if cl:
-                cyx = np.array(cl, float).astype(int)
-                cyx[:, 0] = np.clip(cyx[:, 0], 0, dw - 1); cyx[:, 1] = np.clip(cyx[:, 1], 0, dh - 1)
-                gv = smap[cyx[:, 1], cyx[:, 0]]
-                gv = gv[np.isfinite(gv) & (gv > 0)]
-                if len(gv):
-                    gsd = round(float(np.median(gv)), 4)
             hots.append({"conf": round(conf, 3),
                          "xyz": [float(p3[0]), float(p3[1]), float(p3[2])],
                          "width_mm": round(float(inst["max_width"]), 3),
@@ -1103,7 +1126,8 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                          "length_total_mm": round(float(inst["length"]), 2),                     # 총연장(가지 포함)
                          "quality": round(cosq / max(z, 1e-6), 6),
                          "gsd_mm": gsd,
-                         "poly": poly, "poly_w": poly_w, "poly_n": poly_n, "source": name})
+                         "poly": poly, "poly_w": poly_w, "poly_w3": poly_w3,
+                         "poly_n": poly_n, "source": name})
         return {"mask_png": mask_png, "crack_pts": crack_pts, "hotspots": hots}
 
     with ThreadPoolExecutor(max_workers=2) as loader, ThreadPoolExecutor(max_workers=1) as poster:
@@ -1270,16 +1294,36 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             # 골격에서 재므로 융합 형상과 무관하고, 여러 뷰 중 가장 온전히 본 뷰(=최대)를 대표로 쓴다.
             L = max((m.get("length_mm", 0.0) for m in members), default=0.0)          # 최장경로(대표)
             L_tot = max((m.get("length_total_mm", 0.0) for m in members), default=0.0)  # 총연장(가지 포함)
+            # ---- 대표 폭: 3D 엣지 쌍(1차) → 스케일맵(폴백) ----
+            # rep_w3(게이트 통과한 3D 실측)가 충분하면 그것으로 중앙/p95 를 잰다. 부족하면
+            # (엣지 역투영 실패가 많은 뷰) 기존 스케일맵 폭으로 폴백하고 width_src="2d" 를 남긴다.
+            # 두 방식이 W3_DIVERGE_RATIO 이상 다르면 width_flag — 광선 착지·스케일 문제 신호.
+            rep_w3 = best_view.get("poly_w3") or []
+            w3v = [w for w in rep_w3 if w is not None]
             wv = [w for w in rep_w if w is not None]
-            w_med = float(np.median(wv)) if wv else w_best
-            w_p95 = float(np.percentile(wv, 95)) if wv else w_best
+            if len(w3v) >= W3_MIN_SAMPLES:
+                w_src = "3d"
+                w_med = float(np.median(w3v)); w_p95 = float(np.percentile(w3v, 95))
+                w_alt = float(np.median(wv)) if wv else None
+            else:
+                w_src = "2d"
+                w_med = float(np.median(wv)) if wv else w_best
+                w_p95 = float(np.percentile(wv, 95)) if wv else w_best
+                w_alt = float(np.median(w3v)) if w3v else None
+            w_flag = bool(w_alt is not None and w_med and
+                          max(w_med, w_alt) / max(1e-9, min(w_med, w_alt)) > W3_DIVERGE_RATIO)
+            # 최대폭도 같은 소스 우선: 3D 가 1차면 멤버들의 게이트 통과 3D 최대를 쓴다
+            if w_src == "3d" and w3_vals:
+                w_max = max(w3_vals)
             center = rp.mean(axis=0) if len(rp) else np.asarray(best_view["xyz"], float)
             views = {}
             for m in members:
                 if m["source"] not in views or m["conf"] > views[m["source"]]["conf"]:
-                    # 뷰별 측정치(w/L)도 보관 — 시계열 비교의 '측정 노이즈 바닥'(뷰 간 산포) 추정용
+                    # 뷰별 측정치(w/L)도 보관 — 시계열 비교의 '측정 노이즈 바닥'(뷰 간 산포) 추정용.
+                    # w 는 게이트 통과한 3D 실측 우선(스케일 폭주가 ± 를 오염시키지 않게).
+                    _w = m["width_mm_3d"] if m.get("width_mm_3d") is not None else m["width_mm"]
                     views[m["source"]] = {"source": m["source"], "conf": m["conf"],
-                                          "w": round(float(m["width_mm"]), 3),
+                                          "w": round(float(_w), 3),
                                           "L": round(float(m.get("length_mm", 0.0)), 1)}
             # 심각도(절대 폭 p95 기준, 단일 체계)
             sev = severity_of(w_p95)
@@ -1291,13 +1335,17 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             if len(wlist) >= 3:
                 q1, q3 = np.percentile(wlist, [25, 75])
                 w_unc = round(float(q3 - q1) / 2.0, 3)
-            w3_txt = f" · 3D폭 {w_max_3d:.1f}" if w_max_3d is not None else ""
+            # 1차 소스가 3D 면 "3D폭" 별도 표기는 중복이라 생략(2D 폴백일 때만 참고로 병기)
+            w3_txt = f" · 3D폭 {w_max_3d:.1f}" if (w_src == "2d" and w_max_3d is not None) else ""
             tot_txt = f" (총연장 {L_tot:.0f})" if L_tot > L + 0.5 else ""
             merged.append({"text": f"크랙 폭 중앙 {w_med:.1f}mm (p95 {w_p95:.1f} · 최대 {w_max:.1f}){w3_txt} · 길이 {L:.0f}mm{tot_txt}",
                            "conf": best["conf"], "xyz": [round(float(v), 5) for v in center],
                            "width_mm": round(w_best, 3), "width_mm_max": round(w_max, 3),
                            "width_mm_median": round(w_med, 3), "width_mm_p95": round(w_p95, 3),
                            "width_mm_3d": round(w_max_3d, 3) if w_max_3d is not None else None,
+                           "width_src": w_src,                             # "3d"=엣지 쌍 실측 · "2d"=스케일맵 폴백
+                           "width_mm_median_alt": round(w_alt, 3) if w_alt is not None else None,
+                           "width_flag": w_flag,                           # 두 방식 괴리(>1.3×) — 착지·스케일 의심
                            "length_mm": round(float(L), 2),               # 최장경로(대표)
                            "length_total_mm": round(float(L_tot), 2),      # 총연장(가지 포함)
                            "sev": sev,                                     # 심각도 S1~S6(무보정 mm 기준 — 뷰어는 보정 재계산)
@@ -1312,6 +1360,9 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             for hi in mh.pop("_members"):
                 inst2hot[hi] = mi
         log(f"  병합 결과: 핫스팟 {len(all_hotspots)}개(뷰별 인스턴스) → {len(merged)}개 크랙")
+        _n3 = sum(1 for h in merged if h.get("width_src") == "3d")
+        _nf = sum(1 for h in merged if h.get("width_flag"))
+        log(f"  폭 소스: 3D 실측 {_n3}/{len(merged)} · 2D 폴백 {len(merged) - _n3} · 방식 불일치 {_nf}")
 
     crack_points = []
     if all_crack_pts:
