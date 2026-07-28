@@ -290,12 +290,19 @@ try {
 // poly(중심선 3D)를 poly_n(바깥 법선)으로 살짝 띄우고, 각 정점 반경을 실제 폭(poly_w)에 비례시켜
 // 그린다 → 튜브가 크랙 모양(넓/좁)을 그대로 따라간다. 굵기는 과장(EXAG), 색은 노랑 고정.
 const RIBBON_COLOR = 0xffff00;
-const RIBBON_OFFSET_M = 0.06, RIBBON_MAXGAP_M = 0.3;   // 표면 위로 더 확실히 띄워 메시에 안 가리게
-const RIBBON_WIDTH_EXAG = 2.0;                    // 실폭 대비 과장 배율
-const RIBBON_MIN_R = 0.02, RIBBON_MAX_R = 0.5;    // 반경 하한/상한(m) — 얇아도 보이고, blob 폭주 방지
+const RIBBON_MAXGAP_M = 0.3;                      // 이보다 긴 구간은 유령 점프로 보고 끊는다
+// ---- 튜브 굵기 두 모드 ----
+// 실폭(×1, 기본): 튜브 지름 = 측정 폭 그대로(공칭 mm → 메시 단위). 0.3mm 크랙은 0.3mm 튜브 —
+//   가까이 가야 보이는 게 실척의 의미다. 멀리서는 히트박스(화면 14px)로 여전히 호버/클릭된다.
+// 강조: 예전 동작(최소 반경 2cm + 2배 과장) — 멀리서 크랙 '분포'를 훑을 때 쓴다.
+let ribbonTrueScale = true;
+try{ ribbonTrueScale = (localStorage.getItem('ctw_ribbon_true') ?? '1') === '1'; }catch(e){}
+const RIBBON_OFFSET_M = 0.06;                     // [강조] 표면 위로 확실히 띄워 메시에 안 가리게
+const RIBBON_WIDTH_EXAG = 2.0;                    // [강조] 실폭 대비 과장 배율
+const RIBBON_MIN_R = 0.02, RIBBON_MAX_R = 0.5;    // [강조] 반경 하한/상한(m)
+const RIBBON_TRUE_MIN_R = 5e-5;                   // [실폭] 반경 하한 0.05mm — 퇴화(반경 0) 방지용
 const RIBBON_RADIAL = 6;
 const ribbonGroup = new THREE.Group(); scene.add(ribbonGroup);
-const ribbonMeshes = [];              // 보이는 튜브 메시 모음(렌더용)
 const ribbonHitLines = [];            // 크랙 히트박스(투명 라인) — 보이는 튜브보다 크게 호버/클릭 피킹
 const HIT_MAT = new THREE.LineBasicMaterial({visible:false});   // material.visible=false → 렌더 X, 레이캐스트는 O (객체 visible=false 로 두면 이 three 버전은 피킹에서 제외됨)
 const HITBOX_PX = 14;                 // 크랙 중심선 주변 화면상 여유 반경(px) — 이만큼 덜 갖다대도 잡힘
@@ -332,7 +339,9 @@ function variableTube(pts, radii, radialSeg){
   g.setIndex(idx); g.computeVertexNormals();
   return g;
 }
-function radiusOf(wmm){                            // 폭(mm) → 반경(m): 실폭÷2 × 과장, 하/상한 클램프
+function radiusOf(wmm){                            // 폭(mm) → 튜브 반경(m)
+  if(ribbonTrueScale)                              // 실폭: 지름 = 측정 폭. 과장·최소굵기 없음
+    return Math.min(RIBBON_MAX_R, Math.max(RIBBON_TRUE_MIN_R, (wmm==null?0:wmm)/1000/2));
   const r=(wmm==null?0:wmm)/1000/2*RIBBON_WIDTH_EXAG;
   return Math.min(RIBBON_MAX_R, Math.max(RIBBON_MIN_R, r));
 }
@@ -388,11 +397,13 @@ function tubeInto(G, pts, radii, radialSeg, color){  // variableTube 와 동일 
 function buildRibbon(h, i){
   const poly=h.poly, pn=h.poly_n, pw=h.poly_w||[];
   if(!poly || poly.length<2) return;
+  const rad=poly.map((p,k)=>radiusOf(pw[k]));
   const pts=poly.map((p,k)=>{
     const n=(pn&&pn[k])?pn[k]:[0,0,1];
-    return new THREE.Vector3(p[0]+n[0]*RIBBON_OFFSET_M, p[1]+n[1]*RIBBON_OFFSET_M, p[2]+n[2]*RIBBON_OFFSET_M);
+    // 실폭 모드: 반경의 60%만 띄워 표면에 '얹힌' 듯 보이게 — 6cm 를 띄우면 mm 튜브가 공중에 뜬다.
+    const off = ribbonTrueScale ? (rad[k]*0.6 + 0.0005) : RIBBON_OFFSET_M;
+    return new THREE.Vector3(p[0]+n[0]*off, p[1]+n[1]*off, p[2]+n[2]*off);
   });
-  const rad=poly.map((p,k)=>radiusOf(pw[k]));
   const hot=(h.hot!=null?h.hot:-1);
   const type=hotType(hot); ribType[i]=type; const G=ribGeoByType[type];   // 유형별 버퍼로 라우팅
   // 크랙 형상 색 = 심각도(상대 순위 색) — 정점색으로 병합 버퍼에 굽는다.
@@ -495,10 +506,20 @@ function ensureMarkerEl(i){
 // 리본: 병합과 분리해 '모든 2D 크랙 인스턴스'를 그대로 렌더 → 병합에서 형상이 사라지지 않는다.
 // (구버전 .twin 은 ribbons 가 없으니 hotspots 의 poly 로 폴백)
 const _ribs = DATA.ribbons || DATA.hotspots.filter(h=>h.poly);
-_ribs.forEach((rb,ri)=>buildRibbon(rb, ri));
-// 유형별 병합 메시(드로우콜 ≤4). 필터는 각 메시의 visible 토글로 즉시 반영.
+// 유형별 병합 메시(드로우콜 ≤4). 필터는 정점 알파로 즉시 반영.
 const ribMeshByType={};
-(function buildMergedRibbonMeshes(){
+// 리본 전체를 (다시) 굽는다 — 부팅 1회 + 실폭/강조 토글 시.
+// 반경·오프셋이 병합 버퍼에 구워져 있어 토글은 재생성이 불가피하다(초기 로드와 같은 비용).
+function rebuildRibbons(reapply){
+  for(const t of CRACK_TYPES){                       // 이전 세대 버퍼·메시 해제
+    if(ribMeshByType[t]){ ribbonGroup.remove(ribMeshByType[t]); ribMeshByType[t].geometry.dispose(); ribMeshByType[t]=null; }
+    ribGeoByType[t]={pos:[],col:[],idx:[],vbase:0};
+  }
+  for(const hl of ribbonHitLines){ ribbonGroup.remove(hl); hl.geometry.dispose(); }
+  ribbonHitLines.length=0;
+  ribType.length=0; ribHot.length=0; ribVRange.length=0; ribRuns.length=0; ribbonBase.length=0;
+  for(const k in ribsByHot) delete ribsByHot[k];
+  _ribs.forEach((rb,ri)=>buildRibbon(rb, ri));
   for(const t of CRACK_TYPES){
     const G=ribGeoByType[t];
     if(!G.pos.length){ ribMeshByType[t]=null; continue; }
@@ -512,7 +533,15 @@ const ribMeshByType={};
     m.matrixAutoUpdate=false; ribbonGroup.add(m); ribMeshByType[t]=m;
     G.pos=G.col=G.idx=null;                           // 병합 후 원본 배열 해제(메모리)
   }
-})();
+  if(reapply){                                        // 토글 경로: 필터·비교색·하이라이트 재적용
+    while(hlGroup.children.length){ const c=hlGroup.children.pop(); if(c.geometry) c.geometry.dispose(); }
+    _hlHots=new Set();
+    applyTypeFilter();
+    if(cmpColorOn && CMP) repaintRibbons();
+    refreshRibbonColor(-1);                           // 선택·호버 강조를 새 기하로 재생성
+  }
+}
+rebuildRibbons(false);                                // 부팅: 필터 상태가 아직 없으므로 굽기만
 // ===== 필터: 유형 · 심각도 · 균열 신뢰도 (세 가지를 AND 로 적용) =====
 // 리본은 유형별 병합 버퍼 하나씩이라 메시 visible 로는 심각도·신뢰도를 끌 수 없다 →
 // 정점 알파(RGBA)를 0/1 로 바꿔 alphaTest 로 걸러낸다(지오메트리 재생성 없음, 드로우콜 불변).
@@ -1477,6 +1506,18 @@ setTimeout(fitSizes, 500);
 
 // 이벤트 리스너: UI 기능 매핑
 document.getElementById('ckRibbon').onchange = e => { ribbonGroup.visible = e.target.checked; };
+// 실폭(×1) ↔ 강조(과장) 굵기 토글 — 반경이 버퍼에 구워져 있어 리본 전체를 다시 굽는다
+(function(){
+  const ck = document.getElementById('ckTrueW'); if(!ck) return;
+  ck.checked = ribbonTrueScale;
+  ck.onchange = e => {
+    ribbonTrueScale = e.target.checked;
+    try{ localStorage.setItem('ctw_ribbon_true', ribbonTrueScale ? '1' : '0'); }catch(err){}
+    rebuildRibbons(true);
+    toast(ribbonTrueScale ? '실폭(×1) 굵기 — 얇은 크랙은 가까이에서 보입니다'
+                          : '강조 굵기(최소 4cm·2배 과장)');
+  };
+})();
 document.getElementById('ckHot').onchange = e => { hud.style.display = e.target.checked ? '' : 'none'; };   // 말풍선 표시
 document.getElementById('ckGrid').onchange = e => { gridGroup.visible = e.target.checked; };
 
