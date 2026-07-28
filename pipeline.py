@@ -242,6 +242,21 @@ def pick_center(K, R, T):
     return -R.T @ T
 
 
+def project_to_cam(cam, P):
+    """3D 점(Nx3) → 카메라 픽셀좌표(cam.w×cam.h 기준, 왜곡 포함) + 유효마스크.
+    뷰어 projCamRaw / backproject 와 동일 규약(왜곡 재적용). 저장된 카메라 dict
+    (pos/fwd/up/right/fx..cy/dist)를 받으므로 .twin 만으로 동작한다 — PDF 사진 대지가 사용.
+    (원래 cracktype.py 에 있었으나 유형 분류 제거 후 범용 기하로 이곳에 이관.)"""
+    pos = np.array(cam["pos"]); fwd = np.array(cam["fwd"]); up = np.array(cam["up"]); rt = np.array(cam["right"])
+    rel = P - pos; Zc = rel @ fwd; ok = Zc > 1e-6
+    x = (rel @ rt) / np.where(ok, Zc, 1); y = -(rel @ up) / np.where(ok, Zc, 1)
+    d = (list(cam.get("dist") or []) + [0] * 5)[:5]; k1, k2, p1, p2, k3 = d
+    r2 = x * x + y * y; rad = 1 + k1 * r2 + k2 * r2**2 + k3 * r2**3
+    xd = x * rad + 2 * p1 * x * y + p2 * (r2 + 2 * x * x)
+    yd = y * rad + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y
+    return np.column_stack([cam["fx"] * xd + cam["cx"], cam["fy"] * yd + cam["cy"]]), ok
+
+
 def backproject(uv, K, dist, R, C, mesh):
     """이미지 픽셀(uv)에서 광선을 쏴 메시 표면과의 교점을 구한다(왜곡 보정 포함).
     반환: (3D위치, ray인덱스, 삼각형인덱스, 월드광선방향)."""
@@ -1443,69 +1458,9 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             log(f"  조각남 의심: 3×eps({DBSCAN_EPS_M*3000:.0f}mm) 안까지 접근한 크랙 쌍 {split_suspects}개")
     report_meta["split_suspect_pairs"] = split_suspects
 
-    # ---- 크랙 유형 분류 (크랙 / 조인트·시공선 / 실금 / 얼룩) ----
-    # 융합 중심선(기하) + 대표 뷰 이미지(겉모습)로 각 크랙에 type/type_conf 부여.
-    # 뷰어의 유형 필터가 사용. 모델 없거나 실패해도 무해(전부 'crack' 로 폴백).
-    try:
-        import cracktype as _ct
-        cam_by_src = {c["source"]: c for c in all_cameras}
-        rbh = {}
-        for r in all_ribbons: rbh.setdefault(r["hot"], []).append(r)
-        # 크랙별 융합 중심선 + L2 par_neigh(장면 전체의 평행 이웃 비율 — 시공선 가족 신호)
-        polym = {mi: np.array([p for r in rbh[mi] for p in r["poly"]], float) for mi in rbh}
-        cents = []; axes = []; midx = []
-        for mi in range(len(merged)):
-            P = polym.get(mi)
-            if P is None or len(P) < 2: continue
-            ax, c = _ct.principal_axis(P); axes.append(ax); cents.append(c); midx.append(mi)
-        log(f"  유형 분류 시작: 크랙 {len(merged)}개 (L2 평행이웃 계산 완료) …")
-        par = _ct.parallel_fraction(cents, axes, near=diag * _ct.PAR_NEAR_FRAC) if cents else []
-        par_of = {midx[k]: float(par[k]) for k in range(len(midx))}
-        _t_cls = time.time(); _ncls = len(merged)
-        # ① 대표 뷰 선택(이미지 불필요) — '화면에서 가장 크게 보이는 뷰' 비교라 중심선을
-        #    ≤48점으로 서브샘플해도 순위가 같다. 크랙을 대표 뷰(source)별로 그룹핑.
-        by_src = {}                                    # source → [(mi, P, cam)]
-        for mi, h in enumerate(merged):
-            h["type"] = "crack"; h["type_conf"] = 0.0  # 기본값(분류 불가 시 그대로)
-            P = polym.get(mi)
-            if P is None or len(P) < 4:
-                continue
-            Ps = P[::max(1, len(P) // 48)]
-            best = None; bestext = -1
-            for vw in h.get("views", []):
-                c = cam_by_src.get(vw["source"])
-                if not c: continue
-                uv, ok = _ct.project_to_cam(c, Ps); uv = uv[ok]
-                if len(uv) < 4: continue
-                ext = float(np.linalg.norm(uv.max(0) - uv.min(0)))
-                if ext > bestext: bestext = ext; best = c
-            if best is not None:
-                by_src.setdefault(best["source"], []).append((mi, P, best))
-        # ② 뷰별 그룹 처리 — 이미지당 디코드 딱 1회, 메모리엔 그 한 장(float32 ~11MB)만.
-        #    (예전: 크랙 순서대로 접근 + 전 이미지 float32 캐시 → 594장 ≈ 6.5GB 로 페이징 유발)
-        feats = []; fmi = []; done = 0
-        for src, items in by_src.items():
-            c0 = items[0][2]; buf = c0.get("_full")
-            arr = cv2.imdecode(np.frombuffer(buf, np.uint8), cv2.IMREAD_GRAYSCALE) if buf else None
-            gray = arr.astype(np.float32) if arr is not None else None
-            for mi, P, cam in items:
-                h = merged[mi]
-                w = h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
-                x = _ct.crack_features(P, w, h.get("length_mm"), cam, gray, par_of.get(mi, 0.0))
-                if x is not None:
-                    feats.append(x); fmi.append(mi)
-                done += 1
-                if _ncls >= 2000 and done % 2000 == 0:
-                    log(f"    분류 {done}/{_ncls} ({done / _ncls * 100:.0f}%) · {time.time() - _t_cls:.0f}s")
-        # ③ 일괄 분류 — numpy 벡터화 랜덤포레스트(샘플당 파이썬 트리순회 제거)
-        for k, (lab, conf) in enumerate(_ct.classify_batch(feats)):
-            h = merged[fmi[k]]; h["type"] = lab; h["type_conf"] = round(float(conf), 3)
-        tcnt = {}
-        for h in merged:
-            tcnt[h["type"]] = tcnt.get(h["type"], 0) + 1
-        log(f"  크랙 유형 분류: {tcnt} · {time.time() - _t_cls:.0f}s")
-    except Exception as e:
-        log(f"  (유형 분류 건너뜀: {e})")
+    # (제거됨) 크랙 유형 분류 — 라벨 205개짜리 예비 분류기가 실제 균열을 blob 으로 오분류해
+    # 필터에 숨기는 위험(놓침)이 오탐 정리 효과보다 컸다. 오탐 억제는 검출 모델 자체의
+    # 재학습(검토 사이드카의 '오탐' 라벨 = 하드 네거티브)으로 해결하는 방향으로 전환.
 
     log(f"후처리 완료: 크랙 {len(merged)} · 리본 {len(all_ribbons)} · 텍스트 {len(crack_points)}")
     return {"ply_path": ply_path, "text_points": crack_points, "ribbons": all_ribbons,

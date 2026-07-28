@@ -37,28 +37,8 @@ _sys.path.insert(0, os.path.join(HERE, "tools"))
 import compare_twins as CT2      # 검사 간 비교(정합·매칭·판정) — 대시보드 '검사 비교' 가 사용
 
 
-def _run_retrain_job(job_id, out=None, trainset=None):
-    """백그라운드 유형 분류기 재학습. 성공 시 cracktype 모델 캐시를 리셋해
-    앱 재시작 없이 다음 분석부터 새 모델이 적용된다."""
-    j = _jobs[job_id]
-    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
-    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
-    try:
-        import retrain_type as RT
-        kw = {}
-        if out: kw["out"] = out
-        if trainset: kw["trainset"] = trainset
-        res = RT.run(log=log, **kw)
-        j["result"] = res
-        j["progress"] = 1.0
-        if res.get("trained") and not out:            # 실제 모델 교체 시에만 캐시 리셋
-            import cracktype
-            cracktype._MODEL = None; cracktype._MODEL_NP = None
-            log("  모델 캐시 리셋 — 재시작 없이 다음 분석부터 새 모델 적용.")
-    except Exception as e:
-        import traceback; traceback.print_exc(); j["error"] = str(e)
-    finally:
-        j["done"] = True
+# (제거됨) 유형 분류기 재학습 잡 — 유형 분류 폐지와 함께 삭제. 검토 사이드카의
+# 확인/오탐 라벨은 계속 쌓이며, 검출(세그멘테이션) 모델 재학습의 학습 데이터가 된다.
 
 
 def _run_export_job(job_id, twin, out_pdf, rows, photos):
@@ -376,34 +356,6 @@ class Handler(BaseHTTPRequestHandler):
                             items.append({"name": f, "path": fp, "mb": round(os.path.getsize(fp) / 1e6, 1),
                                           "mtime": os.path.getmtime(fp)})
                 return self._json({"reports": items})
-            if r == "/api/retrain/status":
-                # 라벨 현황(가볍게 — 사이드카만 읽음): 유형수정/확인/오탐 = 라벨, 메모만 = 제외
-                new_labels = 0; files = 0; states = {}
-                if os.path.isdir(REPORTS_DIR):
-                    for f in os.listdir(REPORTS_DIR):
-                        if not f.lower().endswith(".twin.review.json"):
-                            continue
-                        try:
-                            with open(os.path.join(REPORTS_DIR, f), encoding="utf-8") as fh:
-                                revs = json.load(fh).get("reviews", {})
-                        except Exception:
-                            continue
-                        files += 1
-                        for v in revs.values():
-                            st = v.get("state")
-                            if v.get("type") or st in ("confirmed", "rejected"):
-                                new_labels += 1
-                                states[st or "typed"] = states.get(st or "typed", 0) + 1
-                snap = 0
-                tp = os.path.join(HERE, "model", "train_set.npz")
-                if os.path.exists(tp):
-                    try:
-                        import numpy as _np
-                        snap = int(len(_np.load(tp, allow_pickle=True)["y"]))
-                    except Exception:
-                        pass
-                return self._json({"new_labels": new_labels, "files": files,
-                                   "states": states, "snapshot": snap, "min_labels": 40})
             if r == "/api/download":
                 # 생성된 PDF 만, reports 폴더 안만 서빙(경로 탈출 방지)
                 p = q.get("path", [""])[0]
@@ -461,8 +413,7 @@ class Handler(BaseHTTPRequestHandler):
           /api/calib    캘리브레이션 저장 ┘
           /api/create   보고서 생성 ┐
           /api/compare  검사 간 비교 ├ 모두 백그라운드 잡 → job_id 만 즉시 응답하고
-          /api/export   PDF 내보내기 │ 진행률은 GET /api/job 으로 폴링한다
-          /api/retrain  분류기 재학습 ┘"""
+          /api/export   PDF 내보내기 ┘ 진행률은 GET /api/job 으로 폴링한다"""
         rp = urllib.parse.urlparse(self.path).path
         if rp == "/api/calib":
             # 스케일 캘리브레이션 저장: {p, scale, measured_m, real_mm} — scale 없거나 0/음수면 해제.
@@ -527,18 +478,6 @@ class Handler(BaseHTTPRequestHandler):
                     json.dump(data, f, ensure_ascii=False, indent=1)
                 os.replace(tmp, rp2)
                 return self._json({"ok": True, "review": ent})
-            except Exception as e:
-                import traceback; traceback.print_exc()
-                return self._json({"error": str(e)}, 500)
-        if rp == "/api/retrain":
-            # 재학습 잡. out/trainset 은 테스트용 오버라이드(생략 시 실제 모델 교체).
-            try:
-                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0) or 0)).decode("utf-8") or "{}")
-                jid = uuid.uuid4().hex[:8]
-                _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
-                threading.Thread(target=_run_retrain_job,
-                                 args=(jid, d.get("out"), d.get("trainset")), daemon=True).start()
-                return self._json({"job": jid})
             except Exception as e:
                 import traceback; traceback.print_exc()
                 return self._json({"error": str(e)}, 500)

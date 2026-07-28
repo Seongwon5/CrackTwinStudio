@@ -40,9 +40,9 @@
   <span id="topbarHint">메뉴를 다시 누르면 패널이 닫힙니다</span>
 </div>
 
-<!-- ===== 유형 필터 상단 고정 바(항상 표시) ===== -->
+<!-- ===== 필터 상단 고정 바(항상 표시): 심각도 · 신뢰도 ===== -->
 <div id="typebar">
-  <span class="lb"><svg class="ic" style="width:14px;height:14px"><use href="#i-list"/></svg>크랙 유형</span>
+  <span class="lb"><svg class="ic" style="width:14px;height:14px"><use href="#i-list"/></svg>필터</span>
   <span class="tychip2 on" id="tbAll">전체</span>
   <span id="typeChips" style="display:flex;gap:8px;align-items:center;"></span>
 </div>
@@ -91,7 +91,7 @@
     <label><input type="checkbox" id="ckGrid" checked><svg class="ic"><use href="#i-grid"/></svg>좌표축 및 바닥 그리드</label>
     <label><input type="checkbox" id="ckDarkMesh"><svg class="ic"><use href="#i-moon"/></svg>구조물 어둡게 보기(픽셀 강조)</label>
     <label><input type="checkbox" id="ckCam" checked><svg class="ic"><use href="#i-camera"/></svg>카메라 위치 표시</label>
-    <div style="font-size:var(--fs-cap);color:var(--tx-3);margin-top:10px;">크랙 유형 필터는 상단 바에 항상 표시됩니다.</div>
+    <div style="font-size:var(--fs-cap);color:var(--tx-3);margin-top:10px;">심각도·신뢰도 필터는 상단 바에 항상 표시됩니다.</div>
   </div>
 
   <div class="dockpane" id="cracklist">
@@ -108,7 +108,7 @@
       <button id="clCopy"><svg class="ic"><use href="#i-copy"/></svg>복사</button>
       <span id="revProg" style="color:var(--tx-3);font-size:var(--fs-cap);margin-left:auto;white-space:nowrap;"></span>
     </div>
-    <div id="clHead"><span>ID</span><span>유형</span><span>심각도</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
+    <div id="clHead"><span>ID</span><span>심각도</span><span>평균 폭(mm)</span><span>최대(mm)</span><span>길이(mm)</span><span>뷰</span></div>
     <div id="clRows"></div>
     <div id="clFoot"></div>
   </div>

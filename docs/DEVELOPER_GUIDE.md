@@ -42,7 +42,7 @@ py app.py
   │
   └─ webview.create_window()   네이티브 창 → http://127.0.0.1:<port>/
        │
-       ├─ 대시보드 (ui/dashboard.html)      보고서 만들기/열기/비교/PDF/재학습
+       ├─ 대시보드 (ui/dashboard.html)      보고서 만들기/열기/비교/PDF
        └─ 뷰어 창 (ui/viewer.html) × N개    보고서마다 새 창 (멀티윈도우)
 ```
 
@@ -59,14 +59,12 @@ py app.py
 | [`app.py`](../app.py) | 진입점. 창 생성·멀티윈도우·종료 처리 | 89줄 |
 | [`backend.py`](../backend.py) | 로컬 HTTP 서버. 라우팅 · `.twin` 스트리밍 · 백그라운드 잡 | 약 600줄 |
 | [`pipeline.py`](../pipeline.py) | **분석 파이프라인 전체**. 기하·추론·정량화·융합·저장 | 약 1,370줄 |
-| [`cracktype.py`](../cracktype.py) | 균열 유형 분류 (특징 추출 + 랜덤포레스트 평가) | 약 250줄 |
 | `network/` | `best.pt` 언피클에 필요한 DeepLabV3+ 구현 (외부 코드) | — |
 | `ui/viewer.js` | **뷰어 본체**. 3D 렌더링·상호작용·측정·검토 | 약 3,000줄 |
 | `ui/dashboard.js` | 대시보드 로직 (잡 폴링·목록·비교 선택) | 약 380줄 |
 | `libs/` | three.js r160 오프라인 번들 | — |
 | `tools/compare_twins.py` | 검사 간 비교 (정합·매칭·성장 판정) | backend가 import |
 | `tools/export_report.py` | PDF 보고서 생성 | backend가 import |
-| `tools/retrain_type.py` | 유형 분류기 재학습 | backend가 import |
 
 > `tools/` 3개는 **이름과 달리 보조 스크립트가 아니라 기능 모듈**이다. `backend.py`가 직접 import하며
 > 대시보드 버튼이 호출한다. CLI로도 단독 실행 가능한 이중 구조다.
@@ -74,16 +72,12 @@ py app.py
 ### 2-3. 의존 방향
 
 ```
-app.py ──▶ backend.py ──▶ pipeline.py ──▶ cracktype.py
-                    │                 └─▶ network/ (best.pt 언피클)
+app.py ──▶ backend.py ──▶ pipeline.py ──▶ network/ (best.pt 언피클)
                     ├──▶ tools/compare_twins.py
-                    ├──▶ tools/export_report.py
-                    └──▶ tools/retrain_type.py ──▶ cracktype.py
+                    └──▶ tools/export_report.py
 ```
 
 역방향 의존은 없다. `pipeline.py`는 HTTP를 모르고, `backend.py`는 3D 렌더링을 모른다.
-`cracktype.py`는 **학습(offline)과 추론(pipeline)이 같은 특징 추출 함수를 공유**하도록 분리돼 있다
-(분포 불일치 방지 — `cracktype.py` 독스트링 참조).
 
 ---
 
@@ -182,7 +176,7 @@ undistort(K, dist)  →  카메라 광선  →  Rᵀ 로 world 회전  →  ray�
 
 역방향(3D → 이미지 픽셀)은 **왜곡을 다시 입혀야** 원본 사진 위에 정확히 얹힌다.
 구현이 두 곳에 있고 규약이 같아야 한다:
-- 파이썬: `cracktype.project_to_cam()`
+- 파이썬: `pipeline.project_to_cam()`
 - JS: `ui/viewer.js` 의 `projCamRaw`
 
 ### 4-3. 실척 전제 — `1 unit = 1 m`
@@ -359,36 +353,20 @@ ori=8 이미지가 180° 뒤집힌 채 분석되는 사고가 있었다(전 검�
 복셀 성분화는 상한이 필요 없고(전 구간 벡터화 O(N log N)) 규모와 무관하게 밀도·소속을 보존한다.
 `dbscan()` 함수 자체는 유틸로 남아 있지만 병합에는 쓰지 않는다.
 
-**리본이 왜 따로 있나.** `merged[]` 는 **통계**(폭·길이·유형), `ribbons[]` 는 **형상**(3D 곡선)이다.
+**리본이 왜 따로 있나.** `merged[]` 는 **통계**(폭·길이), `ribbons[]` 는 **형상**(3D 곡선)이다.
 뷰어는 리본을 튜브 메시로 그리고, 클릭하면 대응하는 핫스팟 통계를 띄운다. `ribbon.hot` 이 인덱스다.
 
 > **버린 방식:** '가장 대표하는 가상 곡선'(이방성 주곡선) 융합을 시도했다가 폐기하고
 > 라플라시안 스무딩으로 복구했다 (커밋 2건). 주곡선은 여러 뷰의 오차를 평균 내는 대신
 > 실제 크랙 형상을 왜곡했다.
 
-### 5-7. 유형 분류
+### 5-7. (폐지됨) 유형 분류
 
-**입력** 융합 중심선 + 대표 뷰 이미지 · **출력** 각 크랙의 `type`, `type_conf`
-
-`cracktype.py`. 유형은 **크랙 / 조인트·시공선 / 얼룩** 3종
-(`craze`(실금)는 폐지 — 실금도 가는 균열이라 크랙으로 흡수. `LEGACY_TYPE` 로 폴백).
-
-특징 = **3D 기하**(직선성·꺾임·곡률규칙성·축정렬·폭) + **2D 겉모습**(단면 골 깊이·엣지 선명도·
-골폭·어두움·대비·종횡비) + **L2 장면 규칙성**(`par_neigh` = 주변에 평행한 이웃이 얼마나 있나
-→ 시공선 가족 판별).
-
-분류기는 `model/crack_type.json` — **순수 파이썬/numpy로 평가하는 랜덤포레스트**라
-런타임에 scikit-learn이 필요 없다. 학습할 때만 sklearn을 쓴다.
-
-**성능 설계 2가지** (둘 다 실측 기반):
-- **대표 뷰 그룹핑**: 크랙 순서대로 이미지에 접근하면 594장 float32 캐시 ≈ 6.5GB로 페이징이 일어났다.
-  지금은 크랙을 대표 뷰(source)별로 묶어 **이미지당 디코드 1회**, 메모리엔 그 한 장(~11MB)만 둔다
-- **일괄 분류**: `classify_batch()` 가 numpy 벡터화로 트리를 평가 (샘플당 파이썬 루프 제거)
-
-전체가 `try/except`로 감싸여 있어 **모델이 없거나 실패해도 무해**하다 (전부 `crack` 폴백).
-
-**수정 지점** 특징 추가 → `cracktype.feature_vector()` (학습·추론이 공유하므로 **재학습 필수**).
-유형 추가/삭제 → `CRACK_TYPES`(viewer.js) + 모델 재학습.
+크랙/조인트/얼룩 3종 분류기(`cracktype.py` + `model/crack_type.json`)가 있었으나 **폐지했다.**
+라벨 205개짜리 예비 모델이 실제 균열을 blob 으로 오분류해 필터에 숨기는 위험(결함 놓침)이
+오탐 정리 효과보다 컸기 때문이다. 오탐 억제는 검토 워크플로(오탐 라벨)와
+**검출(세그멘테이션) 모델 자체의 재학습**이 담당하는 방향으로 전환했다 —
+검토 사이드카의 확인/오탐 라벨이 그 학습 데이터다. 구 `.twin` 의 `type` 필드는 무시된다.
 
 ---
 
@@ -444,7 +422,7 @@ report.twin
 (예: 1.6GB짜리 빈 껍데기).
 
 **사이드카.** 검사원 검토는 `.twin` 을 건드리지 않고 `<report>.twin.review.json` 에 따로 쌓인다.
-`.twin` 은 불변으로 두고, 이 사이드카가 곧 **분류기 재학습 라벨의 축적처**가 된다.
+`.twin` 은 불변으로 두고, 이 사이드카가 곧 **검출 모델 재학습 라벨(확인=양성·오탐=하드 네거티브)의 축적처**가 된다.
 
 > `.twin` v1(단일 JSON)은 더 이상 지원하지 않는다. 변환 도구도 제거했다.
 > v1 파일을 열면 `twin_version()` 이 재분석을 안내하는 예외를 던진다.
@@ -470,12 +448,10 @@ report.twin
 | GET | `/api/job?id=` | 잡 진행률·로그·결과 |
 | GET | `/api/pick_folder`, `/api/pick_file?kind=` | 네이티브 파일 대화상자 |
 | GET | `/api/download` | 파일 내려받기 |
-| GET | `/api/retrain/status` | 축적된 라벨 수 |
 | POST | `/api/create` | 보고서 생성 잡 시작 |
 | POST | `/api/review` | 검토 저장 (사이드카) |
 | POST | `/api/compare` | 검사 간 비교 잡 |
 | POST | `/api/export` | PDF 생성 잡 |
-| POST | `/api/retrain` | 분류기 재학습 잡 |
 
 ### 7-2. 스트리밍이 원칙이다
 
@@ -491,14 +467,12 @@ report.twin
 _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 ```
 
-네 종류가 같은 패턴을 쓴다: `_run_job`(분석) · `_run_compare_job`(비교) ·
-`_run_export_job`(PDF) · `_run_retrain_job`(재학습).
+세 종류가 같은 패턴을 쓴다: `_run_job`(분석) · `_run_compare_job`(비교) · `_run_export_job`(PDF).
 
 공통 규약:
 - `threading.Thread(daemon=True)` 로 띄우고 즉시 `job_id` 응답
 - 진행률 `0.0~1.0`, 로그는 마지막 200줄 보관
 - 예외는 `j["error"]` 에 문자열로. `finally` 에서 반드시 `j["done"]=True`
-- **재학습 성공 시** `cracktype._MODEL`/`_MODEL_NP` 를 `None` 으로 리셋 → 앱 재시작 없이 다음 분석부터 새 모델
 
 > `_jobs` 는 메모리에만 있다. 앱을 재시작하면 진행 중이던 잡 상태는 사라진다
 > (생성된 `.twin` 파일 자체는 남는다).
@@ -526,11 +500,11 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 | 보고서 로딩 | `meta` → `mesh`(ArrayBuffer) → 이미지 지연 로드 |
 | 크랙 리본 | 실폭 반영 가변-반경 튜브. 표면 위로 `RIBBON_OFFSET_M=0.06` 띄움 |
 | **병합 렌더** | 수만 개 리본을 **메시 1개(드로우콜 1회)** 로 — 대규모 FPS의 핵심 |
-| 유형/심각도/신뢰도 필터 | 세 조건 AND. 유형별 병합 버퍼를 나눠 통째로 on/off |
+| 심각도/신뢰도 필터 | AND 적용. 병합 버퍼의 정점 알파를 0/1 로 바꿔 개별 크랙 on/off |
 | 카메라 글리프 | 파란 프러스텀. 클릭하면 그 사진 시점으로 정렬 |
 | 2D 하이라이트 | 3D 중심선을 사진에 투영해 노란 발광 폴리라인 |
 | 지점 검사 모드 | 임의 표면 점 클릭 → 그 점이 찍힌 사진들을 찾아 표시 |
-| 검토 UI | 확인/오탐/유형수정/메모 → `/api/review` |
+| 검토 UI | 확인/오탐/메모 → `/api/review` (오탐 = 검출 재학습 하드 네거티브) |
 | 측정 도구 | 거리 / 반경 / 캘리브레이션 |
 | 비교(자산) 모드 | 상태색·이전 검사 고스트·Δ이력 |
 
@@ -585,27 +559,17 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 ### 9-2. PDF 내보내기 (`tools/export_report.py`)
 
 표지·요약 / 위치도 / 균열 대장 / 사진 대지. matplotlib `Agg` 백엔드 + `PdfPages`.
-검토 사이드카가 있으면 상태·수정 유형·메모를 대장에 반영한다.
+검토 사이드카가 있으면 상태·메모를 대장에 반영한다.
 사이드카의 캘리브레이션(`calib.scale`)이 있으면 **모든 mm 수치·심각도에 적용**하고
 표지에 보정 계수·기준 실측을 명시한다. 없으면 "무보정 값" 경고를 표시한다.
 폭이 측정 바닥(2×GSD) 미만인 균열은 `≤상한` 으로 검열 표기한다.
 
-### 9-3. 유형 재학습 (`tools/retrain_type.py`)
+### 9-3. (폐지됨) 유형 재학습 → 검출 모델 재학습으로 방향 전환
 
-검사원 검토가 곧 학습 데이터가 되는 **액티브 러닝 루프**다.
-
-```
-유형 수정(type)  → 그 유형이 정답 라벨
-확인(confirmed)  → 화면의 유형이 정답 라벨
-오탐(rejected)   → 'blob' 라벨
-메모만           → 라벨 아님(건너뜀)
-```
-
-안전장치:
-- 라벨 < 40개 또는 클래스 < 2면 **모델을 바꾸지 않는다**
-- 현재 모델의 어떤 유형에 라벨이 하나도 없으면 **중단** (재학습하면 그 유형이 영영 사라짐 — 4→2 클래스 축소 사고 방지)
-- 교체 전 신·구 모델 판정 일치율을 보고하고, 기존 모델은 `crack_type.bak.json` 으로 백업
-- `model/train_set.npz` 에 특징을 누적 저장 → 원본 `.twin` 이 삭제돼도 과거 라벨이 계속 반영
+유형 분류기 재학습 루프(`tools/retrain_type.py`, 대시보드 카드, `/api/retrain*`)는
+유형 분류 폐지와 함께 제거했다. **검토 라벨은 계속 쌓인다** — 사이드카의
+확인(양성)·오탐(하드 네거티브)이 검출(세그멘테이션) 모델 파인튜닝의 학습 데이터가 된다.
+파인튜닝 파이프라인(학습 코드는 beric7 원 repo 계열)은 별도 과제다.
 
 ---
 
@@ -625,7 +589,8 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 | 8 | `craze`(실금) 폐지 | 4클래스 유지 | 실금도 결국 가는 균열. 3클래스로 병합 |
 | 9 | 검토는 사이드카 | `.twin` 직접 수정 | `.twin` 을 불변으로 유지 → 재생성·비교·재학습이 안전 |
 | 10 | 순수 numpy 랜덤포레스트 | 런타임 sklearn 의존 | 오프라인 자체완결 원칙. 학습할 때만 sklearn |
-| 11 | `embreex` 사실상 필수 | 순수 numpy 폴백 허용 | 폴백이 **조용히** 일어나 전 이미지 실패 → 빈 보고서. [§13](#13-흔한-함정) |
+| 11 | **유형 분류 폐지** | 분류기 유지·재학습 | 실제 균열이 blob 으로 숨는 위험(놓침) > 오탐 정리 효과. 오탐은 검출 모델 재학습으로 |
+| 12 | `embreex` 사실상 필수 | 순수 numpy 폴백 허용 | 폴백이 **조용히** 일어나 전 이미지 실패 → 빈 보고서. [§13](#13-흔한-함정) |
 
 ---
 
@@ -653,11 +618,8 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 | 대시보드 UI | `ui/dashboard.html` + `ui/dashboard.js` |
 | 뷰어 색상·굵기 | `ui/viewer.js` 상단 상수 (`RIBBON_*`, `SEV_HEX`, `TYPE_COLOR`, `CMP_COLOR`) |
 | 뷰어 조작감 | `LOOK_SENS`, `HOLD_MS`, `MOVE_PX`, `BASE_FOV`/`SCOPE_FOV` |
-| 유형 특징 추가 | `cracktype.feature_vector()` → **재학습 필수** |
-| 유형 종류 변경 | `ui/viewer.js` `CRACK_TYPES`/`TYPE_LABEL` + 모델 재학습 |
 | PDF 레이아웃 | `tools/export_report.py` `build_pdf()` |
 | 비교 판정 기준 | `tools/compare_twins.py` (노이즈 바닥·정합 게이트) |
-| 재학습 안전장치 | `tools/retrain_type.py` `--min-labels`, 클래스 손실 가드 |
 
 ---
 
@@ -699,7 +661,7 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 ### 12-4. 렌더 성능
 
 수만 개 리본을 개별 메시로 그리면 드로우콜이 폭발해 6fps가 나왔다.
-지금은 **유형별 병합 버퍼 1개씩**으로 묶어 드로우콜을 최소화하고, 필터는 버퍼 통째로 on/off 한다.
+지금은 **단일 병합 버퍼**로 묶어 드로우콜을 최소화하고, 필터는 정점 알파(0/1)로 개별 크랙을 끈다.
 개별 강조는 정점 범위(`ribVRange`)를 기억해 색상 속성만 갈아끼운다.
 
 ---
@@ -753,7 +715,7 @@ git lfs install && git lfs pull
 
 **① 파이썬 문법·import**
 ```bash
-py -c "import ast,sys; [ast.parse(open(f,encoding='utf-8').read()) for f in ['app.py','backend.py','pipeline.py','cracktype.py']]"
+py -c "import ast,sys; [ast.parse(open(f,encoding='utf-8').read()) for f in ['app.py','backend.py','pipeline.py']]"
 ```
 
 **② 뷰어 JS 파싱** — node가 없어도 브라우저로 확인할 수 있다.

@@ -184,11 +184,11 @@
   #cracklist .ctr button{display:inline-flex;align-items:center;gap:5px;background:var(--surface-3);color:var(--tx-2);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:5px 9px;cursor:pointer;font-size:var(--fs-cap);font-family:inherit;}
   #cracklist .ctr button:hover{background:#222d37;border-color:var(--accent);color:var(--accent);}
   #cracklist .ctr button .ic{width:13px;height:13px;}
-  #clHead{display:grid;grid-template-columns:60px 46px 62px 1fr 1fr 1fr 30px;gap:4px;padding:7px 8px;color:var(--tx-3);
+  #clHead{display:grid;grid-template-columns:64px 62px 1fr 1fr 1fr 30px;gap:4px;padding:7px 8px;color:var(--tx-3);
     background:var(--surface-2);border-radius:var(--r-sm) var(--r-sm) 0 0;font-weight:600;font-size:10.5px;
     text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;}
   #clRows{overflow-y:auto;flex:1;min-height:120px;border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r-sm) var(--r-sm);}
-  .clRow{display:grid;grid-template-columns:60px 46px 62px 1fr 1fr 1fr 30px;gap:4px;padding:6px 8px;cursor:pointer;
+  .clRow{display:grid;grid-template-columns:64px 62px 1fr 1fr 1fr 30px;gap:4px;padding:6px 8px;cursor:pointer;
     border-left:2px solid transparent;font-family:Consolas,monospace;font-size:var(--fs-cap);color:var(--tx);}
   .tychip{display:inline-block;padding:1px 5px;border-radius:8px;font-size:9.5px;font-family:'Segoe UI',sans-serif;
     border:1px solid currentColor;white-space:nowrap;}

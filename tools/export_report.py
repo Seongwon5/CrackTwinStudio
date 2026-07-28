@@ -4,7 +4,7 @@
     py tools/export_report.py <report.twin> [-o out.pdf] [--rows 300] [--photos 24]
 
 · 심각도(경미~특이값)·균열 신뢰도는 .twin 저장값과 동일 규칙(meta 경계값)으로 재계산.
-· 검토 사이드카(<twin>.review.json)가 있으면 검토 상태·수정 유형·메모를 대장에 반영.
+· 검토 사이드카(<twin>.review.json)가 있으면 검토 상태·메모를 대장에 반영.
 · 주의: 수치는 파이프라인 무보정 mm 기준(뷰어의 2점 캘리브레이션은 로컬 설정이라 미반영)
   — 표지에 명시한다.
 """
@@ -34,15 +34,7 @@ A4L = (11.69, 8.27)                    # A4 가로(inch)
 
 CONF_NAME = ["낮음", "보통", "높음"]
 CONF_HEX_T = {"낮음": "#cc4038", "보통": "#e08a2e", "높음": "#2e9e63"}
-TYPE_LABEL = {"crack": "크랙", "joint": "조인트·시공선", "blob": "얼룩"}
-LEGACY_TYPE = {"craze": "crack"}       # 폐지된 '실금' → 크랙(구 .twin 호환)
 REV_LABEL = {"confirmed": "확인", "rejected": "오탐", "edited": "수정"}
-
-
-def _type_of(h):
-    """핫스팟의 유형(폐지된 유형은 대체 유형으로 폴백)."""
-    t = h.get("type")
-    return LEGACY_TYPE.get(t, t)
 
 
 # 심각도(절대 폭 기준, 단일 체계) — 판정 등급 A~D 는 폐지하고 이것으로 통일했다.
@@ -73,7 +65,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
     """.twin 하나로 검사 보고서 PDF 를 만든다(라이브러리 진입점).
 
     구성: 표지·요약 → 위치도 → 균열 대장(폭 내림차순 max_rows 개) → 사진 대지(top_photos 장).
-    검토 사이드카(<twin>.review.json)가 있으면 상태·수정 유형·메모를 대장에 반영하고,
+    검토 사이드카(<twin>.review.json)가 있으면 상태·메모를 대장에 반영하고,
     사이드카의 캘리브레이션(calib.scale)이 있으면 모든 mm 수치·심각도에 적용해 표지에 명시한다.
     폭이 측정 바닥(2×GSD) 미만인 균열은 "≤상한" 으로 검열 표기한다(가짜 정밀도 방지).
     log 콜백으로 진행 상황을 전달한다(백엔드 잡 로그용). debug_png 를 주면 각 면을 PNG 로도 남긴다."""
@@ -103,12 +95,6 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
             return f"≤{2 * g * cal:.{d}f}"
         return f"{w:.{d}f}"
 
-    # 검토 유형 수정 반영(뷰어 부트와 동일 규칙)
-    for k, v in revs.items():
-        try:
-            if v.get("type"): hots[int(k)]["type"] = v["type"]
-        except (IndexError, ValueError):
-            pass
     sev_bounds = rm.get("severity_bounds_mm", [0.5, 1.0, 3.0, 5.0, 10.0])
     sevs = [_sev(h, sev_bounds, cal) for h in hots]
     cbnd = rm.get("conf_bounds", [0.7, 0.9])
@@ -116,11 +102,10 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
     # 정렬 기준: 심각도(절대 폭)가 1차. 예전의 길이×폭 상대값은 물리적 근거가 약해 폐지.
     sev = np.array([(h.get("width_mm_p95") or h.get("width_mm_median") or h.get("width_mm_max") or 0)
                     for h in hots])
-    # 대장·사진 순서: '크랙' 유형 우선 → 심각도. 검사원이 오탐(rejected) 판정한 것은 제외.
-    is_crack = np.array([1 if _type_of(h) in (None, "crack") else 0 for h in hots])
+    # 대장·사진 순서: 심각도순. 검사원이 오탐(rejected) 판정한 것은 제외 —
+    # 오탐 억제는 유형 분류(폐지됨)가 아니라 검토 + 검출 모델 재학습이 담당한다.
     rejected = np.array([revs.get(str(i), {}).get("state") == "rejected" for i in range(len(hots))])
-    order = np.lexsort((-sev, -is_crack))
-    order = [int(i) for i in order if not rejected[i]]
+    order = [int(i) for i in np.argsort(-sev) if not rejected[i]]
     n = len(hots)
     pngs = []
 
@@ -154,10 +139,9 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         ax.set_title(f"심각도 분포 (폭 p95 기준 · 경계 {sev_bounds} mm)", fontsize=11)
         ax.tick_params(axis="x", labelsize=8)
         for s in ("top", "right"): ax.spines[s].set_visible(False)
-        # 신뢰/유형/검토 요약 텍스트
-        rc = Counter(confs); tc = Counter(TYPE_LABEL.get(_type_of(h), "크랙") for h in hots)
+        # 신뢰/검토 요약 텍스트
+        rc = Counter(confs)
         rvc = Counter(v.get("state") for v in revs.values())
-        ty_txt = " · ".join(f"{k} {v:,}" for k, v in tc.most_common())
         # 측정 바닥 이하(폭 < 2×GSD) 개수 — 표기값이 상한("≤")인 균열이 얼마나 되는지 요약에 명시
         n_floor = sum(1 for h in hots
                       if isinstance(h.get("gsd_mm"), (int, float))
@@ -165,8 +149,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                       and (h.get("width_mm_median") or h.get("width_mm_max")) < 2 * h["gsd_mm"])
         txt = (f"총 균열 {n:,}개\n\n"
                f"균열 신뢰도  높음 {rc.get('높음',0):,} · 보통 {rc.get('보통',0):,} · 낮음 {rc.get('낮음',0):,}\n"
-               f"유형        {ty_txt}\n"
-               f"검사원 검토 {len(revs):,}/{n:,} (확인 {rvc.get('confirmed',0)} · 수정 {rvc.get('edited',0)} · 오탐 {rvc.get('rejected',0)})"
+               f"검사원 검토 {len(revs):,}/{n:,} (확인 {rvc.get('confirmed',0)} · 오탐 {rvc.get('rejected',0)})"
                + (f"\n분해능 한계 {n_floor:,}개 — 폭이 2×GSD 미만이라 '≤상한' 으로 표기" if n_floor else ""))
         fig.text(0.54, 0.68, txt, fontsize=11.5, va="top", linespacing=1.9, color="#234")
         if cal != 1.0:
@@ -221,8 +204,8 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         rows_all = order[:max_rows]
         log(f"[3/4] 균열 대장(심각도순 상위 {len(rows_all)}행) …")
         PER = 26
-        cols = ["ID", "유형", "심각도", "신뢰도", "폭중앙", "±", "p95", "최대", "길이", "총연장", "뷰", "검토", "메모"]
-        wcol = [0.065, 0.10, 0.075, 0.05, 0.065, 0.05, 0.065, 0.065, 0.075, 0.075, 0.035, 0.055, 0.185]
+        cols = ["ID", "심각도", "신뢰도", "폭중앙", "±", "p95", "최대", "길이", "총연장", "뷰", "검토", "메모"]
+        wcol = [0.07, 0.08, 0.055, 0.07, 0.055, 0.07, 0.07, 0.08, 0.08, 0.04, 0.06, 0.235]
         for pg in range(0, len(rows_all), PER):
             fig, ax = plt.subplots(figsize=A4L); ax.axis("off")
             ax.set_title(f"균열 대장 (심각도순 {pg+1}–{min(pg+PER,len(rows_all))} / 상위 {len(rows_all)} · 전체 {n:,})"
@@ -233,7 +216,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                 h = hots[hi]; rv = revs.get(str(hi), {})
                 f0 = lambda x: (f"{x * cal:,.0f}" if isinstance(x, (int, float)) else "-")
                 unc = h.get("w_unc_mm")                          # 뷰 간 산포(IQR/2, 뷰≥3)
-                cell.append([f"C-{hi+1:04d}", TYPE_LABEL.get(_type_of(h), "크랙"),
+                cell.append([f"C-{hi+1:04d}",
                              SEV_NAME.get(sevs[hi], "-"), confs[hi],
                              _fw(h, h.get("width_mm_median")),
                              (f"{unc * cal:.2f}" if isinstance(unc, (int, float)) else "-"),
@@ -247,7 +230,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                 c_.set_edgecolor("#d5dde4")
                 if r0 == 0:
                     c_.set_facecolor("#eef3f7"); c_.set_text_props(fontweight="bold", color="#234")
-                elif c0 == 2:
+                elif c0 == 1:                                     # 심각도 열(유형 열 제거로 한 칸 당겨짐)
                     _k = next((k for k, v in SEV_NAME.items() if v == c_.get_text().get_text()), None)
                     if _k: c_.set_text_props(color=SEV_HEX[_k], fontweight="bold")
             _save(fig, f"p3_table_{pg//PER}")
@@ -258,7 +241,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         log(f"[4/4] 사진 대지(상위 {len(photos)}개) …")
         if photos:
             import cv2
-            import cracktype as CT
+            from pipeline import project_to_cam
             PPP = 6                                             # 페이지당 2행×3열
             for pg in range(0, len(photos), PPP):
                 fig = plt.figure(figsize=A4L)
@@ -271,7 +254,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                         img = cv2.imdecode(np.frombuffer(z.read(f"img/{cam['id']:04d}_full.jpg"), np.uint8),
                                            cv2.IMREAD_COLOR)[:, :, ::-1]
                         P = np.array([p for r in rb_by_hot[hi] for p in r["poly"]], float)
-                        uv, ok = CT.project_to_cam(cam, P); uv = uv[ok] * (img.shape[1] / cam["w"])
+                        uv, ok = project_to_cam(cam, P); uv = uv[ok] * (img.shape[1] / cam["w"])
                         if len(uv) < 2: raise RuntimeError("투영 실패")
                         x0, y0 = uv.min(0); x1, y1 = uv.max(0)
                         mrg = max(40, 0.25 * max(x1 - x0, y1 - y0))
@@ -283,7 +266,7 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
                         ax.text(0.5, 0.5, f"이미지 없음\n({e})", ha="center", va="center", fontsize=8, color="#999")
                     sv = sevs[hi]
                     _L = h.get("length_mm")
-                    ax.set_title(f"C-{hi+1:04d} · {TYPE_LABEL.get(_type_of(h),'크랙')} · "
+                    ax.set_title(f"C-{hi+1:04d} · "
                                  f"{SEV_NAME.get(sv,'')}\n폭 {_fw(h, h.get('width_mm_median'), 1)}mm · "
                                  f"길이 {(f'{_L * cal:,.0f}' if isinstance(_L, (int, float)) else '-')}mm",
                                  fontsize=8.5, color=SEV_HEX.get(sv, "#333"))

@@ -77,14 +77,9 @@ document.getElementById('hdrCounts').textContent =
   `분석 이미지: ${DATA.counts.cameras}장 · 검출 포인트: ${DATA.counts.hotspots}개`;
 
 // ===== 검사원 검토(확인/유형수정/오탐) — 사이드카(<twin>.review.json) 영속 =====
-// 유형 수정은 리본 생성 '전'에 DATA 에 적용해 3D 색·필터·목록이 모두 일치하게 한다.
+// (유형 분류는 폐지됨 — 검토는 확인/오탐/메모만. 오탐 라벨은 검출 모델 재학습 데이터가 된다.)
 let REVIEW = {version:1, reviews:{}};
 try{ REVIEW = await _fetch('/api/review?p='+_q, 'json'); }catch(e){}
-DATA.hotspots.forEach(h=>{ h._ai_type = h.type; });   // AI 원판정 보존(검토 해제 시 복원용)
-for(const [k,v] of Object.entries(REVIEW.reviews||{})){
-  const h = DATA.hotspots[+k];
-  if(h && v.type) h.type = v.type;                 // 검사원 수정 유형이 AI 판정을 덮는다
-}
 // 균열 i 의 검토 기록(없으면 null).
 function revOf(i){ return (REVIEW.reviews||{})[String(i)] || null; }
 // 검토를 서버 사이드카에 저장하고 로컬 REVIEW 도 함께 갱신한다(state:'clear' 면 삭제).
@@ -355,25 +350,13 @@ function radiusOf(wmm){                            // 폭(mm) → 튜브 반경(
 // ---- 병합 렌더: 수만 개 리본을 메시 1개(드로우콜 1회)로 — 대규모 데이터 FPS 의 핵심 ----
 // 리본마다 Mesh 를 만들면 1.7만 드로우콜 + 씬그래프 순회로 6fps 가 된다. 정점색으로 심각도를
 // 굽고 전부 한 버퍼에 병합한다. 호버/선택 하이라이트는 그 크랙만 흰 오버레이 튜브로 따로 그린다.
-// ---- 유형(크랙/조인트/얼룩): 유형별 병합 버퍼로 나눠 필터 시 통째로 on/off ----
-// '실금(craze)'은 폐지 — 실금도 가는 균열이라 크랙으로 흡수했다. 구 .twin 의 craze 는 아래 맵으로 폴백.
-const CRACK_TYPES=['crack','joint','blob'];
-const TYPE_LABEL={crack:'크랙',joint:'조인트·시공선',blob:'얼룩'};
-const TYPE_COLOR={crack:'#d0a000',joint:'#e05050',blob:'#b98cff'};
-const LEGACY_TYPE={craze:'crack'};                   // 폐지된 유형 → 대체 유형
-// 핫스팟 인덱스 → 유형 키. 폐지 유형·미지정·범위 밖은 모두 'crack' 으로 수렴시켜
-// 어떤 보고서를 열어도 CRACK_TYPES 밖의 값이 나오지 않게 한다.
-function hotType(hot){
-  const h=(hot>=0?DATA.hotspots[hot]:null); let t=h&&h.type;
-  if(LEGACY_TYPE[t]) t=LEGACY_TYPE[t];
-  return CRACK_TYPES.indexOf(t)>=0?t:'crack';
-}
-const ribGeoByType={}; CRACK_TYPES.forEach(t=>ribGeoByType[t]={pos:[],col:[],idx:[],vbase:0});
-const ribType=[];                                    // ri → 유형
+// (유형 분류 폐지 — 유형별 버퍼 분리도 제거하고 병합 버퍼 하나만 쓴다.
+//  구 .twin 의 type 필드는 무시된다. 오탐 억제는 검토 + 검출 모델 재학습이 담당.)
+let ribGeo = {pos:[],col:[],idx:[],vbase:0};         // 전체 리본을 굽는 단일 병합 버퍼
 const ribHot=[];                                     // ri → 핫스팟 인덱스(비교 모드 상태색용)
-const ribVRange=[];                                  // ri → [{t,v0,v1}] 병합 버퍼 정점 범위(재도색용)
+const ribVRange=[];                                  // ri → [{v0,v1}] 병합 버퍼 정점 범위(재도색용)
 const ribRuns = [];                                  // ri → [{pts,rr}] 하이라이트 오버레이 재생성용
-function tubeInto(G, pts, radii, radialSeg, color){  // variableTube 와 동일 기하를 유형별 버퍼 G 에 축적
+function tubeInto(G, pts, radii, radialSeg, color){  // variableTube 와 동일 기하를 병합 버퍼 G 에 축적
   const N=pts.length;
   const tan=pts.map((p,i)=>new THREE.Vector3().subVectors(pts[Math.min(N-1,i+1)], pts[Math.max(0,i-1)]).normalize());
   let nrm=new THREE.Vector3(0,0,1);
@@ -412,8 +395,8 @@ function buildRibbon(h, i){
     return new THREE.Vector3(p[0]+n[0]*off, p[1]+n[1]*off, p[2]+n[2]*off);
   });
   const hot=(h.hot!=null?h.hot:-1);
-  const type=hotType(hot); ribType[i]=type; const G=ribGeoByType[type];   // 유형별 버퍼로 라우팅
-  // 크랙 형상 색 = 심각도(상대 순위 색) — 정점색으로 병합 버퍼에 굽는다.
+  const G=ribGeo;                                    // 단일 병합 버퍼
+  // 크랙 형상 색 = 심각도 — 정점색으로 병합 버퍼에 굽는다.
   const base=(hot>=0 ? hotSevColor(hot) : new THREE.Color(RIBBON_COLOR));
   ribbonBase[i]=base.getHex(); ribHot[i]=hot;
   if(hot>=0){ (ribsByHot[hot]=ribsByHot[hot]||[]).push(i); }        // 핫스팟→리본 역매핑
@@ -422,7 +405,7 @@ function buildRibbon(h, i){
     if(run.length>=2){
       const _v0=G.vbase;
       tubeInto(G, run, rr, RIBBON_RADIAL, base);
-      (ribVRange[i]=ribVRange[i]||[]).push({t:type, v0:_v0, v1:G.vbase});
+      (ribVRange[i]=ribVRange[i]||[]).push({v0:_v0, v1:G.vbase});
       runs.push({pts:run, rr});                                      // 오버레이용 원본 경로 보존
       for(let j=1;j<run.length;j++){ const a=run[j-1],b=run[j]; hitPts.push(a.x,a.y,a.z,b.x,b.y,b.z); }  // 히트박스용 중심선 세그먼트
     }
@@ -513,49 +496,43 @@ function ensureMarkerEl(i){
 // 리본: 병합과 분리해 '모든 2D 크랙 인스턴스'를 그대로 렌더 → 병합에서 형상이 사라지지 않는다.
 // (구버전 .twin 은 ribbons 가 없으니 hotspots 의 poly 로 폴백)
 const _ribs = DATA.ribbons || DATA.hotspots.filter(h=>h.poly);
-// 유형별 병합 메시(드로우콜 ≤4). 필터는 정점 알파로 즉시 반영.
-const ribMeshByType={};
+// 단일 병합 메시(드로우콜 1). 필터는 정점 알파로 즉시 반영.
+let ribMesh = null;
 // 리본 전체를 (다시) 굽는다 — 부팅 1회 + 실폭/강조 토글 시.
 // 반경·오프셋이 병합 버퍼에 구워져 있어 토글은 재생성이 불가피하다(초기 로드와 같은 비용).
 function rebuildRibbons(reapply){
-  for(const t of CRACK_TYPES){                       // 이전 세대 버퍼·메시 해제
-    if(ribMeshByType[t]){ ribbonGroup.remove(ribMeshByType[t]); ribMeshByType[t].geometry.dispose(); ribMeshByType[t]=null; }
-    ribGeoByType[t]={pos:[],col:[],idx:[],vbase:0};
-  }
+  if(ribMesh){ ribbonGroup.remove(ribMesh); ribMesh.geometry.dispose(); ribMesh=null; }   // 이전 세대 해제
+  ribGeo={pos:[],col:[],idx:[],vbase:0};
   for(const hl of ribbonHitLines){ ribbonGroup.remove(hl); hl.geometry.dispose(); }
   ribbonHitLines.length=0;
-  ribType.length=0; ribHot.length=0; ribVRange.length=0; ribRuns.length=0; ribbonBase.length=0;
+  ribHot.length=0; ribVRange.length=0; ribRuns.length=0; ribbonBase.length=0;
   for(const k in ribsByHot) delete ribsByHot[k];
   _ribs.forEach((rb,ri)=>buildRibbon(rb, ri));
-  for(const t of CRACK_TYPES){
-    const G=ribGeoByType[t];
-    if(!G.pos.length){ ribMeshByType[t]=null; continue; }
+  if(ribGeo.pos.length){
     const g=new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(G.pos,3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(G.col,4));   // itemSize 4 = 알파 필터용
-    g.setIndex(G.idx);
+    g.setAttribute('position', new THREE.Float32BufferAttribute(ribGeo.pos,3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(ribGeo.col,4));   // itemSize 4 = 알파 필터용
+    g.setIndex(ribGeo.idx);
     // alphaTest: 알파 0 인 정점(필터로 숨긴 크랙)은 프래그먼트를 버린다 — 반투명 정렬 문제 없이 on/off
-    const m=new THREE.Mesh(g, new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, alphaTest:0.5,
+    ribMesh=new THREE.Mesh(g, new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, alphaTest:0.5,
       polygonOffset:true, polygonOffsetFactor:-4, polygonOffsetUnits:-4}));
-    m.matrixAutoUpdate=false; ribbonGroup.add(m); ribMeshByType[t]=m;
-    G.pos=G.col=G.idx=null;                           // 병합 후 원본 배열 해제(메모리)
+    ribMesh.matrixAutoUpdate=false; ribbonGroup.add(ribMesh);
+    ribGeo.pos=ribGeo.col=ribGeo.idx=null;            // 병합 후 원본 배열 해제(메모리)
   }
   if(reapply){                                        // 토글 경로: 필터·비교색·하이라이트 재적용
     while(hlGroup.children.length){ const c=hlGroup.children.pop(); if(c.geometry) c.geometry.dispose(); }
     _hlHots=new Set();
-    applyTypeFilter();
+    applyFilters();
     if(cmpColorOn && CMP) repaintRibbons();
     refreshRibbonColor(-1);                           // 선택·호버 강조를 새 기하로 재생성
   }
 }
 rebuildRibbons(false);                                // 부팅: 필터 상태가 아직 없으므로 굽기만
-// ===== 필터: 유형 · 심각도 · 균열 신뢰도 (세 가지를 AND 로 적용) =====
-// 리본은 유형별 병합 버퍼 하나씩이라 메시 visible 로는 심각도·신뢰도를 끌 수 없다 →
+// ===== 필터: 심각도 · 균열 신뢰도 (AND 로 적용) =====
+// 병합 버퍼 하나라 메시 visible 로는 개별 크랙을 끌 수 없다 →
 // 정점 알파(RGBA)를 0/1 로 바꿔 alphaTest 로 걸러낸다(지오메트리 재생성 없음, 드로우콜 불변).
-const typeVisible={crack:true,joint:true,blob:true};
 const sevVisible={S1:true,S2:true,S3:true,S4:true,S5:true,S6:true};
 const confVisible={0:true,1:true,2:true};
-const _typeCount={crack:0,joint:0,blob:0};
 const _sevCount={S1:0,S2:0,S3:0,S4:0,S5:0,S6:0};
 const _confCount={0:0,1:0,2:0};
 // 심각도·신뢰도 구간별 개수를 다시 센다(칩에 표시되는 숫자).
@@ -568,29 +545,26 @@ function recountBands(){
     const c=confBand(h); if(c!=null) _confCount[c]++;
   });
 }
-DATA.hotspots.forEach((h,i)=>{ _typeCount[hotType(i)]++; });
 recountBands();
-function hotPasses(i){                               // 세 필터를 모두 통과하는가
+function hotPasses(i){                               // 필터(심각도·신뢰도)를 모두 통과하는가
   const h=DATA.hotspots[i]; if(!h) return true;
-  if(typeVisible[hotType(i)]===false) return false;
   const s=hotSev(i); if(s && sevVisible[s]===false) return false;
   const c=confBand(h); if(c!=null && confVisible[c]===false) return false;
   return true;
 }
 // 세 필터를 화면에 반영한다. 지오메트리를 다시 만들지 않고 정점 알파만 0/1 로 바꾸므로
 // 수만 개 크랙에서도 즉시 적용된다(드로우콜 불변).
-function applyTypeFilter(){
+function applyFilters(){
   // ① 리본: 정점 알파 갱신(리본별 정점 범위는 ribVRange 에 기록돼 있다)
-  const attr={}; for(const t of CRACK_TYPES){ if(ribMeshByType[t]) attr[t]=ribMeshByType[t].geometry.getAttribute('color'); }
-  for(let ri=0; ri<ribVRange.length; ri++){
-    const ranges=ribVRange[ri]; if(!ranges) continue;
-    const a=hotPasses(ribHot[ri]) ? 1 : 0;
-    for(const rg of ranges){
-      const at=attr[rg.t]; if(!at) continue;
-      for(let v=rg.v0; v<rg.v1; v++) at.setW(v, a);
+  const at = ribMesh && ribMesh.geometry.getAttribute('color');
+  if(at){
+    for(let ri=0; ri<ribVRange.length; ri++){
+      const ranges=ribVRange[ri]; if(!ranges) continue;
+      const a=hotPasses(ribHot[ri]) ? 1 : 0;
+      for(const rg of ranges) for(let v=rg.v0; v<rg.v1; v++) at.setW(v, a);
     }
+    at.needsUpdate=true;
   }
-  for(const t of CRACK_TYPES){ if(attr[t]) attr[t].needsUpdate=true; }
   // ② 히트박스(피킹)도 같은 조건으로
   for(const hl of ribbonHitLines) hl.visible = hotPasses(hl.userData.hot);
   // ③ 걸러진 크랙의 호버/선택 해제
@@ -599,15 +573,14 @@ function applyTypeFilter(){
   updateHUD();
   if(typeof clRefresh==='function' && document.getElementById('cracklist').style.display==='flex') clRefresh();
 }
-// 상단 필터 바: 유형 · 심각도 · 신뢰도 칩
-const _typeChipEl={}, _sevChipEl={}, _confChipEl={};
-// 칩들의 on/off 표시를 현재 필터 상태와 맞춘다('전체' 칩은 셋 다 모두 켜졌을 때만 on).
-function _syncTypeChips(){
-  for(const t of CRACK_TYPES){ _typeChipEl[t].classList.toggle('on', typeVisible[t]); _typeChipEl[t].classList.toggle('off', !typeVisible[t]); }
+// 상단 필터 바: 심각도 · 신뢰도 칩
+const _sevChipEl={}, _confChipEl={};
+// 칩들의 on/off 표시를 현재 필터 상태와 맞춘다('전체' 칩은 모두 켜졌을 때만 on).
+function _syncChips(){
   for(const g of SEV_KEYS){ if(_sevChipEl[g]){ _sevChipEl[g].classList.toggle('on', sevVisible[g]); _sevChipEl[g].classList.toggle('off', !sevVisible[g]); } }
   for(let b=0;b<3;b++){ if(_confChipEl[b]){ _confChipEl[b].classList.toggle('on', confVisible[b]); _confChipEl[b].classList.toggle('off', !confVisible[b]); } }
   document.getElementById('tbAll').classList.toggle('on',
-    CRACK_TYPES.every(t=>typeVisible[t]) && SEV_KEYS.every(g=>sevVisible[g]) && [0,1,2].every(b=>confVisible[b]));
+    SEV_KEYS.every(g=>sevVisible[g]) && [0,1,2].every(b=>confVisible[b]));
 }
 function _sep(box){                                  // 필터 바에 세로 구분선 하나 추가
   const d=document.createElement('span');
@@ -619,22 +592,14 @@ function _label(box, txt){                           // 필터 바에 그룹 이
 }
 (function buildFilterUI(){
   const box=document.getElementById('typeChips');
-  for(const t of CRACK_TYPES){
-    const el=document.createElement('span'); el.className='tychip2 on';
-    el.innerHTML='<span class="dot" style="background:'+TYPE_COLOR[t]+'"></span>'+TYPE_LABEL[t]
-      +' <span class="cnt">'+_typeCount[t].toLocaleString()+'</span>';
-    el.style.color=TYPE_COLOR[t];
-    box.appendChild(el); _typeChipEl[t]=el;
-    el.onclick=()=>{ typeVisible[t]=!typeVisible[t]; _syncTypeChips(); applyTypeFilter(); };
-  }
-  _sep(box); _label(box, '심각도');
+  _label(box, '심각도');
   for(const g of SEV_KEYS){
     const el=document.createElement('span'); el.className='tychip2 on';
     el.innerHTML='<span class="dot" style="background:'+SEV_HEX[g]+'"></span>'+SEV_NAME[g]
       +' <span class="cnt">'+_sevCount[g].toLocaleString()+'</span>';
     el.style.color=SEV_HEX[g]; el.title=SEV_NAME[g]+' — 폭 '+sevRange(SEV_KEYS.indexOf(g))+'mm';
     box.appendChild(el); _sevChipEl[g]=el;
-    el.onclick=()=>{ sevVisible[g]=!sevVisible[g]; _syncTypeChips(); applyTypeFilter(); };
+    el.onclick=()=>{ sevVisible[g]=!sevVisible[g]; _syncChips(); applyFilters(); };
   }
   _sep(box); _label(box, '신뢰도');
   for(let b=2;b>=0;b--){
@@ -643,16 +608,15 @@ function _label(box, txt){                           // 필터 바에 그룹 이
       +' <span class="cnt">'+_confCount[b].toLocaleString()+'</span>';
     el.style.color=CONF_HEX[b];
     box.appendChild(el); _confChipEl[b]=el;
-    el.onclick=()=>{ confVisible[b]=!confVisible[b]; _syncTypeChips(); applyTypeFilter(); };
+    el.onclick=()=>{ confVisible[b]=!confVisible[b]; _syncChips(); applyFilters(); };
   }
   document.getElementById('tbAll').onclick=()=>{
-    const anyOff=CRACK_TYPES.some(t=>!typeVisible[t]) || SEV_KEYS.some(g=>!sevVisible[g]) || [0,1,2].some(b=>!confVisible[b]);
-    for(const t of CRACK_TYPES) typeVisible[t]=anyOff;
+    const anyOff=SEV_KEYS.some(g=>!sevVisible[g]) || [0,1,2].some(b=>!confVisible[b]);
     for(const g of SEV_KEYS) sevVisible[g]=anyOff;
     for(let b=0;b<3;b++) confVisible[b]=anyOff;
-    _syncTypeChips(); applyTypeFilter();
+    _syncChips(); applyFilters();
   };
-  _syncTypeChips();
+  _syncChips();
 })();
 
 // ===== 비교(자산) 모드: 검사 간 상태색 · 이전 검사 고스트 · Δ표시 =====
@@ -681,7 +645,8 @@ function cmpStatus(hot){ return (CMP && CMP.stByHot[hot]) || 'stable'; }   // �
 // (비교 모드 on/off · 강조 토글 · 캘리브레이션으로 심각도가 달라졌을 때).
 function repaintRibbons(){
   // 병합 버퍼의 정점색을 리본 단위로 다시 굽는다: 비교 모드=상태색(강조 해제 시 어둡게), 아니면 심각도색.
-  const attr={}; for(const t of CRACK_TYPES){ if(ribMeshByType[t]) attr[t]=ribMeshByType[t].geometry.getAttribute('color'); }
+  const at = ribMesh && ribMesh.geometry.getAttribute('color');
+  if(!at) return;
   const c=new THREE.Color();
   for(let ri=0; ri<ribVRange.length; ri++){
     const ranges=ribVRange[ri]; if(!ranges) continue;
@@ -689,12 +654,10 @@ function repaintRibbons(){
       const st=cmpStatus(ribHot[ri]);
       c.copy(cmpEmph[st]===false ? CMP_DIM : new THREE.Color(CMP_COLOR[st]||CMP_COLOR.stable));
     } else c.setHex(ribbonBase[ri]);
-    for(const rg of ranges){
-      const a=attr[rg.t]; if(!a) continue;
-      for(let v=rg.v0; v<rg.v1; v++){ a.setXYZW(v, c.r, c.g, c.b, a.getW(v)); }
-    }
+    for(const rg of ranges)
+      for(let v=rg.v0; v<rg.v1; v++){ at.setXYZW(v, c.r, c.g, c.b, at.getW(v)); }
   }
-  for(const t of CRACK_TYPES){ if(attr[t]) attr[t].needsUpdate=true; }
+  at.needsUpdate=true;
 }
 // 이전 검사 고스트: 이전 meta 의 리본 중심선을 현재 좌표계로 변환해 라인으로 겹쳐 그린다.
 // 매칭된 것=은은한 파랑(맥락) · 미검출=밝은 파랑(주목: '지난번엔 여기 있었다').
@@ -797,7 +760,7 @@ function updateHUD(){
   if(hud.style.display==='none') return;
   const W=innerWidth,H=innerHeight, v=new THREE.Vector3();
   const act=new Set();
-  for(const i of [hoverIdx,selIdx,hoverTag]) if(i!=null && i>=0 && typeVisible[hotType(i)]!==false) act.add(i);
+  for(const i of [hoverIdx,selIdx,hoverTag]) if(i!=null && i>=0 && hotPasses(i)) act.add(i);
   for(const i of _hudShown) if(!act.has(i)){ const el=hudMarkers[i] && hudMarkers[i].el; if(el) el.style.display='none'; }
   for(const i of act){
     const m=hudMarkers[i]; if(!m) continue;
@@ -832,7 +795,7 @@ function distortXY(cam, x, y){
           y*rad + p1*(r2+2*y*y) + 2*p2*x*y];
 }
 // 3D 점 → 그 카메라 사진의 정규화 좌표(u,v ∈ 0~1). 카메라 뒤이거나 화면 밖이면 null.
-// 파이썬 쪽 cracktype.project_to_cam 과 같은 규약이어야 한다(왜곡 재적용 포함).
+// 파이썬 쪽 pipeline.project_to_cam 과 같은 규약이어야 한다(왜곡 재적용 포함).
 function projectToCam(cam, X){
   if(cam.fx === undefined) return null;
   const rx=X[0]-cam.pos[0], ry=X[1]-cam.pos[1], rz=X[2]-cam.pos[2];
@@ -1222,7 +1185,8 @@ function makeCrop(container, cam, u, v, cropFrac){
 }
 
 // 핫스팟 클릭 → 대표 크랙 이미지를 크게(확대) 보여준다.
-// ---- 검토 UI: 상세 패널의 확인/오탐/유형수정/메모 행 ----
+// ---- 검토 UI: 상세 패널의 확인/오탐/메모 행 ----
+// 오탐 라벨은 검출(세그멘테이션) 모델 재학습의 하드 네거티브가 된다 — 검토가 곧 학습 데이터.
 function buildReviewRow(i){
   if(i==null || i<0) return '';
   const rv=revOf(i); const st=rv&&rv.state;
@@ -1230,32 +1194,18 @@ function buildReviewRow(i){
     ? '<span style="color:'+REV_COLOR[st]+';font-weight:600">'+REV_LABEL[st]+'</span>'
       +(rv.at?' <span style="color:var(--tx-3)">'+rv.at.replace('T',' ')+'</span>':'')
     : '<span style="color:var(--tx-3)">미검토</span>';
-  const typeSel = '<select id="revType" class="revsel">'
-    + '<option value="">유형: AI 판정 유지</option>'
-    + CRACK_TYPES.map(t=>'<option value="'+t+'"'+((rv&&rv.type)===t?' selected':'')+'>유형→ '+TYPE_LABEL[t]+'</option>').join('')
-    + '</select>';
   return '<div id="revRow" style="margin-top:9px;padding:8px 10px;background:var(--surface-2);'
     +'border:1px solid var(--line);border-radius:var(--r-sm);">'
     +'<span style="color:var(--tx-3)">검사원 검토</span> · '+badge
     +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:7px;">'
     +'<button id="revOk" class="revbtn" style="color:#3fbf7f;border-color:#3fbf7f">✓ 확인</button>'
     +'<button id="revNo" class="revbtn" style="color:#e0574e;border-color:#e0574e">✗ 오탐</button>'
-    + typeSel
     +(st?'<button id="revClear" class="revbtn">해제</button>':'')
     +'</div>'
     +'<input id="revNote" placeholder="메모 (Enter 로 저장)" value="'+String((rv&&rv.note)||'').replace(/"/g,'&quot;')+'"'
     +' style="margin-top:7px;width:100%;background:var(--surface-3);color:var(--tx);border:1px solid var(--line-2);'
     +'border-radius:4px;padding:5px 8px;font-size:var(--fs-cap);font-family:inherit;box-sizing:border-box;">'
     +'</div>';
-}
-// 유형별 개수를 다시 세어 칩 숫자에 반영한다(검사원이 유형을 수정하면 분포가 바뀌므로).
-function recomputeTypeCounts(){
-  for(const t of CRACK_TYPES) _typeCount[t]=0;
-  DATA.hotspots.forEach((h,i)=>{ _typeCount[hotType(i)]++; });
-  for(const t of CRACK_TYPES){
-    const el=_typeChipEl[t] && _typeChipEl[t].querySelector('.cnt');
-    if(el) el.textContent=_typeCount[t].toLocaleString();
-  }
 }
 // 상단 '검토 n/전체' 진행 표시를 갱신한다.
 function updateRevProg(){
@@ -1268,23 +1218,13 @@ function _revRefresh(i, h){
   showHotspotRep(h); updateRevProg();
   if(typeof clRefresh==='function' && document.getElementById('cracklist').style.display==='flex') clRefresh();
 }
-// 방금 그린 검토 행(확인·오탐·해제·유형·메모)에 핸들러를 건다.
-// 유형 수정은 저장 후 h.type 을 즉시 바꿔 목록·칩·필터가 바로 반응하게 한다
-// (3D 리본 색은 병합 버퍼에 구워져 있어 다음 로드에 반영된다).
+// 방금 그린 검토 행(확인·오탐·해제·메모)에 핸들러를 건다.
 function wireReviewRow(i, h){
   if(i==null || i<0) return;
   const g=id=>document.getElementById(id);
   if(g('revOk'))    g('revOk').onclick    = async()=>{ await saveReview(i,{state:'confirmed'}); _revRefresh(i,h); };
   if(g('revNo'))    g('revNo').onclick    = async()=>{ await saveReview(i,{state:'rejected'}); _revRefresh(i,h); };
-  if(g('revClear')) g('revClear').onclick = async()=>{ await saveReview(i,{state:'clear'});
-                                                       h.type=h._ai_type; recomputeTypeCounts(); _revRefresh(i,h); };
-  if(g('revType'))  g('revType').onchange = async e=>{
-    const t=e.target.value;
-    const keep=(revOf(i)&&revOf(i).state)==='confirmed' ? 'confirmed' : 'edited';
-    await saveReview(i, t?{type:t, state:keep}:{type:'', state:keep});
-    h.type = t || h._ai_type;                        // 라이브: 목록·칩·필터 즉시 / 3D 리본 색은 재로드 시
-    recomputeTypeCounts(); _revRefresh(i,h);
-  };
+  if(g('revClear')) g('revClear').onclick = async()=>{ await saveReview(i,{state:'clear'}); _revRefresh(i,h); };
   if(g('revNote'))  g('revNote').onkeydown = async e=>{
     if(e.key!=='Enter') return;
     const keep=(revOf(i)&&revOf(i).state)||'edited';
@@ -1616,7 +1556,7 @@ function pickRibbonHot(){
     v.copy(h.point).project(camera);
     const sx=(v.x*0.5+0.5)*innerWidth, sy=(-v.y*0.5+0.5)*innerHeight;
     const px=Math.hypot(sx-cx, sy-cy);                             // 커서~크랙(교차점) 화면상 거리(px)
-    if(typeVisible[ribType[h.object.userData.ri]]===false) continue;   // 숨긴 유형은 피킹 제외
+    // 필터로 숨긴 크랙은 히트라인 visible=false 라 레이캐스트에서 이미 제외된다
     if(px<=HITBOX_PX && px<bestPx){ bestPx=px; bestHot=h.object.userData.hot; }   // 14px 안쪽 · 화면상 가장 가까운 크랙
   }
   return bestHot;
@@ -1957,7 +1897,7 @@ refreshCalibUI();
 // 수만 개 크랙을 표로 탐색: 300행씩 청크 렌더(스크롤 시 추가), 행 클릭 → 해당 크랙으로 비행.
 const clPanel=document.getElementById('cracklist'), clRowsEl=document.getElementById('clRows');
 let clData=[], clShown=0; const CL_CHUNK=300;
-// 표시할 균열을 골라 정렬해 clData 에 담는다(숨긴 유형 제외, 최소 폭·길이 필터는 보정된 mm 기준).
+// 표시할 균열을 골라 정렬해 clData 에 담는다(최소 폭·길이 필터는 보정된 mm 기준).
 function clFilterSort(){
   const minW=parseFloat(document.getElementById('clMinW').value)||0;
   const minL=parseFloat(document.getElementById('clMinL').value)||0;
@@ -1966,20 +1906,18 @@ function clFilterSort(){
             }[document.getElementById('clSort').value];
   clData=[];
   DATA.hotspots.forEach((h,i)=>{
-    if(typeVisible[hotType(i)]===false) return;                // 숨긴 유형 제외
     if(cmm(h.width_mm_max??h.width_mm??0) < minW) return;      // 필터는 보정된 mm 기준
     if(cmm(h.length_mm??0) < minL) return;
     clData.push([i,h]);
   });
   clData.sort((a,b)=>get(b[1])-get(a[1]));
 }
-// 목록 행 하나(번호·검토표시·유형·심각도·폭·길이·뷰 수). 클릭하면 그 균열로 날아간다.
+// 목록 행 하나(번호·검토표시·심각도·폭·길이·뷰 수). 클릭하면 그 균열로 날아간다.
 function clRow(i,h){
   const el=document.createElement('div'); el.className='clRow'; el.dataset.hi=i;
   const c=hotSevColor(i);
   const rgb='rgb('+Math.round(c.r*255)+','+Math.round(c.g*255)+','+Math.round(c.b*255)+')';
   const wmed=cmm(h.width_mm_median??h.width_mm_max), wmax=cmm(h.width_mm_max??h.width_mm), L=cmm(h.length_mm), T=ltot(h);
-  const ty=hotType(i);
   const lenTitle=(T!=null&&L!=null&&T>L+0.5)?' title="최장경로 '+Math.round(L).toLocaleString()+'mm · 총연장 '+Math.round(T).toLocaleString()+'mm"':'';
   const sv=sevGrade(sevWidth(h)), cb_=confBand(h);
   const gTitle=sv?(' title="심각도 '+SEV_NAME[sv]+' (폭 '+sevRange(SEV_KEYS.indexOf(sv))+'mm)'
@@ -1988,7 +1926,6 @@ function clRow(i,h){
   const rvMark=rv&&rv.state?'<span style="color:'+REV_COLOR[rv.state]+'" title="'+REV_LABEL[rv.state]+'"> '
     +({confirmed:'✓',rejected:'✗',edited:'△'})[rv.state]+'</span>':'';
   el.innerHTML='<span><span class="sevchip" style="background:'+rgb+'"></span>C-'+String(i+1).padStart(4,'0')+rvMark+'</span>'
-    +'<span><span class="tychip" style="color:'+TYPE_COLOR[ty]+'">'+TYPE_LABEL[ty].slice(0,2)+'</span></span>'
     +'<span'+gTitle+' style="color:'+(sv?SEV_HEX[sv]:'inherit')+';font-weight:600">'+(sv?SEV_NAME[sv]:'?')
       +(cb_===0?'<span style="color:'+CONF_HEX[0]+'" title="균열 신뢰도 낮음">?</span>':'')+'</span>'
     +'<span>'+fmtW(h, wmed, 2)+'</span>'
@@ -2100,7 +2037,7 @@ function flyToCrack(i){
 // CSV: 현재 필터·정렬 결과를 그대로(보정된 mm) — Excel 한글 호환 BOM 포함
 function clCsvText(){
   const fx=v=>v==null?'':(Math.round(v*1000)/1000);
-  const head=['id','severity','severity_name','confidence','conf_band','review','review_type','review_note',
+  const head=['id','severity','severity_name','confidence','conf_band','review','review_note',
               'width_mm_median','width_mm_max','width_mm_p95','width_mm_3d','length_mm','length_total_mm',
               'views','conf','x','y','z','calib_scale','sources'];
   const lines=[head.join(',')];
@@ -2108,7 +2045,7 @@ function clCsvText(){
     const _rv=revOf(i)||{};
     lines.push(['C-'+String(i+1).padStart(4,'0'),
       sevGrade(sevWidth(h))||'', (sevGrade(sevWidth(h))?SEV_NAME[sevGrade(sevWidth(h))]:''), (h.conf??''), (confBand(h)!=null?CONF_NAME[confBand(h)]:''),
-      _rv.state||'', _rv.type||'', '"'+String(_rv.note||'').replace(/"/g,'""')+'"',
+      _rv.state||'', '"'+String(_rv.note||'').replace(/"/g,'""')+'"',
       fx(cmm(h.width_mm_median)), fx(cmm(h.width_mm_max)), fx(cmm(h.width_mm_p95)), fx(cmm(h.width_mm_3d)),
       fx(cmm(h.length_mm)), fx(ltot(h)), (h.views||[]).length, h.conf??'',
       h.xyz[0], h.xyz[1], h.xyz[2], calibScale,
