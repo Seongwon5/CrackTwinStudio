@@ -138,7 +138,11 @@ def parse_xmp(path):
 
 
 def orient_to_xmp(file_img, calib_wh):
-    """파일 이미지를 XMP 보정 방향(가로/세로)에 맞도록 90° 단위로 회전해 반환."""
+    """[폴백 전용] 이미지를 XMP 보정 방향(가로/세로)에 맞도록 90° 단위로 회전해 반환.
+
+    ⚠ 90° 시계/반시계는 회전 후 모양이 같아 이 방법으로는 구분할 수 없다(첫 매치 k=1 채택).
+    따라서 방향이 모호한 상황에서는 180° 뒤집힐 수 있다 — 정상 경로는 load_oriented() 가
+    치수 근거로 판정하며, 여기는 치수가 아예 안 맞을 때의 최후 수단이다."""
     base_k = 0
     if calib_wh:
         target_hw = (calib_wh[1], calib_wh[0])
@@ -147,6 +151,40 @@ def orient_to_xmp(file_img, calib_wh):
                 base_k = k
                 break
     return (np.rot90(file_img, base_k).copy() if base_k else file_img.copy())
+
+
+def load_oriented(img_path, calib_wh, log=None):
+    """이미지를 'XMP 보정과 같은 방향'의 BGR 배열로 로드한다 — 기하 정합의 출발점.
+
+    사진측량 SW 가 EXIF 회전을 적용했는지는 도구·버전마다 다르다. Zephyr 는 무시하고
+    저장된 원시 픽셀로 보정한다(실측: interior 데이터셋 — EXIF ori=8 인 172장의 calib 이
+    전부 원시 가로 치수). 그래서 추측 대신 치수로 판정한다:
+      ① calib == 원시 치수      → 원시 그대로 (보정 SW 가 EXIF 미적용)
+      ② calib == EXIF 적용 치수 → exif_transpose (태그가 회전 방향을 정확히 아므로
+                                   90°CW/CCW/180°/플립 전부 모호성 없음)
+      ③ 그 외                  → 종횡비 폴백(orient_to_xmp) + 경고 로그
+    예전엔 무조건 exif_transpose 후 종횡비로 추가 회전을 '추측'했는데, 90° 시계/반시계가
+    구분되지 않아 EXIF ori=8 이미지가 calib 기준 180° 뒤집힌 채 분석됐다(전 검출 오배치).
+
+    반환: (disp BGR, 방향태그). 태그('raw'/'exifN'/'fb')는 추론 캐시 키에 들어간다 —
+    같은 파일·같은 치수라도 방향 판정이 다르면 픽셀 배치가 달라 캐시를 공유하면 안 된다
+    (실측: 방향 수정 직후 구 방향에서 만든 확률맵이 그대로 히트해 마스크가 180° 어긋났다)."""
+    from PIL import Image, ImageOps
+    pil = Image.open(img_path)
+    raw_wh = pil.size
+    ori = pil.getexif().get(274, 1)
+    exif_wh = (raw_wh[1], raw_wh[0]) if ori in (5, 6, 7, 8) else raw_wh
+    if calib_wh and tuple(calib_wh) == raw_wh:                       # ① 원시 방향 보정
+        rgb = pil.convert("RGB"); tag = "raw"
+    elif calib_wh and tuple(calib_wh) == exif_wh:                    # ② EXIF 방향 보정
+        rgb = ImageOps.exif_transpose(pil).convert("RGB"); tag = f"exif{ori}"
+    else:                                                            # ③ 최후 폴백(모호)
+        if log:
+            log(f"    ⚠ {os.path.basename(img_path)}: calib {calib_wh} 가 원시 {raw_wh}·"
+                f"EXIF 적용 {exif_wh} 와 모두 불일치 — 종횡비로 추정(방향 오류 가능)")
+        disp = cv2.cvtColor(np.array(ImageOps.exif_transpose(pil).convert("RGB")), cv2.COLOR_RGB2BGR)
+        return orient_to_xmp(disp, calib_wh), "fb"
+    return cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2BGR), tag
 
 
 def encode_jpeg_bytes(img_bgr, max_px, quality):
@@ -846,15 +884,17 @@ def build_scale_map(shape, uv, locs, ray_idx, tri_idx, d_world, C, fx, mesh, fal
 # 바뀌면 자동 미스. 값은 uint8(1/255) 양자화 PNG(장당 1~4MB). thr 는 확률맵과 무관하므로
 # 키에 넣지 않는다(마스크가 아니라 확률맵을 캐시). 캐시 실패는 전부 무해(추론으로 폴백).
 
-def _prob_cache_key(img_path, dw, dh, tile, overlap):
-    """확률맵 캐시의 키(sha1). 이미지 내용·표시해상도·모델 파일·타일 설정을 모두 섞는다.
+def _prob_cache_key(img_path, dw, dh, tile, overlap, otag=""):
+    """확률맵 캐시의 키(sha1). 이미지 내용·표시해상도·방향태그·모델 파일·타일 설정을 모두 섞는다.
     어느 하나라도 바뀌면 키가 달라져 자동으로 미스가 되므로, 낡은 결과를 재사용할 위험이 없다.
+    otag(방향 판정 결과)가 필요한 이유: 같은 파일이라도 방향 로직이 바뀌면 픽셀 배치가
+    180° 다를 수 있는데 치수는 동일하다 — 태그 없이는 구 방향 캐시가 그대로 히트한다(실측 사고).
     전체 해시는 비싸서 앞 256KB + 끝 64KB 만 읽는다(크기·이름과 함께라면 충돌은 사실상 없다)."""
     import hashlib
     st = os.stat(img_path)
     ms = os.stat(CRACK_WEIGHTS)
     h = hashlib.sha1()
-    h.update(f"{os.path.basename(img_path)}|{st.st_size}|{dw}x{dh}|"
+    h.update(f"{os.path.basename(img_path)}|{st.st_size}|{dw}x{dh}|o{otag}|"
              f"{ms.st_size}|{int(ms.st_mtime)}|t{tile}o{overlap}".encode())
     with open(img_path, "rb") as f:                    # 내용 부분 해시(앞 256KB + 끝 64KB)
         h.update(f.read(262144))
@@ -926,7 +966,6 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
     """이미지들을 크랙 추론·3D 역투영해 scene_data(메시+카메라+크랙점군+크랙핫스팟)를 만든다.
     핫스팟은 경사보정 스케일맵으로 폭·길이를 mm 산출하고, 병합 시 최적(정면·근접) 뷰를 채택한다."""
     import trimesh
-    from PIL import Image, ImageOps
     log("메시(PLY) 로드...")
     # 예전에는 여기서 PLY 를 통째로 base64 문자열로 만들어(1.2GB → 1.6GB str) 함수 끝까지 붙들고
     # 있었다. 메시 로드·이미지 594장 처리 내내 1.6GB 를 점유해 큰 모델에서 MemoryError 가 났다.
@@ -966,9 +1005,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         """①로드: 디코드·방향정렬·JPEG 인코딩 — GPU 와 무관한 준비 작업 전부."""
         name = os.path.basename(img_path)
         K, dist, R, T, calib_wh = parse_xmp(xmp_path)
-        pil = ImageOps.exif_transpose(Image.open(img_path))
-        disp = cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
-        disp = orient_to_xmp(disp, calib_wh)
+        disp, otag = load_oriented(img_path, calib_wh, log=log)   # XMP 보정과 같은 방향으로(치수 근거 판정)
         dh, dw = disp.shape[:2]
         C = pick_center(K, R, T)
         cam = camera_pose(K, R, T, dw, dh)
@@ -982,7 +1019,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         it = {"n": n, "name": name, "K": K, "dist": dist, "R": R, "C": C,
               "cam": cam, "disp": disp, "dh": dh, "dw": dw}
         if seg is not None:                            # 추론 캐시 조회(로드 스레드에서 — 메인 루프 비용 0)
-            it["ckey"] = _prob_cache_key(img_path, dw, dh, seg.tile, seg.overlap)
+            it["ckey"] = _prob_cache_key(img_path, dw, dh, seg.tile, seg.overlap, otag)
             it["cprob"] = _prob_cache_load(it["ckey"], disp.shape)
         return it
 
