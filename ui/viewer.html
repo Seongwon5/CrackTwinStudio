@@ -8,8 +8,20 @@
   <div id="side">
     <div id="hint">드래그: 회전 · 휠: 확대 · 우드래그: 이동<br><br>
       구조물 표면을 <b>클릭</b>하면 그 지점을 찍은<br>가장 가까운 사진이 여기에 표시됩니다.</div>
-    <img id="photo" alt="">
+    <img id="photo" alt="" title="우클릭: 자세히 보기">
     <div id="pname"></div>
+  </div>
+</div>
+<!-- 우클릭 컨텍스트 메뉴 (바탕화면 우클릭처럼) -->
+<div id="ctx"><div class="ctxitem" id="ctxDetail">자세히 보기</div></div>
+<!-- 이미지 자세히 보기 — 메인 창 '안'의 모달. 휠: 커서 위치 확대 · 드래그: 이동 · Esc/✕: 닫기 -->
+<div id="imgmodal">
+  <div id="imBar"><span id="imTitle"></span><button id="imClose" title="닫기 (Esc)">✕</button></div>
+  <div id="imView">
+    <div id="imStage">
+      <img id="imImg" alt="">
+      <div id="imMark"></div>
+    </div>
   </div>
 </div>
 <script type="importmap">

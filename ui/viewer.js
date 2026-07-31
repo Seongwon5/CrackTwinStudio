@@ -114,12 +114,15 @@ function nearestCamera(p, n) {
   }
   return any;
 }
-function showPhoto(cam) {
+let lastPick = null;                              // {cam, uv} — 자세히 보기 모달의 표식에 쓴다
+function showPhoto(cam, p) {
   const img = document.getElementById('photo');
   document.getElementById('hint').style.display = 'none';
   img.style.display = 'block';
   img.src = api('img', `&id=${cam.id}&kind=full`);
   document.getElementById('pname').textContent = cam.source;
+  // 클릭한 3D 점이 이 사진의 어디인지(정규화 uv). 완화 폴백으로 화면 밖일 수 있다 → null 허용
+  lastPick = { cam, uv: p ? projectToCam(cam, p) : null };
 }
 
 // 화면 좌표(clientX/Y) 하나를 받아: 레이캐스트 → 표식 → 가장 가까운 사진 표시.
@@ -138,7 +141,7 @@ function pickAt(clientX, clientY) {
     .applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
   marker.position.copy(p); marker.visible = true;
   const cam2 = nearestCamera(p, n);
-  if (cam2) showPhoto(cam2);
+  if (cam2) showPhoto(cam2, p);
   return true;
 }
 // 짧은 탭만 클릭으로 인정 — 드래그(회전)와 구분한다
@@ -203,6 +206,85 @@ const GZ = (function () {
   }
   return { update };
 })();
+
+// ---- 우클릭 컨텍스트 메뉴 → 이미지 자세히 보기 모달 ----
+const ctx = document.getElementById('ctx');
+document.getElementById('photo').addEventListener('contextmenu', e => {
+  e.preventDefault();
+  if (!lastPick) return;
+  ctx.style.display = 'block';
+  // 화면 밖으로 밀리지 않게 클램프
+  ctx.style.left = Math.min(e.clientX, innerWidth - ctx.offsetWidth - 8) + 'px';
+  ctx.style.top = Math.min(e.clientY, innerHeight - ctx.offsetHeight - 8) + 'px';
+});
+addEventListener('pointerdown', e => { if (!ctx.contains(e.target)) ctx.style.display = 'none'; });
+document.getElementById('ctxDetail').addEventListener('click', () => {
+  ctx.style.display = 'none';
+  openImageModal();
+});
+
+// 모달 상태: mv = 스테이지 변환(배율·평행이동). fitScale = 전체가 보이는 배율(페이드 기준).
+const modal = document.getElementById('imgmodal');
+const imView = document.getElementById('imView');
+const imStage = document.getElementById('imStage');
+const imImg = document.getElementById('imImg');
+const imMark = document.getElementById('imMark');
+let mv = { scale: 1, tx: 0, ty: 0 }, fitScale = 1;
+
+function applyStage() {
+  imStage.style.transform = `translate(${mv.tx}px,${mv.ty}px) scale(${mv.scale})`;
+  // 확대할수록 붉은 원을 투명하게 — fit 의 3배 배율에서 완전히 사라진다.
+  // (원은 위치 안내용이라, 확대해서 실제 표면을 볼 때는 방해가 되지 않아야 한다)
+  const z = mv.scale / fitScale;
+  imMark.style.opacity = Math.max(0, Math.min(1, 1 - (z - 1) / 2));
+}
+function openImageModal() {
+  const { cam, uv } = lastPick;
+  document.getElementById('imTitle').textContent = cam.source;
+  imImg.onload = () => {
+    const W2 = imView.clientWidth, H2 = imView.clientHeight;
+    fitScale = Math.min(W2 / imImg.naturalWidth, H2 / imImg.naturalHeight) * 0.98;
+    mv = { scale: fitScale,
+           tx: (W2 - imImg.naturalWidth * fitScale) / 2,
+           ty: (H2 - imImg.naturalHeight * fitScale) / 2 };
+    if (uv) {                                     // 클릭 지점 = 반투명 붉은 원(이미지 픽셀 공간)
+      const d = Math.max(36, imImg.naturalWidth * 0.05);
+      imMark.style.width = imMark.style.height = d + 'px';
+      imMark.style.left = (uv.u * imImg.naturalWidth) + 'px';
+      imMark.style.top = (uv.v * imImg.naturalHeight) + 'px';
+      imMark.style.display = 'block';
+    } else imMark.style.display = 'none';
+    applyStage();
+  };
+  imImg.src = api('img', `&id=${cam.id}&kind=full`);
+  modal.style.display = 'flex';
+}
+function closeModal() { modal.style.display = 'none'; imImg.removeAttribute('src'); }
+document.getElementById('imClose').addEventListener('click', closeModal);
+addEventListener('keydown', e => { if (e.key === 'Escape' && modal.style.display === 'flex') closeModal(); });
+// 휠: 커서 위치를 고정점으로 확대/축소 — 그 점 아래 픽셀이 제자리에 남는다
+imView.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = imView.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const ns = Math.max(fitScale * 0.5, Math.min(fitScale * 40, mv.scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  mv.tx = mx - (mx - mv.tx) * (ns / mv.scale);
+  mv.ty = my - (my - mv.ty) * (ns / mv.scale);
+  mv.scale = ns; applyStage();
+}, { passive: false });
+// 드래그: 이동
+let _mdrag = null;
+imView.addEventListener('pointerdown', e => {
+  _mdrag = { x: e.clientX, y: e.clientY, tx: mv.tx, ty: mv.ty };
+  imView.classList.add('drag'); imView.setPointerCapture(e.pointerId);
+});
+imView.addEventListener('pointermove', e => {
+  if (!_mdrag) return;
+  mv.tx = _mdrag.tx + e.clientX - _mdrag.x;
+  mv.ty = _mdrag.ty + e.clientY - _mdrag.y;
+  applyStage();
+});
+imView.addEventListener('pointerup', () => { _mdrag = null; imView.classList.remove('drag'); });
 
 addEventListener('resize', () => {
   camera.aspect = W() / H(); camera.updateProjectionMatrix();
