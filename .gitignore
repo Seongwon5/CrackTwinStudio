@@ -18,6 +18,7 @@ reports/*.twin
 build/
 dist/
 *.spec
+*.lnk
 
 # 사용자 입력물 (이미지·XMP·PLY)
 *.xmp

@@ -73,9 +73,47 @@ def _icon_path():
     return p if os.path.exists(p) else None
 
 
+def _msgbox(text, title=APP_TITLE, style=0x10):
+    """콘솔이 없는 exe 에서도 보이는 안내창(기본: 오류 아이콘)."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, title, style)
+    except Exception:
+        print(text)
+
+
+def _has_webview2():
+    """Edge WebView2 런타임 설치 여부.
+
+    Windows 11 과 최근 Windows 10 에는 기본 탑재지만 LTSC·Server·정리된 이미지에는
+    없을 수 있다. 없으면 창이 비거나 3D 가 전혀 그려지지 않아 원인을 찾기 어렵다.
+    EdgeUpdate 가 기록하는 버전 값(pv)으로 판별한다.
+    """
+    import winreg
+    guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    targets = [(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients" "\\" + guid),
+               (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients" "\\" + guid),
+               (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\EdgeUpdate\Clients" "\\" + guid)]
+    for root, path in targets:
+        try:
+            with winreg.OpenKey(root, path) as k:
+                pv = winreg.QueryValueEx(k, "pv")[0]
+            if pv and pv != "0.0.0.0":
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def main():
     """로컬 백엔드를 띄우고 대시보드 창을 연다."""
     global _main
+    if os.name == "nt" and not _has_webview2():
+        _msgbox("이 프로그램은 Microsoft Edge WebView2 런타임이 필요합니다.\n\n"
+                "아래 주소에서 'Evergreen Standalone Installer'(x64)를 내려받아\n"
+                "설치한 뒤 다시 실행해 주세요.\n\n"
+                "https://developer.microsoft.com/microsoft-edge/webview2/")
+        return
     httpd = B.make_server(0)                  # 포트 0 → OS가 빈 포트를 준다
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -88,4 +126,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 콘솔 없는 exe 는 예외가 나도 아무 것도 보이지 않는다 → 항상 창으로 알린다.
+    try:
+        main()
+    except Exception:
+        import traceback
+        _msgbox("실행 중 오류가 발생했습니다.\n\n" + traceback.format_exc()[-1500:])
+        raise

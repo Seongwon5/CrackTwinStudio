@@ -49,12 +49,25 @@ def report_meta(path):
         return z.read("meta.json").decode("utf-8")
 
 
+# PowerShell 은 PATH 에 없을 수도 있으므로(경로가 지워진 PC·제한 환경) 절대 경로를 먼저 쓴다.
+_PS_EXE = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                       "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+if not os.path.exists(_PS_EXE):
+    _PS_EXE = "powershell"
+# 콘솔 없는 exe(--windowed)에서 subprocess 를 그냥 띄우면 검은 창이 번쩍인다.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _ps_args(*rest):
+    """다이얼로그용 PowerShell 공통 인자."""
+    return [_PS_EXE, "-STA", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", *rest]
+
+
 def _ps_dialog(script):
     """PowerShell(-STA)로 Windows 네이티브 파일/폴더 다이얼로그를 띄우고 선택 경로 반환."""
     try:
-        r = subprocess.run(["powershell", "-STA", "-NoProfile", "-NonInteractive",
-                            "-WindowStyle", "Hidden", "-Command", script],
-                           capture_output=True, text=True, timeout=300)
+        r = subprocess.run(_ps_args("-Command", script), capture_output=True, text=True,
+                           timeout=300, creationflags=_NO_WINDOW)
         return (r.stdout or "").strip() or None
     except Exception:
         return None
@@ -126,9 +139,8 @@ def pick_folder():
     try:
         with open(ps, "w", encoding="utf-8-sig") as f:      # BOM: PowerShell 이 한글 리터럴을 정확히 읽게
             f.write(_FOLDER_PS.replace("__OUT__", out.replace("'", "''")))
-        subprocess.run(["powershell", "-STA", "-NoProfile", "-NonInteractive",
-                        "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps],
-                       capture_output=True, timeout=300)
+        subprocess.run(_ps_args("-ExecutionPolicy", "Bypass", "-File", ps),
+                       capture_output=True, timeout=300, creationflags=_NO_WINDOW)
         with open(out, "r", encoding="utf-8-sig") as f:   # .NET UTF8 은 BOM 을 붙인다 → sig 로 제거
             return f.read().strip() or None
     except Exception:

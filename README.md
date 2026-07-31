@@ -53,6 +53,22 @@ py build.py
 `dist/원전 디지털 트윈 스튜디오.exe` 가 만들어집니다. `ui`·`libs`·아이콘은 exe 안에
 들어가고, `reports/` 는 exe 가 놓인 폴더에 생성됩니다.
 
+## 배포 — 받는 PC 에 필요한 것
+
+exe 하나만 복사하면 됩니다. **Python 도, 어떤 패키지도 설치할 필요가 없습니다.**
+파이썬 런타임·VC 런타임·NumPy·OpenCV·three.js 가 모두 exe 안에 들어 있고, 실행할 때만
+`%TEMP%` 에 잠시 풀렸다가 종료 시 지워집니다.
+
+유일한 외부 요구사항은 **Microsoft Edge WebView2 런타임**(화면을 그리는 엔진)입니다.
+Windows 11 과 최근 Windows 10 에는 기본으로 들어 있습니다. 없는 PC 에서는 실행 시
+안내창이 뜨며, [WebView2 페이지](https://developer.microsoft.com/microsoft-edge/webview2/)에서
+*Evergreen Standalone Installer (x64)* 를 설치하면 됩니다.
+
+- 관리자 권한 불필요 · 64비트 Windows 10 이상
+- 서명하지 않은 exe 라 처음 실행 시 SmartScreen 이 뜰 수 있습니다
+  (`추가 정보 ▸ 실행`). 경고창에는 exe 에 새긴 앱 이름이 표시됩니다.
+- 백신이 `%TEMP%` 실행을 막는 환경이면 exe 를 예외로 등록해야 할 수 있습니다.
+
 ## 구성
 
 ```
