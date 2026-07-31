@@ -1,4 +1,4 @@
-// dashboard.js — viewer-simple: 보고서 만들기/열기 둘뿐이다.
+// dashboard.js — 보고서 만들기 / 열기
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
@@ -77,7 +77,7 @@
   };
   $("btnRefresh").onclick = loadReports;
 
-  // 종료: 확인 대화상자는 app.py 의 closing 핸들러가 띄운다(X 버튼과 같은 경로 → 한 번만 뜸).
+  // 종료: 확인 대화상자는 main.py 의 closing 핸들러가 띄운다(X 버튼과 같은 경로 → 한 번만 뜸).
   $("btnQuit").onclick = () => {
     const a = (window.pywebview && window.pywebview.api) || null;
     if (a && a.quit_app) a.quit_app();
@@ -104,6 +104,30 @@
       });
     } catch (e) { list.innerHTML = '<div class="empty">목록 로드 실패: ' + e + '</div>'; }
   }
+
+  // ===== 도움말(?) — 카드 제목의 ? 버튼이 <template> 내용을 모달로 띄운다 =====
+  // 설명은 HTML 쪽 <template id="help-*"> 에 두어, 문구 수정 시 JS 를 건드릴 필요가 없다.
+  const helpTitles = { create: "보고서 만들기 — 사용 설명", open: "보고서 열기 — 사용 설명" };
+  function openHelp(key) {
+    const tpl = document.getElementById("help-" + key);
+    if (!tpl) return;
+    $("helpTitle").textContent = helpTitles[key] || "사용 설명";
+    const body = $("helpBody");
+    body.innerHTML = "";
+    body.appendChild(tpl.content.cloneNode(true));
+    body.scrollTop = 0;
+    $("helpModal").style.display = "flex";
+  }
+  function closeHelp() { $("helpModal").style.display = "none"; }
+  document.querySelectorAll(".help").forEach((b) => {
+    b.onclick = () => openHelp(b.dataset.help);
+  });
+  $("helpClose").onclick = closeHelp;
+  // 바깥(어두운 배경) 클릭 · Esc 로 닫기
+  $("helpModal").onclick = (e) => { if (e.target === $("helpModal")) closeHelp(); };
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && $("helpModal").style.display === "flex") closeHelp();
+  });
 
   loadReports();
 })();

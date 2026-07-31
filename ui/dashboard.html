@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>크랙 디지털 트윈 스튜디오</title>
+<title>원전 디지털 트윈 스튜디오</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<!-- SVG 아이콘 스프라이트(뷰어와 동일 스타일: 라인 아이콘) -->
+<!-- 아이콘 스프라이트 -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-cube" viewBox="0 0 24 24"><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></symbol>
@@ -16,14 +16,11 @@
   <symbol id="i-power" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8V4z"/></symbol>
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
-  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
-  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
-  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
 </svg>
 
 <header>
-  <span class="brand"><svg class="ic"><use href="#i-cube"/></svg>크랙 디지털 트윈 스튜디오</span>
-  <span class="sub">원본 소스 + 3D 모델 → 보고서(.twin) · 여러 보고서를 각각의 창으로</span>
+  <span class="brand"><svg class="ic"><use href="#i-cube"/></svg>원전 디지털 트윈 스튜디오</span>
+  <span class="sub">사진 + 3D 모델 → 보고서(.twin) · 여러 보고서를 각각의 창으로</span>
   <button id="btnQuit" class="danger" title="프로그램을 종료합니다 (확인 후 종료)">
     <svg class="ic"><use href="#i-power"/></svg>종료</button>
 </header>
@@ -31,8 +28,9 @@
 <main>
   <!-- 기능 1: 보고서 만들기 -->
   <section class="card">
-    <h2><span class="step">1</span>보고서 만들기</h2>
-    <p class="desc">이미지+XMP 폴더와 3D 메시(PLY)를 <b>AI 없이 그대로</b> 묶어 자체완결형 보고서를 생성합니다.</p>
+    <h2><span class="step">1</span>보고서 만들기
+      <button class="help" data-help="create" title="도움말 — Zephyr 내보내기와 파일 선택 방법">?</button></h2>
+    <p class="desc">이미지+XMP 폴더와 3D 메시(PLY)를 하나의 보고서 파일로 묶습니다.</p>
     <div class="row">
       <button id="btnFolder"><svg class="ic"><use href="#i-folder"/></svg>이미지+XMP 폴더</button>
       <span id="folderLbl" class="lbl">선택 안 됨</span>
@@ -54,7 +52,8 @@
 
   <!-- 기능 2: 보고서 열기 -->
   <section class="card">
-    <h2><span class="step">2</span>보고서 열기 <span class="hint">각각 새 창 · 동시에 여러 개</span></h2>
+    <h2><span class="step">2</span>보고서 열기 <span class="hint">각각 새 창 · 동시에 여러 개</span>
+      <button class="help" data-help="open" title="도움말 — 뷰어 사용법">?</button></h2>
     <p class="desc">저장된 <b>.twin</b> 보고서를 3D 뷰어로 엽니다. 파일에서 직접 열거나 아래 목록에서 선택하세요.</p>
     <div class="row">
       <button id="btnOpenFile" class="primary"><svg class="ic"><use href="#i-open"/></svg>보고서 파일(.twin) 열기</button>
@@ -63,8 +62,72 @@
     <div id="reportList" class="rlist"></div>
   </section>
 
-  <!-- viewer-simple: 비교·PDF·재학습 카드는 존재하지 않는다 — 만들기/열기 둘뿐. -->
 </main>
+
+<!-- 도움말 모달 — ? 버튼이 data-help 로 어느 내용을 띄울지 고른다 -->
+<div id="helpModal">
+  <div id="helpBox">
+    <div id="helpBar"><span id="helpTitle"></span><button id="helpClose" title="닫기 (Esc)">✕</button></div>
+    <div id="helpBody"></div>
+  </div>
+</div>
+
+<template id="help-create">
+  <h3>준비물</h3>
+  <p>같은 3DF Zephyr 프로젝트에서 내보낸 <b>사진 · XMP · PLY</b> 세 가지가 필요합니다.</p>
+
+  <h4>1. XMP 내보내기</h4>
+  <p><code>Export ▸ Export Cameras</code> — 사진 1장당 XMP 1개.
+     각 XMP 에 <code>calibration</code>(fx·fy·cx·cy·w·h·k1…)과
+     <code>extrinsics</code>(rotation·translation)가 있어야 합니다.</p>
+
+  <h4>2. 사진과 XMP 를 한 폴더에</h4>
+  <pre>촬영폴더/
+├── DSC0001.JPG
+├── DSC0001.JPG.xmp   (또는 DSC0001.xmp)
+└── ...</pre>
+  <p class="note">Zephyr 에 넣은 원본 사진을 그대로 쓰세요. 크기 변경·크롭 시 좌표가 어긋납니다.</p>
+
+  <h4>3. PLY 내보내기</h4>
+  <p><code>Export ▸ Export Mesh</code> → <b>PLY</b>, 정점 색(vertex color) 포함.
+     포인트 클라우드가 아닌 삼각형 메시여야 합니다.</p>
+  <p class="note">모델이 크면 <code>Decimate</code> 로 면 수를 줄인 사본을 쓰면 가볍습니다.</p>
+
+  <h4>4. 선택</h4>
+  <ul>
+    <li><b>이미지+XMP 폴더</b> — 2번 폴더(파일 아님)</li>
+    <li><b>PLY 메시</b> — 3번 파일</li>
+    <li><b>보고서 이름</b> — 비우면 폴더명 사용</li>
+  </ul>
+
+  <div class="warn">
+    사진·XMP 와 PLY 가 <b>서로 다른 작업본</b>이면 클릭 지점이 사진과 맞지 않습니다.
+    같은 프로젝트에서 함께 내보낸 세트를 쓰세요.
+  </div>
+
+  <p>생성된 <code>.twin</code> 은 사진·메시·카메라 정보를 담은 단일 파일이며, 다른 PC 에서도 그대로 열립니다.</p>
+</template>
+
+<template id="help-open">
+  <h3>조작</h3>
+  <ul>
+    <li><b>좌드래그</b> — 회전 · <b>휠</b> — 확대/축소 · <b>우드래그</b> — 이동</li>
+    <li><b>XYZ 기즈모</b>(우측 아래) — 축 클릭 시 그 방향에서 보기</li>
+  </ul>
+
+  <h4>사진 보기</h4>
+  <ul>
+    <li><b>모델 표면 클릭</b> — 그 지점이 가장 잘 나온 사진이 우측에 표시</li>
+    <li>사진 위 <b>붉은 원</b> — 클릭한 지점</li>
+    <li>아래 <b>썸네일</b> — 같은 지점의 다른 사진, 클릭 시 교체</li>
+    <li>사진 <b>우클릭 ▸ 자세히 보기</b> — 확대 창(휠로 커서 위치 확대)</li>
+  </ul>
+  <p class="note">정면·근접 촬영본이 우선 선택됩니다. 다른 각도가 필요하면 썸네일에서 고르세요.</p>
+
+  <div class="warn">
+    클릭 지점이 사진과 어긋나면, 사진·XMP 와 PLY 가 다른 작업본일 가능성이 높습니다.
+  </div>
+</template>
 
 <script src="/dashboard.js"></script>
 </body>

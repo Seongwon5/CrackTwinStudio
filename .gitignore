@@ -14,8 +14,10 @@ env/
 reports/*.twin
 *.twin
 
-# 추론(확률맵) 캐시 — 파생 데이터
-cache/
+# 빌드 산출물
+build/
+dist/
+*.spec
 
 # 사용자 입력물 (이미지·XMP·PLY)
 *.xmp

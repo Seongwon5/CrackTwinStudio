@@ -1,21 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-backend.py  ―  로컬 백엔드 (viewer-simple: 대시보드/뷰어 제공 + 보고서 생성/열람 API)
-================================================================================
-브라우저(pywebview 창)가 접속하는 localhost 서버. AI 없이 원본 소스+포즈+메시만 담는
-.twin 생성 잡, 보고서 목록, 그리고 .twin 조각(메타/메시/이미지) 스트리밍 — 그게 전부다.
+backend.py — 로컬 백엔드
 
-보고서를 HTML 에 인라인하지 않는 이유(중요):
-  예전에는 .twin 전체를 viewer.html 의 `const DATA = __DATA__;` 자리에 끼워넣었다. 이 방식은
-  파일이 커지면 반드시 터진다 —
-    · V8 최대 문자열 = 536,870,888 자(536.9MB). 넘으면 "Invalid string length" (RAM 과 무관한 하드 한계)
-    · window.atob(거대 base64) 도 같은 한계에 걸림
-    · 파이썬도 read → json.loads → replace → encode 로 파일 크기의 5배 안팎을 씀
-  그래서 큰 덩어리(메시·이미지)는 문자열/JSON 을 거치지 않고 바이너리로 스트리밍한다.
-  ArrayBuffer 는 문자열 한계와 무관해 GB 급도 담긴다(실측 확인).
+pywebview 창이 접속하는 localhost 서버. 대시보드·뷰어 정적 파일, 보고서 생성 잡,
+보고서 목록, .twin 조각(메타·메시·이미지) 스트리밍을 제공한다.
+
+메시·이미지는 HTML에 인라인하지 않고 바이너리로 스트리밍한다. 인라인하면 V8 최대
+문자열(536.9MB)에 걸려 큰 보고서가 열리지 않고, 서버 피크 메모리도 파일 크기에 비례한다.
 """
 import os
 import re
+import sys
 import json
 import uuid
 import shutil
@@ -28,29 +23,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pipeline as P
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-UI_DIR, LIBS_DIR, REPORTS_DIR = os.path.join(HERE, "ui"), os.path.join(HERE, "libs"), os.path.join(HERE, "reports")
+# 소스 실행과 exe 실행에서 기준 경로가 다르다.
+#   자원(ui·libs) : exe 안에 묶여 있으므로 PyInstaller 가 풀어놓은 _MEIPASS
+#   보고서(reports): 실행 때마다 지워지면 안 되므로 exe 가 놓인 폴더
+_FROZEN = getattr(sys, "frozen", False)
+HERE = sys._MEIPASS if _FROZEN else os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(sys.executable) if _FROZEN else HERE
+UI_DIR, LIBS_DIR, REPORTS_DIR = os.path.join(HERE, "ui"), os.path.join(HERE, "libs"), os.path.join(BASE, "reports")
 _jobs = {}                       # job_id -> {progress, done, error, result, log[]}
 
-# viewer-simple: 비교·PDF·검토·캘리브레이션 잡은 존재하지 않는다 — 생성 잡 하나뿐.
 
 def twin_version(path):
-    """매직바이트로 형식 검증. 2 = zip 컨테이너(현행 유일 형식).
-    구형식(v1: 단일 JSON)은 더 이상 지원하지 않는다 — 재분석해 새로 생성해야 한다."""
+    """매직바이트로 .twin 형식을 검증한다(zip 컨테이너)."""
     with open(path, "rb") as f:
         head = f.read(4)
     if head[:4] == b"PK\x03\x04":
         return 2
-    if head[:1] == b"{":
-        raise ValueError(
-            "구형식(v1) 보고서는 더 이상 지원하지 않습니다: " + os.path.basename(path) + "\n"
-            "  대시보드에서 원본 이미지·PLY 로 다시 분석해 새로 생성하세요.")
     raise ValueError("알 수 없는 .twin 형식입니다: " + os.path.basename(path))
 
 
 def report_meta(path):
-    """뷰어용 메타(JSON). 이미지·메시 같은 큰 덩어리는 빼고 기하만 담는다."""
-    twin_version(path)                           # 형식 검증(구형식이면 여기서 예외)
+    """뷰어용 메타(JSON) — 카메라 자세만 담고 이미지·메시는 별도 스트리밍."""
+    twin_version(path)
     with zipfile.ZipFile(path) as z:
         return z.read("meta.json").decode("utf-8")
 
@@ -158,20 +152,17 @@ def pick_file(kind):
 
 
 def render_viewer_html(twin_path):
-    """뷰어 HTML 반환. 보고서 '경로'만 주입하고 데이터는 뷰어가 API 로 가져간다.
-    (통째로 끼워넣으면 V8 문자열 한계 536.9MB 에서 터진다 — 모듈 docstring 참조)"""
-    twin_version(twin_path)                      # 형식 검증(이상하면 여기서 예외)
+    """뷰어 HTML을 반환한다. 보고서 경로만 주입하고 데이터는 뷰어가 API로 가져간다."""
+    twin_version(twin_path)
     with open(os.path.join(UI_DIR, "viewer.html"), "r", encoding="utf-8") as f:
         html = f.read()
-    return html.replace("__REPORT__", json.dumps(twin_path))   # JS 문자열 리터럴로 안전하게
+    return html.replace("__REPORT__", json.dumps(twin_path))   # JS 문자열 리터럴로 이스케이프
 
 
 def _run_job(job_id, folder, ply, out_path):
-    """백그라운드에서 보고서(원본 소스+포즈+메시) 생성 — 진행률/로그/결과 갱신."""
+    """백그라운드에서 보고서를 생성하고 진행률·로그·결과를 갱신한다."""
     j = _jobs[job_id]
-    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다.
-    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
-    # 진행률 갱신(0.0~1.0). 파이프라인이 이미지 c/t 를 넘겨준다.
+    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]   # 최근 200줄만
     def prog(c, t): j["progress"] = (c / t) if t else 0.0
     try:
         j["result"] = P.build_report(folder, ply, out_path, log, prog); j["progress"] = 1.0
@@ -184,19 +175,15 @@ def _run_job(job_id, folder, ply, out_path):
 class Handler(BaseHTTPRequestHandler):
     """대시보드·뷰어의 모든 HTTP 요청을 처리하는 핸들러.
 
-    크게 세 갈래다:
-      · 정적 자원 — dashboard/viewer 의 HTML·JS·CSS 와 three.js 번들
-      · 보고서 조각 API — .twin 안의 meta/mesh/이미지를 스트리밍(_report_*)
-      · 잡 API — 보고서 생성을 백그라운드로 띄우고 진행률을 폴링
-    응답은 항상 no-store 다(로컬 앱이라 캐시 이득이 없고, 보고서 교체 시 낡은 데이터가 보이면 곤란)."""
+    정적 자원 · 보고서 조각 스트리밍 · 생성 잡 세 갈래를 처리한다.
+    응답은 항상 no-store — 보고서를 다시 만들었을 때 낡은 데이터가 보이면 안 된다.
+    """
 
     def log_message(self, *a):
-        """기본 액세스 로그를 끈다 — 분석 로그가 콘솔에서 묻히지 않게."""
-        pass
+        pass                                     # 기본 액세스 로그를 끈다
 
     def _send(self, code, body, ctype="application/octet-stream"):
-        """본문을 메모리에 다 올린 채 한 번에 응답한다(작은 응답 전용).
-        큰 덩어리는 반드시 _stream() 을 쓸 것."""
+        """작은 응답 전용. 큰 덩어리는 _stream()을 쓸 것."""
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code); self.send_header("Content-Type", ctype)
@@ -204,18 +191,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(body)
 
     def _json(self, obj, code=200):
-        """dict/list 를 UTF-8 JSON 으로 응답한다(한글을 이스케이프하지 않는다)."""
         self._send(code, json.dumps(obj, ensure_ascii=False), "application/json; charset=utf-8")
 
     def _file(self, path, ctype):
-        """디스크의 파일 하나를 그대로 응답한다(정적 자원용). 없으면 404."""
+        """정적 파일 하나를 그대로 응답한다."""
         if not os.path.exists(path):
             return self._send(404, "not found", "text/plain")
         with open(path, "rb") as f:
             self._send(200, f.read(), ctype)
 
     def _stream(self, src, size, ctype):
-        """파일류 객체를 1MB 씩 흘려보낸다. 피크 메모리가 콘텐츠 크기와 무관해진다."""
+        """1MB씩 흘려보낸다 — 피크 메모리가 콘텐츠 크기와 무관해진다."""
         self.send_response(200); self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(size)); self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -228,22 +214,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, "보고서 파일 없음: " + p, "text/plain; charset=utf-8"); return None
         return p
 
-    # ---- 보고서 조각 API ----
     def _report_mesh(self, path):
-        """메시를 '바이너리'로 내려준다. base64/JSON 을 거치지 않으므로 문자열 한계와 무관."""
-        twin_version(path)                                       # 형식 검증
-        with zipfile.ZipFile(path) as z:                         # 스트리밍: 피크 메모리 ≈ 청크
+        """메시를 바이너리로 스트리밍한다."""
+        twin_version(path)
+        with zipfile.ZipFile(path) as z:
             info = z.getinfo("mesh.ply")
             with z.open("mesh.ply") as src:
                 return self._stream(src, info.file_size, "application/octet-stream")
 
     def _report_img(self, path, cid, kind):
-        """카메라 id 의 이미지 한 장을 스트리밍한다. kind=thumb(축소) · full(원본 ≤1920px).
-        뷰어가 필요한 것만 요청하므로 1,000장짜리 보고서도 메모리에 다 올리지 않는다."""
+        """카메라 id의 사진 한 장을 스트리밍한다. kind=thumb(축소) · full(≤1920px)."""
         if kind not in ("thumb", "full"):
             return self._send(400, "kind 는 thumb|full", "text/plain; charset=utf-8")
         mime = "image/jpeg"
-        twin_version(path)                                        # 형식 검증
+        twin_version(path)
         name = f"img/{cid:04d}_{kind}.jpg"
         with zipfile.ZipFile(path) as z:
             try:
@@ -254,8 +238,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._stream(src, info.file_size, mime)
 
     def do_GET(self):
-        """GET 라우팅. 정적 자원 → 뷰어 HTML → 보고서 조각 API → 목록·잡 조회 순으로 매칭한다.
-        어떤 예외든 500 으로 감싸 응답한다(핸들러가 죽으면 창이 통째로 멈추기 때문)."""
+        """정적 자원 → 뷰어 HTML → 보고서 조각 → 목록·잡 조회 순으로 매칭한다.
+
+        예외는 500으로 감싼다 — 핸들러가 죽으면 창이 통째로 멈춘다.
+        """
         u = urllib.parse.urlparse(self.path); r = u.path; q = urllib.parse.parse_qs(u.query)
         try:
             if r in ("/", "/index.html", "/dashboard.html"):
@@ -309,9 +295,7 @@ class Handler(BaseHTTPRequestHandler):
             import traceback; traceback.print_exc(); self._send(500, "error: " + str(e), "text/plain; charset=utf-8")
 
     def do_POST(self):
-        """POST 라우팅. 상태를 바꾸는 요청은 보고서 생성 하나뿐이다.
-
-          /api/create   보고서 생성 잡 → job_id 즉시 응답, 진행률은 GET /api/job 폴링"""
+        """/api/create — 생성 잡을 띄우고 job_id를 즉시 반환한다(진행률은 GET /api/job)."""
         rp = urllib.parse.urlparse(self.path).path
         if rp != "/api/create":
             return self._send(404, "not found", "text/plain")
