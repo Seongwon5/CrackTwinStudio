@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-backend.py  ―  로컬 백엔드 (대시보드/뷰어/three.js 제공 + 보고서 생성/열람 API)
+backend.py  ―  로컬 백엔드 (viewer-simple: 대시보드/뷰어 제공 + 보고서 생성/열람 API)
 ================================================================================
-브라우저(pywebview 창)가 접속하는 localhost 서버. 원본 이미지 분석(크랙 검출) 작업,
-.twin 보고서 목록, 그리고 .twin 을 조각내어(메타/메시/이미지) 스트리밍 제공한다.
+브라우저(pywebview 창)가 접속하는 localhost 서버. AI 없이 원본 소스+포즈+메시만 담는
+.twin 생성 잡, 보고서 목록, 그리고 .twin 조각(메타/메시/이미지) 스트리밍 — 그게 전부다.
 
 보고서를 HTML 에 인라인하지 않는 이유(중요):
   예전에는 .twin 전체를 viewer.html 의 `const DATA = __DATA__;` 자리에 끼워넣었다. 이 방식은
@@ -32,28 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 UI_DIR, LIBS_DIR, REPORTS_DIR = os.path.join(HERE, "ui"), os.path.join(HERE, "libs"), os.path.join(HERE, "reports")
 _jobs = {}                       # job_id -> {progress, done, error, result, log[]}
 
-import sys as _sys
-_sys.path.insert(0, os.path.join(HERE, "tools"))
-import compare_twins as CT2      # 검사 간 비교(정합·매칭·판정) — 대시보드 '검사 비교' 가 사용
-
-
-# (제거됨) 유형 분류기 재학습 잡 — 유형 분류 폐지와 함께 삭제. 검토 사이드카의
-# 확인/오탐 라벨은 계속 쌓이며, 검출(세그멘테이션) 모델 재학습의 학습 데이터가 된다.
-
-
-def _run_export_job(job_id, twin, out_pdf, rows, photos):
-    """백그라운드 PDF 보고서 생성(표지·요약/위치도/대장/사진 대지)."""
-    j = _jobs[job_id]
-    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
-    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
-    try:
-        import export_report as ER
-        ER.build_pdf(twin, out_pdf, log=log, max_rows=rows, top_photos=photos)
-        j["result"] = out_pdf; j["progress"] = 1.0
-    except Exception as e:
-        import traceback; traceback.print_exc(); j["error"] = str(e)
-    finally:
-        j["done"] = True
+# viewer-simple: 비교·PDF·검토·캘리브레이션 잡은 존재하지 않는다 — 생성 잡 하나뿐.
 
 def twin_version(path):
     """매직바이트로 형식 검증. 2 = zip 컨테이너(현행 유일 형식).
@@ -178,49 +157,24 @@ def pick_file(kind):
         "if($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Out.Write($d.FileName)};$f.Dispose()")
 
 
-def render_viewer_html(twin_path, asset=None):
+def render_viewer_html(twin_path):
     """뷰어 HTML 반환. 보고서 '경로'만 주입하고 데이터는 뷰어가 API 로 가져간다.
-    (예전처럼 .twin 을 통째로 끼워넣으면 V8 문자열 한계 536.9MB 에서 터진다 — 모듈 docstring 참조)
-    asset: compare_twins 의 asset.json(dict) — 주면 뷰어가 검사 간 비교 모드로 뜬다."""
+    (통째로 끼워넣으면 V8 문자열 한계 536.9MB 에서 터진다 — 모듈 docstring 참조)"""
     twin_version(twin_path)                      # 형식 검증(이상하면 여기서 예외)
     with open(os.path.join(UI_DIR, "viewer.html"), "r", encoding="utf-8") as f:
         html = f.read()
-    html = html.replace("__REPORT__", json.dumps(twin_path))   # JS 문자열 리터럴로 안전하게 이스케이프
-    return html.replace("__ASSET__", json.dumps(asset, ensure_ascii=False) if asset else "null")
+    return html.replace("__REPORT__", json.dumps(twin_path))   # JS 문자열 리터럴로 안전하게
 
 
-def _run_compare_job(job_id, twin_a, twin_b, ida, idb, out_path, extend_asset=None):
-    """백그라운드에서 검사 간 비교(asset.json 생성/확장)를 수행하고 로그/결과를 갱신한다.
-    extend_asset 이 주어지면 새 자산을 만들지 않고 그 자산에 twin_b 를 N번째 검사로 승계."""
+def _run_job(job_id, folder, ply, out_path):
+    """백그라운드에서 보고서(원본 소스+포즈+메시) 생성 — 진행률/로그/결과 갱신."""
     j = _jobs[job_id]
-    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
-    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
-    try:
-        if extend_asset:
-            asset = CT2.extend(extend_asset, twin_b, idn=idb, log=log)
-            j["result"] = extend_asset
-        else:
-            asset = CT2.run(twin_a, twin_b, out_path, ida=ida, idb=idb, log=log)
-            j["result"] = out_path
-        j["progress"] = 1.0
-        j["stats"] = asset.get("_stats")
-    except CT2.RegistrationError as e:
-        j["error"] = str(e)
-    except Exception as e:
-        import traceback; traceback.print_exc(); j["error"] = str(e)
-    finally:
-        j["done"] = True
-
-
-def _run_job(job_id, folder, ply, out_path, detect):
-    """백그라운드에서 크랙 분석 보고서를 생성하고 진행률/로그/결과를 갱신한다."""
-    j = _jobs[job_id]
-    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
+    # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다.
     def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
     # 진행률 갱신(0.0~1.0). 파이프라인이 이미지 c/t 를 넘겨준다.
     def prog(c, t): j["progress"] = (c / t) if t else 0.0
     try:
-        j["result"] = P.build_report(folder, ply, out_path, log, prog, detect=detect); j["progress"] = 1.0
+        j["result"] = P.build_report(folder, ply, out_path, log, prog); j["progress"] = 1.0
     except Exception as e:
         import traceback; traceback.print_exc(); j["error"] = str(e)
     finally:
@@ -233,7 +187,7 @@ class Handler(BaseHTTPRequestHandler):
     크게 세 갈래다:
       · 정적 자원 — dashboard/viewer 의 HTML·JS·CSS 와 three.js 번들
       · 보고서 조각 API — .twin 안의 meta/mesh/이미지를 스트리밍(_report_*)
-      · 잡 API — 분석·비교·PDF·재학습을 백그라운드로 띄우고 진행률을 폴링
+      · 잡 API — 보고서 생성을 백그라운드로 띄우고 진행률을 폴링
     응답은 항상 no-store 다(로컬 앱이라 캐시 이득이 없고, 보고서 교체 시 낡은 데이터가 보이면 곤란)."""
 
     def log_message(self, *a):
@@ -284,15 +238,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._stream(src, info.file_size, "application/octet-stream")
 
     def _report_img(self, path, cid, kind):
-        """카메라 id 의 이미지 한 장을 스트리밍한다.
-        kind=thumb(목록용 축소) · full(원본 ≤1920px) · mask(검출 마스크, full 과 픽셀 일치).
-        뷰어가 보이는 것만 요청하므로 1,000장짜리 보고서도 메모리에 다 올리지 않는다."""
-        if kind not in ("thumb", "full", "mask"):
-            return self._send(400, "kind 는 thumb|full|mask", "text/plain; charset=utf-8")
-        ext = "png" if kind == "mask" else "jpg"                  # 마스크는 투명 PNG
-        mime = "image/png" if kind == "mask" else "image/jpeg"
+        """카메라 id 의 이미지 한 장을 스트리밍한다. kind=thumb(축소) · full(원본 ≤1920px).
+        뷰어가 필요한 것만 요청하므로 1,000장짜리 보고서도 메모리에 다 올리지 않는다."""
+        if kind not in ("thumb", "full"):
+            return self._send(400, "kind 는 thumb|full", "text/plain; charset=utf-8")
+        mime = "image/jpeg"
         twin_version(path)                                        # 형식 검증
-        name = f"img/{cid:04d}_{kind}.{ext}"
+        name = f"img/{cid:04d}_{kind}.jpg"
         with zipfile.ZipFile(path) as z:
             try:
                 info = z.getinfo(name)
@@ -317,16 +269,6 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(403, "no")
                 return self._file(p, "text/javascript; charset=utf-8" if p.endswith(".js") else "application/octet-stream")
             if r == "/viewer":
-                ap = q.get("asset", [""])[0]
-                if ap:                                    # 자산(검사 간 비교) 모드
-                    if not os.path.exists(ap):
-                        return self._send(404, "자산 파일 없음: " + ap, "text/plain; charset=utf-8")
-                    with open(ap, encoding="utf-8") as f:
-                        asset = json.load(f)
-                    tw = asset["inspections"][-1]["twin"]  # 최신 검사를 본체로, 이전은 고스트
-                    if not os.path.exists(tw):
-                        return self._send(404, "보고서 파일 없음: " + tw, "text/plain; charset=utf-8")
-                    return self._send(200, render_viewer_html(tw, asset=asset), "text/html; charset=utf-8")
                 tw = q.get("report", [""])[0]
                 if not tw or not os.path.exists(tw):
                     return self._send(404, "보고서 파일 없음: " + tw, "text/plain; charset=utf-8")
@@ -356,46 +298,6 @@ class Handler(BaseHTTPRequestHandler):
                             items.append({"name": f, "path": fp, "mb": round(os.path.getsize(fp) / 1e6, 1),
                                           "mtime": os.path.getmtime(fp)})
                 return self._json({"reports": items})
-            if r == "/api/download":
-                # 생성된 PDF 만, reports 폴더 안만 서빙(경로 탈출 방지)
-                p = q.get("path", [""])[0]
-                ap = os.path.abspath(p)
-                if not (ap.startswith(os.path.abspath(REPORTS_DIR)) and ap.lower().endswith(".pdf")
-                        and os.path.exists(ap)):
-                    return self._send(404, "not found", "text/plain")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/pdf")
-                self.send_header("Content-Disposition", 'inline; filename="%s"'
-                                 % os.path.basename(ap).encode("ascii", "ignore").decode() )
-                self.send_header("Content-Length", str(os.path.getsize(ap)))
-                self.end_headers()
-                with open(ap, "rb") as f:
-                    shutil.copyfileobj(f, self.wfile)
-                return
-            if r == "/api/review":
-                # 검토 사이드카(<twin>.review.json) 조회 — .twin(GB급)은 절대 재작성하지 않는다
-                p = self._twin_arg(q)
-                if p is None: return
-                rp2 = p + ".review.json"
-                if os.path.exists(rp2):
-                    return self._file(rp2, "application/json; charset=utf-8")
-                return self._json({"version": 1, "reviews": {}})
-            if r == "/api/assets":
-                items = []
-                if os.path.isdir(REPORTS_DIR):
-                    for f in sorted(os.listdir(REPORTS_DIR)):
-                        if f.lower().endswith(".json") and f.lower().startswith("asset"):
-                            fp = os.path.join(REPORTS_DIR, f)
-                            try:
-                                with open(fp, encoding="utf-8") as fh:
-                                    a = json.load(fh)
-                                ids = [i["id"] for i in a.get("inspections", [])]
-                                items.append({"name": a.get("name") or f, "path": fp,
-                                              "ids": ids, "n": len(a.get("cracks", [])),
-                                              "mtime": os.path.getmtime(fp)})
-                            except Exception:
-                                pass
-                return self._json({"assets": items})
             if r == "/api/job":
                 j = _jobs.get(q.get("id", [""])[0])
                 if not j:
@@ -407,138 +309,10 @@ class Handler(BaseHTTPRequestHandler):
             import traceback; traceback.print_exc(); self._send(500, "error: " + str(e), "text/plain; charset=utf-8")
 
     def do_POST(self):
-        """POST 라우팅. 상태를 바꾸는 요청만 여기로 온다.
+        """POST 라우팅. 상태를 바꾸는 요청은 보고서 생성 하나뿐이다.
 
-          /api/review   검토 저장 ┐ 즉시 처리(사이드카 파일 쓰기 한 번)
-          /api/calib    캘리브레이션 저장 ┘
-          /api/create   보고서 생성 ┐
-          /api/compare  검사 간 비교 ├ 모두 백그라운드 잡 → job_id 만 즉시 응답하고
-          /api/export   PDF 내보내기 ┘ 진행률은 GET /api/job 으로 폴링한다"""
+          /api/create   보고서 생성 잡 → job_id 즉시 응답, 진행률은 GET /api/job 폴링"""
         rp = urllib.parse.urlparse(self.path).path
-        if rp == "/api/calib":
-            # 스케일 캘리브레이션 저장: {p, scale, measured_m, real_mm} — scale 없거나 0/음수면 해제.
-            # 검토와 같은 사이드카(<twin>.review.json)의 "calib" 키에 영속 → 뷰어·PDF 가 같은 값을 본다.
-            # (예전엔 브라우저 localStorage 에만 있어 PDF 와 화면 수치가 달랐다.)
-            try:
-                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
-                p = d.get("p", "")
-                if not p or not os.path.exists(p):
-                    return self._json({"error": "보고서 없음"}, 400)
-                rp2 = p + ".review.json"
-                data = {"version": 1, "reviews": {}}
-                if os.path.exists(rp2):
-                    with open(rp2, encoding="utf-8") as f:
-                        data = json.load(f)
-                sc = d.get("scale")
-                if not sc or float(sc) <= 0:
-                    data.pop("calib", None); ent = None
-                else:
-                    import datetime
-                    ent = {"scale": float(sc),
-                           "measured_m": d.get("measured_m"), "real_mm": d.get("real_mm"),
-                           "at": datetime.datetime.now().isoformat(timespec="seconds")}
-                    data["calib"] = ent
-                tmp = rp2 + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=1)
-                os.replace(tmp, rp2)
-                return self._json({"ok": True, "calib": ent})
-            except Exception as e:
-                import traceback; traceback.print_exc()
-                return self._json({"error": str(e)}, 500)
-        if rp == "/api/review":
-            # 검토 저장: {p, idx, state?, type?, note?} — state="clear" 는 해당 균열 검토 삭제.
-            # 사이드카에 원자적(tmp→replace) 기록. 이 파일이 곧 분류기 재학습 라벨의 축적처다.
-            try:
-                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
-                p = d.get("p", "")
-                if not p or not os.path.exists(p):
-                    return self._json({"error": "보고서 없음"}, 400)
-                idx = str(int(d["idx"]))
-                rp2 = p + ".review.json"
-                data = {"version": 1, "reviews": {}}
-                if os.path.exists(rp2):
-                    with open(rp2, encoding="utf-8") as f:
-                        data = json.load(f)
-                if d.get("state") == "clear":
-                    data["reviews"].pop(idx, None); ent = None
-                else:
-                    import datetime
-                    ent = data["reviews"].get(idx, {})
-                    for k in ("state", "type", "note"):
-                        if k in d:
-                            if d[k] in (None, ""):
-                                ent.pop(k, None)
-                            else:
-                                ent[k] = d[k]
-                    ent["at"] = datetime.datetime.now().isoformat(timespec="seconds")
-                    data["reviews"][idx] = ent
-                tmp = rp2 + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=1)
-                os.replace(tmp, rp2)
-                return self._json({"ok": True, "review": ent})
-            except Exception as e:
-                import traceback; traceback.print_exc()
-                return self._json({"error": str(e)}, 500)
-        if rp == "/api/export":
-            # PDF 보고서 생성 잡: {p, rows?, photos?} → 결과 pdf 는 reports/ 에 저장
-            try:
-                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
-                p = d.get("p", "")
-                if not p or not os.path.exists(p):
-                    return self._json({"error": "보고서 없음"}, 400)
-                base = re.sub(r'[\\/:*?"<>|]+', "_", os.path.splitext(os.path.basename(p))[0])
-                out = os.path.join(REPORTS_DIR, base + "_report.pdf")
-                os.makedirs(REPORTS_DIR, exist_ok=True)
-                jid = uuid.uuid4().hex[:8]
-                _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
-                threading.Thread(target=_run_export_job,
-                                 args=(jid, p, out, int(d.get("rows", 300)), int(d.get("photos", 24))),
-                                 daemon=True).start()
-                return self._json({"job": jid, "out": out})
-            except Exception as e:
-                import traceback; traceback.print_exc()
-                return self._json({"error": str(e)}, 500)
-        if rp == "/api/compare":
-            try:
-                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
-                ta, tb = d.get("a", ""), d.get("b", "")
-                if not (os.path.exists(ta) and os.path.exists(tb)):
-                    return self._json({"error": "보고서 파일 없음"}, 400)
-                if os.path.abspath(ta) == os.path.abspath(tb):
-                    return self._json({"error": "같은 보고서끼리는 비교할 수 없습니다"}, 400)
-                import datetime
-                ida = (d.get("ida") or "").strip() or datetime.datetime.fromtimestamp(os.path.getmtime(ta)).strftime("%Y-%m-%d")
-                idb = (d.get("idb") or "").strip() or datetime.datetime.fromtimestamp(os.path.getmtime(tb)).strftime("%Y-%m-%d")
-                if ida == idb:
-                    idb += "(2)"
-                # 자동 승계: 이전(T1)으로 고른 보고서가 어느 자산의 '최신 검사'면, 새 자산을 만들지
-                # 않고 그 자산에 이번(T2)을 N번째 검사로 이어붙인다(영속 ID 유지 = 시간축 축적).
-                ext_asset = None
-                if os.path.isdir(REPORTS_DIR):
-                    for f in os.listdir(REPORTS_DIR):
-                        if f.lower().endswith(".json") and f.lower().startswith("asset"):
-                            fp = os.path.join(REPORTS_DIR, f)
-                            try:
-                                with open(fp, encoding="utf-8") as fh:
-                                    a0 = json.load(fh)
-                                if os.path.abspath(a0["inspections"][-1]["twin"]) == os.path.abspath(ta):
-                                    ext_asset = fp; break
-                            except Exception:
-                                pass
-                na = os.path.splitext(os.path.basename(ta))[0]; nb = os.path.splitext(os.path.basename(tb))[0]
-                safe = lambda s: re.sub(r'[\\/:*?"<>|]+', "_", s)
-                out = os.path.join(REPORTS_DIR, f"asset_{safe(na)}__{safe(nb)}.json")
-                os.makedirs(REPORTS_DIR, exist_ok=True)
-                jid = uuid.uuid4().hex[:8]
-                _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
-                threading.Thread(target=_run_compare_job,
-                                 args=(jid, ta, tb, ida, idb, out, ext_asset), daemon=True).start()
-                return self._json({"job": jid, "out": ext_asset or out, "mode": "extend" if ext_asset else "new"})
-            except Exception as e:
-                import traceback; traceback.print_exc()
-                return self._json({"error": str(e)}, 500)
         if rp != "/api/create":
             return self._send(404, "not found", "text/plain")
         try:
@@ -554,10 +328,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "PLY 없음"}, 400)
             os.makedirs(REPORTS_DIR, exist_ok=True)
             out = os.path.join(REPORTS_DIR, name + ".twin")
-            detect = bool(d.get("detect", d.get("do_ocr", True)))
             jid = uuid.uuid4().hex[:8]
             _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
-            threading.Thread(target=_run_job, args=(jid, folder, ply, out, detect), daemon=True).start()
+            threading.Thread(target=_run_job, args=(jid, folder, ply, out), daemon=True).start()
             return self._json({"job": jid, "out": out})
         except Exception as e:
             import traceback; traceback.print_exc(); return self._json({"error": str(e)}, 500)

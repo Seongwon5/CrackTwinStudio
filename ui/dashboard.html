@@ -23,7 +23,7 @@
 
 <header>
   <span class="brand"><svg class="ic"><use href="#i-cube"/></svg>크랙 디지털 트윈 스튜디오</span>
-  <span class="sub">이미지 분석 → 보고서(.twin) 생성 · 여러 보고서를 각각의 창으로</span>
+  <span class="sub">원본 소스 + 3D 모델 → 보고서(.twin) · 여러 보고서를 각각의 창으로</span>
   <button id="btnQuit" class="danger" title="프로그램을 종료합니다 (확인 후 종료)">
     <svg class="ic"><use href="#i-power"/></svg>종료</button>
 </header>
@@ -32,7 +32,7 @@
   <!-- 기능 1: 보고서 만들기 -->
   <section class="card">
     <h2><span class="step">1</span>보고서 만들기</h2>
-    <p class="desc">이미지+XMP 폴더와 3D 메시(PLY)를 <b>best.pt로 크랙 검출</b>·3D 역투영해 자체완결형 보고서를 생성합니다.</p>
+    <p class="desc">이미지+XMP 폴더와 3D 메시(PLY)를 <b>AI 없이 그대로</b> 묶어 자체완결형 보고서를 생성합니다.</p>
     <div class="row">
       <button id="btnFolder"><svg class="ic"><use href="#i-folder"/></svg>이미지+XMP 폴더</button>
       <span id="folderLbl" class="lbl">선택 안 됨</span>
@@ -46,9 +46,8 @@
       <input type="text" id="reportName" placeholder="예: 격납건물_1층 (비우면 폴더명 사용)" spellcheck="false">
       <span class="ext">.twin</span>
     </div>
-    <label class="ck"><input type="checkbox" id="ckOcr" checked> 크랙 검출(best.pt) 수행</label>
     <button id="btnCreate" class="primary" disabled>
-      <svg class="ic"><use href="#i-play"/></svg>분석 시작 → 보고서 생성</button>
+      <svg class="ic"><use href="#i-play"/></svg>보고서 생성</button>
     <div id="prog" class="prog hidden"><div id="progBar"></div></div>
     <pre id="log" class="log hidden"></pre>
   </section>
@@ -64,31 +63,7 @@
     <div id="reportList" class="rlist"></div>
   </section>
 
-  <!-- 기능 3: 검사 비교 (디지털 트윈 시간축) -->
-  <section class="card wide">
-    <h2><span class="step">3</span>검사 비교 <span class="hint">같은 구조물의 두 시점 — 신규·성장·미검출 추적</span></h2>
-    <p class="desc">시간 순서대로 <b>이전 검사 → 이번 검사</b>를 고르면 3D 정합 후 같은 균열을 이어 붙여
-      <b>신규·성장·불변·미검출</b>을 판정합니다. 결과는 비교 뷰어(상태색·이전 검사 고스트)로 열립니다.</p>
-    <div class="cmprow">
-      <div class="cmpsel">
-        <label for="cmpA"><svg class="ic"><use href="#i-clock"/></svg>이전 검사 (T1)</label>
-        <select id="cmpA"></select>
-      </div>
-      <svg class="ic cmparrow"><use href="#i-arrow"/></svg>
-      <div class="cmpsel">
-        <label for="cmpB"><svg class="ic"><use href="#i-clock"/></svg>이번 검사 (T2)</label>
-        <select id="cmpB"></select>
-      </div>
-      <button id="btnCompare" class="primary" disabled><svg class="ic"><use href="#i-play"/></svg>비교 실행</button>
-    </div>
-    <div id="cmpNote" class="cmpnote hidden"></div>
-    <div id="cmpProg" class="prog hidden"><div id="cmpProgBar"></div></div>
-    <pre id="cmpLog" class="log hidden"></pre>
-    <div id="assetList" class="rlist"></div>
-  </section>
-
-  <!-- (제거됨) AI 유형 재학습 — 유형 분류 폐지. 검토(확인·오탐)는 뷰어에 그대로 남아 있으며,
-       오탐 라벨은 검출(세그멘테이션) 모델 재학습의 하드 네거티브 데이터로 쓰인다. -->
+  <!-- viewer-simple: 비교·PDF·재학습 카드는 존재하지 않는다 — 만들기/열기 둘뿐. -->
 </main>
 
 <script src="/dashboard.js"></script>
