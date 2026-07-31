@@ -50,14 +50,24 @@ const mesh = new THREE.Mesh(geo, mat);
 scene.add(mesh);
 
 // 시야·컨트롤을 메시 크기에 맞춘다
-geo.computeBoundingSphere();
-const bs = geo.boundingSphere;
+geo.computeBoundingSphere(); geo.computeBoundingBox();
+const bs = geo.boundingSphere, bb = geo.boundingBox;
+camera.up.set(0, 0, 1);                           // 포토그래메트리는 Z-up — up 을 +Z 로 고정(롤 없음)
 camera.position.copy(bs.center).add(new THREE.Vector3(0, -bs.radius * 2.2, bs.radius * 0.7));
 camera.near = bs.radius / 100; camera.far = bs.radius * 100; camera.updateProjectionMatrix();
+// OrbitControls: 좌드래그 = 중심(target) 기준 회전 · 휠 = 줌 · 우드래그 = 이동.
+// up 을 컨트롤 생성 '전에' +Z 로 두면 회전축이 월드 Z 로 유지된다(수평선이 기울지 않음).
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.copy(bs.center);
 controls.enableDamping = true; controls.dampingFactor = 0.08;
 controls.update();                                // 부트 즉시 시선 확정 — rAF 첫 프레임 전에도 레이캐스트가 옳게 동작
+
+// 바닥 그리드 — 모델 최저면(z=min)에 깔아 크기·자세의 기준을 준다
+const d = bb.getSize(new THREE.Vector3()).length();
+const grid = new THREE.GridHelper(d * 1.5, 50, 0x5a6672, 0x333c45);
+grid.rotation.x = Math.PI / 2;                    // GridHelper 는 XZ 평면(Y-up 기준) → Z-up 으로 눕힘
+grid.position.set(bs.center.x, bs.center.y, bb.min.z);
+scene.add(grid);
 
 // 클릭 지점 표식(작은 구) — 어디를 골랐는지만 보여준다
 const marker = new THREE.Mesh(
@@ -142,9 +152,61 @@ renderer.domElement.addEventListener('pointerup', e => {
   pickAt(e.clientX, e.clientY);
 });
 
+// ---- 우하단 XYZ 기즈모: 카메라 자세를 따라 도는 축 표시 + 축 클릭 = 그 방향에서 보기 ----
+const GZ = (function () {
+  const host = document.getElementById('gizmo'), C = 44, R = 30;
+  const AX = [{ v: new THREE.Vector3(1, 0, 0), col: '#ff5a72', lab: 'X' },
+              { v: new THREE.Vector3(0, 1, 0), col: '#5ad46a', lab: 'Y' },
+              { v: new THREE.Vector3(0, 0, 1), col: '#4aa8ff', lab: 'Z' }];
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 88 88'); host.appendChild(svg);
+  const mk = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
+  // 축 방향에서 모델 중심을 보도록 카메라를 옮긴다(거리는 현재 거리 유지).
+  // ±Z 정면은 up(+Z)과 시선이 평행해 특이점 — 살짝 비껴 세운다.
+  function snapView(dir) {
+    const dist = camera.position.distanceTo(controls.target);
+    const p = controls.target.clone().addScaledVector(dir, dist);
+    if (Math.abs(dir.z) > 0.99) p.y -= dist * 0.02;
+    camera.position.copy(p); controls.update();
+  }
+  const nodes = [];
+  for (const ax of AX) for (const s of [1, -1]) {
+    const line = s > 0 ? mk('line', { stroke: ax.col, 'stroke-width': 2, 'stroke-linecap': 'round' }) : null;
+    if (line) svg.appendChild(line);
+    const g = mk('g', { class: 'gzl', cursor: 'pointer' });
+    const circ = mk('circle', { r: 9, fill: s > 0 ? ax.col : '#0e1319', stroke: ax.col, 'stroke-width': 1.5 });
+    const txt = mk('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central',
+      'font-size': 11, 'font-weight': 600, fill: s > 0 ? '#0e1319' : ax.col });
+    txt.textContent = (s < 0 ? '-' : '') + ax.lab;
+    g.appendChild(circ); g.appendChild(txt); svg.appendChild(g);
+    g.addEventListener('click', e => { e.stopPropagation(); snapView(ax.v.clone().multiplyScalar(s)); });
+    nodes.push({ ax, s, line, g });
+  }
+  // 매 프레임: 월드축을 카메라(뷰) 좌표로 투영해 노드 배치. z 순 재정렬로 앞 축이 위에 오게.
+  function update() {
+    const q = camera.quaternion.clone().invert();
+    const proj = nodes.map(n => { const p = n.ax.v.clone().multiplyScalar(n.s).applyQuaternion(q);
+      return { n, x: C + p.x * R, y: C - p.y * R, z: p.z }; });
+    proj.sort((a, b) => a.z - b.z);
+    for (const p of proj) {
+      const n = p.n;
+      if (n.line) {
+        svg.appendChild(n.line);
+        n.line.setAttribute('x1', C); n.line.setAttribute('y1', C);
+        n.line.setAttribute('x2', p.x); n.line.setAttribute('y2', p.y);
+        n.line.setAttribute('opacity', p.z > 0 ? 1 : 0.4);
+      }
+      svg.appendChild(n.g);
+      n.g.setAttribute('transform', `translate(${p.x},${p.y})`);
+      n.g.setAttribute('opacity', p.z > 0 ? 1 : 0.55);
+    }
+  }
+  return { update };
+})();
+
 addEventListener('resize', () => {
   camera.aspect = W() / H(); camera.updateProjectionMatrix();
   renderer.setSize(W(), H());
 });
-(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+(function loop() { requestAnimationFrame(loop); controls.update(); GZ.update(); renderer.render(scene, camera); })();
 window.__dbg = { scene, camera, mesh, controls, nearestCamera, pickAt, DATA };   // 콘솔 진단용(기능 아님)
