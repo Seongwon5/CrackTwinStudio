@@ -116,8 +116,15 @@ function projectToCam(cam, X) {
   const Xc = rx * cam.right[0] + ry * cam.right[1] + rz * cam.right[2];
   const Yc = -(rx * cam.up[0] + ry * cam.up[1] + rz * cam.up[2]);
   const x = Xc / Zc, y = Yc / Zc;
-  const d = (cam.dist || []).concat([0, 0, 0, 0, 0]).slice(0, 5);
   const r2 = x * x + y * y;
+  // FOV 가드 — 화각(진짜 프레임) 밖 점은 버린다. 브라운-콘래디 왜곡식은 화각 밖에서
+  // 단조성이 깨져 '접히므로', 이 검사가 없으면 프레임 밖 점이 (u,v)∈[0,1] 안으로 접혀 들어와
+  // 유효한 척한다. 그런 허상은 점수(근접·정면)가 높아 대표 사진으로 뽑히기 쉽고 — 시야는 트여
+  // 가림 검사도 통과 — 붉은 점이 엉뚱한 곳에 찍힌다(대표만 틀리고 아래 후보는 맞던 원인).
+  const rcx = Math.max(cam.cx, cam.w - cam.cx) / cam.fx;   // 화면 모서리의 이상반경(왜곡 전)
+  const rcy = Math.max(cam.cy, cam.h - cam.cy) / cam.fy;
+  if (r2 > (rcx * rcx + rcy * rcy) * 1.10) return null;    // 여유 (반경 ×1.05)²
+  const d = (cam.dist || []).concat([0, 0, 0, 0, 0]).slice(0, 5);
   const rad = 1 + d[0] * r2 + d[1] * r2 * r2 + d[4] * r2 * r2 * r2;
   const xd = x * rad + 2 * d[2] * x * y + d[3] * (r2 + 2 * x * x);
   const yd = y * rad + d[2] * (r2 + 2 * y * y) + 2 * d[3] * x * y;
