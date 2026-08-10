@@ -71,6 +71,14 @@
     else { window.open("/viewer?report=" + encodeURIComponent(path), "_blank", "width=1360,height=860"); }
   }
 
+  // 탐색기에서 그 파일 위치를 연다(파일 선택 상태). 파일이 없으면 백엔드가 폴더만 연다.
+  async function revealPath(path) {
+    try {
+      const d = await (await fetch("/api/reveal?p=" + encodeURIComponent(path))).json();
+      if (d.error) alert("위치 열기 실패: " + d.error);
+    } catch (e) { alert("위치 열기 실패: " + e); }
+  }
+
   $("btnOpenFile").onclick = async () => {
     const p = await pick("twin");
     if (p) openReport(p);
@@ -101,10 +109,16 @@
         m.textContent = "모바일";
         m.title = "모바일 뷰어 내보내기 — 폰 브라우저에서 바로 열리는 단일 HTML 파일을 만듭니다";
         m.onclick = () => exportMobile(rp.path, m);
+        // 모바일 HTML 이 이미 있으면 그 파일 위치로 바로가기 버튼을 보여준다
+        const loc = document.createElement("button"); loc.className = "ghost";
+        loc.innerHTML = `<svg class="ic"><use href="#i-folder"/></svg>위치`;
+        loc.title = "모바일 HTML 파일이 있는 폴더를 탐색기에서 엽니다";
+        loc.style.display = rp.mobile ? "" : "none";
+        loc.onclick = () => revealPath(rp.mobile_path);
         const b = document.createElement("button"); b.className = "primary";
         b.innerHTML = `<svg class="ic"><use href="#i-open"/></svg>열기`;
         b.onclick = () => openReport(rp.path);
-        el.appendChild(m); el.appendChild(b); list.appendChild(el);
+        el.appendChild(m); el.appendChild(loc); el.appendChild(b); list.appendChild(el);
       });
     } catch (e) { list.innerHTML = '<div class="empty">목록 로드 실패: ' + e + '</div>'; }
   }
@@ -124,8 +138,12 @@
         if (j.done) {
           clearInterval(t); btn.disabled = false; btn.textContent = orig;
           if (j.error) alert("모바일 뷰어 생성 실패: " + j.error);
-          else alert("모바일 뷰어 생성 완료!\n\n" + j.result +
-                     "\n\n이 HTML 파일 하나를 폰으로 보내서(메신저·메일·USB) 브라우저로 열면 됩니다.");
+          else {
+            loadReports();      // 목록 갱신 → 해당 행에 '위치' 버튼이 나타난다
+            if (confirm("모바일 뷰어 생성 완료!\n\n" + j.result +
+                        "\n\n이 HTML 파일 하나를 폰으로 보내서(메신저·메일·USB) 브라우저로 열면 됩니다." +
+                        "\n\n파일 위치를 지금 열까요?")) revealPath(j.result);
+          }
         }
       }, 500);
     } catch (e) { btn.disabled = false; btn.textContent = orig; alert("실패: " + e.message); }

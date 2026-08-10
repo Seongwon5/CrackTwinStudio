@@ -163,6 +163,24 @@ def pick_file(kind):
         "if($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Out.Write($d.FileName)};$f.Dispose()")
 
 
+def reveal_path(path):
+    """탐색기에서 그 파일이 있는 폴더를 열고 파일을 선택 상태로 띄운다.
+
+    보고서 폴더(REPORTS_DIR) 안의 파일만 허용한다. 파일이 없으면(예: 모바일 HTML
+    미생성) 폴더만 연다. explorer 는 성공해도 종료코드 1 을 내므로 반환값은 보지 않는다.
+    """
+    ap = os.path.abspath(path)
+    root = os.path.abspath(REPORTS_DIR)
+    if os.path.commonpath([ap, root]) != root:      # 보고서 폴더 밖은 거부(경로 우회 방지)
+        raise ValueError("허용되지 않은 경로")
+    if os.path.exists(ap):
+        # '/select,<path>' 는 한 토큰이어야 한다 — 공백이 끼면 파일 선택 대신 문서 폴더가 열린다.
+        subprocess.Popen(["explorer", "/select," + ap])
+    else:                                            # 파일이 없으면 폴더만
+        subprocess.Popen(["explorer", os.path.dirname(ap) or root])
+    return ap
+
+
 def render_viewer_html(twin_path):
     """뷰어 HTML을 반환한다. 보고서 경로만 주입하고 데이터는 뷰어가 API로 가져간다."""
     twin_version(twin_path)
@@ -287,14 +305,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"path": pick_folder() or ""})
             if r == "/api/pick_file":
                 return self._json({"path": pick_file(q.get("kind", ["ply"])[0]) or ""})
+            if r == "/api/reveal":                    # 탐색기에서 그 파일 위치 열기(파일 선택 상태)
+                try:
+                    return self._json({"ok": True, "path": reveal_path(q.get("p", [""])[0])})
+                except Exception as e:
+                    return self._json({"error": str(e)}, 400)
             if r == "/api/reports":
                 items = []
                 if os.path.isdir(REPORTS_DIR):
                     for f in sorted(os.listdir(REPORTS_DIR)):
                         if f.lower().endswith(".twin"):
                             fp = os.path.join(REPORTS_DIR, f)
+                            mob = os.path.splitext(fp)[0] + "_mobile.html"
                             items.append({"name": f, "path": fp, "mb": round(os.path.getsize(fp) / 1e6, 1),
-                                          "mtime": os.path.getmtime(fp)})
+                                          "mtime": os.path.getmtime(fp),
+                                          "mobile": os.path.exists(mob), "mobile_path": mob})
                 return self._json({"reports": items})
             if r == "/api/job":
                 j = _jobs.get(q.get("id", [""])[0])
