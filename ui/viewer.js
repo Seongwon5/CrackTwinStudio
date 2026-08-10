@@ -85,13 +85,23 @@ grid.rotation.x = Math.PI / 2;                   // GridHelper는 XZ 평면 기�
 grid.position.set(bs.center.x, bs.center.y, bb.min.z);
 scene.add(grid);
 
-// 클릭 지점 표식
+// 클릭 지점 표식 — 확대·축소와 무관하게 화면상 크기를 일정하게 유지한다.
+// 단위 구(반지름 1)를 매 프레임 거리·화각에 맞춰 스케일해 항상 MARKER_PX 픽셀로 보이게 한다.
+const MARKER_PX = 3;                              // 화면상 반지름(px) 목표
 const marker = new THREE.Mesh(
-  new THREE.SphereGeometry(bs.radius * 0.006, 16, 16),
+  new THREE.SphereGeometry(1, 16, 16),
   new THREE.MeshBasicMaterial({ color: 0xff33cc, depthTest: false }));
 marker.renderOrder = 999;
 marker.visible = false;
 scene.add(marker);
+
+function sizeMarker() {
+  if (!marker.visible) return;
+  const dist = camera.position.distanceTo(marker.position);
+  // 화면 세로 1px 이 marker 거리에서 차지하는 월드 길이 × 목표 픽셀 = 월드 반지름
+  const worldPerPx = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / H();
+  marker.scale.setScalar(Math.max(worldPerPx * MARKER_PX, bs.radius * 1e-5));
+}
 
 _boot.style.display = 'none';
 
@@ -188,6 +198,33 @@ function syncAltSelection(cam) {
     el.classList.toggle('sel', +el.dataset.id === cam.id);
 }
 
+// ---------------------------------------------------------------- 가림 검사
+
+// 카메라에서 클릭 점까지의 시야가 트였는지 — 사이를 다른 면이 막고 있으면 그 사진엔 이 점이 안 보인다.
+// 사진측량 모델은 자기 가림이 많아, 기하학적으로 프레임 안이어도 실제로는 가려진 카메라가 흔하다(댐 실측 ~24%).
+// 이 검사가 없으면 점수 1등 사진이 엉뚱한 표면을 가리켜 붉은 점이 어긋난다. 작은 볼록 모델은 가림이 없어 티가 안 났다.
+const _occRay = new THREE.Raycaster();
+const _camPos = new THREE.Vector3(), _occDir = new THREE.Vector3();
+function cameraSeesPoint(cam, p) {
+  _camPos.set(cam.pos[0], cam.pos[1], cam.pos[2]);
+  _occDir.copy(p).sub(_camPos);
+  const dist = _occDir.length();
+  const tol = Math.max(dist * 0.01, bs.radius * 1.5e-3);   // 점 자신·메시 노이즈를 가림으로 오인하지 않게
+  if (dist <= tol) return true;
+  _occRay.set(_camPos, _occDir.divideScalar(dist));
+  _occRay.near = 0;
+  _occRay.far = dist - tol;                                // 점보다 '앞'을 막는 면만 검사
+  return _occRay.intersectObject(mesh, false).length === 0;
+}
+
+// 점수 순으로 내려가며 실제로 보이는 첫 카메라를 고른다. 전부 가려지면 최고점으로 되돌린다(표시 자체는 유지).
+function pickVisibleCam(cands, p) {
+  const CAP = 16;                                          // 클릭당 레이캐스트 상한 — 지연 방지
+  for (let i = 0; i < cands.length && i < CAP; i++)
+    if (cameraSeesPoint(cands[i].cam, p)) return cands[i].cam;
+  return cands.length ? cands[0].cam : null;
+}
+
 // ---------------------------------------------------------------- 클릭 처리
 
 const ray = new THREE.Raycaster();
@@ -215,7 +252,8 @@ function pickAt(clientX, clientY) {
 
   const cands = cameraCandidates(p, n);
   renderAlts(cands, p);
-  if (cands.length) showPhoto(cands[0].cam, p);
+  const best = pickVisibleCam(cands, p);           // 가림 없이 실제로 보이는 사진 우선
+  if (best) showPhoto(best, p);
   return true;
 }
 
@@ -421,6 +459,7 @@ const _clock = new THREE.Clock();
   _idle += dt;
   controls.update();
   GZ.update();
+  sizeMarker();
   renderer.render(scene, camera);
   adapt(dt);
 })();
