@@ -21,7 +21,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "원전 디지털 트윈 스튜디오"
-VERSION = (1, 0, 0, 0)
+VERSION = (1, 0, 3, 0)
 COMPANY = "PRIMEPANO"
 ICON = os.path.join(HERE, "assets", "icon.ico")
 
