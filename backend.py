@@ -173,11 +173,13 @@ def reveal_path(path):
     root = os.path.abspath(REPORTS_DIR)
     if os.path.commonpath([ap, root]) != root:      # 보고서 폴더 밖은 거부(경로 우회 방지)
         raise ValueError("허용되지 않은 경로")
+    # explorer 는 '/select,' 는 따옴표 밖, 경로만 따옴표로 감싼 형태만 이해한다.
+    # 리스트 인자로 넘기면 경로에 공백이 있을 때 파이썬이 '/select,경로' 를 통째로 따옴표
+    # 처리해 explorer 가 못 읽고 문서 폴더가 열린다 → 명령 문자열을 직접 만든다.
     if os.path.exists(ap):
-        # '/select,<path>' 는 한 토큰이어야 한다 — 공백이 끼면 파일 선택 대신 문서 폴더가 열린다.
-        subprocess.Popen(["explorer", "/select," + ap])
+        subprocess.Popen('explorer /select,"%s"' % ap)
     else:                                            # 파일이 없으면 폴더만
-        subprocess.Popen(["explorer", os.path.dirname(ap) or root])
+        subprocess.Popen('explorer "%s"' % (os.path.dirname(ap) or root))
     return ap
 
 
