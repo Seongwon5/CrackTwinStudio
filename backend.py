@@ -307,8 +307,34 @@ class Handler(BaseHTTPRequestHandler):
             import traceback; traceback.print_exc(); self._send(500, "error: " + str(e), "text/plain; charset=utf-8")
 
     def do_POST(self):
-        """/api/create — 생성 잡을 띄우고 job_id를 즉시 반환한다(진행률은 GET /api/job)."""
+        """POST 라우트 — /api/create(보고서 생성) · /api/export_mobile(모바일 뷰어 내보내기)."""
         rp = urllib.parse.urlparse(self.path).path
+        if rp == "/api/export_mobile":
+            try:
+                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+                twin = d.get("path", "")
+                if not twin or not os.path.exists(twin):
+                    return self._json({"error": "보고서 파일 없음"}, 400)
+                out = os.path.splitext(twin)[0] + "_mobile.html"
+                jid = uuid.uuid4().hex[:8]
+                _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
+
+                def run():
+                    j = _jobs[jid]
+                    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
+                    try:
+                        import export_mobile as EM
+                        j["result"] = EM.export_mobile(twin, out, log=log)
+                        j["progress"] = 1.0
+                    except Exception as e:
+                        import traceback; traceback.print_exc(); j["error"] = str(e)
+                    finally:
+                        j["done"] = True
+
+                threading.Thread(target=run, daemon=True).start()
+                return self._json({"job": jid, "out": out})
+            except Exception as e:
+                import traceback; traceback.print_exc(); return self._json({"error": str(e)}, 500)
         if rp != "/api/create":
             return self._send(404, "not found", "text/plain")
         try:

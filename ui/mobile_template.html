@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="ko"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>__TITLE__ — 모바일 뷰어</title>
+<style>
+/* 모바일 뷰어 — 전체 화면 3D + 하단 시트(사진) + 전체화면 확대 */
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;height:100%;overflow:hidden;background:#14181d;
+  font-family:'Malgun Gothic','Apple SD Gothic Neo',system-ui,sans-serif;color:#dfe6ec;
+  overscroll-behavior:none;touch-action:none}
+#boot{position:absolute;inset:0;display:flex;flex-direction:column;gap:10px;
+  align-items:center;justify-content:center;font-size:15px;color:#9ab;z-index:99;
+  background:#14181d;text-align:center;padding:24px}
+#bar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:8px;
+  padding:calc(8px + env(safe-area-inset-top)) 12px 8px;
+  background:linear-gradient(#14181dee,#14181d00);pointer-events:none}
+#bar .t{font-size:14px;font-weight:600;color:#cfd8e0;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+#hintPill{position:fixed;left:50%;transform:translateX(-50%);z-index:10;
+  bottom:calc(18px + env(safe-area-inset-bottom));padding:9px 16px;border-radius:20px;
+  background:rgba(20,26,33,.82);border:1px solid #38424d;font-size:13px;color:#aebccb;
+  transition:opacity .4s;pointer-events:none;white-space:nowrap}
+#homeBtn{position:fixed;right:12px;z-index:10;width:40px;height:40px;border-radius:50%;
+  top:calc(8px + env(safe-area-inset-top));
+  background:rgba(20,26,33,.8);border:1px solid #38424d;color:#cfd8e0;font-size:17px}
+#view3d{position:absolute;inset:0}
+#view3d canvas{display:block}
+
+/* 하단 시트 */
+#sheet{position:fixed;left:0;right:0;bottom:0;z-index:20;transform:translateY(105%);
+  transition:transform .28s cubic-bezier(.3,.9,.3,1);
+  background:#171c22;border-top:1px solid #2a3138;border-radius:16px 16px 0 0;
+  padding:8px 12px calc(10px + env(safe-area-inset-bottom));max-height:62%;
+  display:flex;flex-direction:column;gap:8px;touch-action:pan-y}
+#sheet.open{transform:translateY(0)}
+#grip{align-self:center;width:44px;height:4px;border-radius:2px;background:#3a4550;flex:none}
+#sheetHead{display:flex;align-items:center;gap:8px;flex:none}
+#pname{flex:1;font-size:12px;color:#9ab;font-family:ui-monospace,monospace;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#closeSheet{width:32px;height:32px;border-radius:8px;background:none;
+  border:1px solid #3a4550;color:#cfd8e0;font-size:14px;flex:none}
+#photoWrap{position:relative;align-self:center;line-height:0;max-width:100%;
+  flex:0 1 auto;min-height:0;overflow:hidden;border-radius:8px}
+#photo{max-width:100%;max-height:34vh;display:block;border-radius:8px}
+#photoMark{position:absolute;transform:translate(-50%,-50%);border-radius:50%;
+  background:rgba(255,64,48,.30);border:2px solid rgba(255,64,48,.78);pointer-events:none;display:none}
+#photoTip{flex:none;text-align:center;font-size:11px;color:#64788a}
+#alts{flex:none;display:flex;gap:6px;overflow-x:auto;padding:2px 0 4px;
+  -webkit-overflow-scrolling:touch;touch-action:pan-x}
+#alts .alt{position:relative;flex:none;width:74px;height:54px;border-radius:6px;overflow:hidden;
+  border:2px solid transparent;background:#0e1319}
+#alts .alt img{width:100%;height:100%;object-fit:cover;display:block}
+#alts .alt.sel{border-color:#4aa8ff}
+#alts .alt .dot{position:absolute;width:9px;height:9px;border-radius:50%;
+  transform:translate(-50%,-50%);background:rgba(255,64,48,.6);
+  border:1px solid rgba(255,64,48,.95);pointer-events:none}
+
+/* 전체화면 확대 */
+#full{position:fixed;inset:0;z-index:40;display:none;background:#0b0e11;touch-action:none}
+#fullStage{position:absolute;left:0;top:0;transform-origin:0 0}
+#fullImg{display:block;max-width:none;user-select:none;-webkit-user-drag:none}
+#fullMark{position:absolute;transform:translate(-50%,-50%);border-radius:50%;
+  background:rgba(255,64,48,.30);border:2px solid rgba(255,64,48,.78);pointer-events:none;display:none}
+#fullClose{position:fixed;top:calc(10px + env(safe-area-inset-top));right:12px;z-index:41;
+  width:40px;height:40px;border-radius:50%;background:rgba(20,26,33,.85);
+  border:1px solid #38424d;color:#e7edf3;font-size:17px}
+#fullTip{position:fixed;bottom:calc(14px + env(safe-area-inset-bottom));left:50%;z-index:41;
+  transform:translateX(-50%);font-size:11.5px;color:#8fa0ad;background:rgba(20,26,33,.7);
+  padding:6px 12px;border-radius:14px;white-space:nowrap}
+</style>
+</head><body>
+<div id="boot"><div id="bootMsg">뷰어 준비 중…</div>
+  <div style="font-size:12px;color:#64788a">단일 파일 뷰어 · 네트워크 불필요</div></div>
+<div id="bar"><span class="t">__TITLE__</span></div>
+<button id="homeBtn" title="처음 시점">⌂</button>
+<div id="view3d"></div>
+<div id="hintPill">한 손가락 회전 · 두 손가락 확대/이동 · 표면을 탭하면 사진</div>
+
+<div id="sheet">
+  <div id="grip"></div>
+  <div id="sheetHead"><span id="pname"></span><button id="closeSheet">✕</button></div>
+  <div id="photoWrap"><img id="photo" alt=""><div id="photoMark"></div></div>
+  <div id="photoTip">사진을 탭하면 크게 보기 · 붉은 원 = 탭한 지점</div>
+  <div id="alts"></div>
+</div>
+
+<div id="full">
+  <div id="fullStage"><img id="fullImg" alt=""><div id="fullMark"></div></div>
+  <button id="fullClose">✕</button>
+  <div id="fullTip">핀치: 확대 · 드래그: 이동 · 두 번 탭: 확대/원래대로</div>
+</div>
+
+<script type="text/plain" id="src-three">__THREE_SRC__</script>
+<script type="text/plain" id="src-oc">__OC_SRC__</script>
+<script type="text/plain" id="data-meta">__META__</script>
+<script type="text/plain" id="data-imgs">__IMGS__</script>
+<script type="text/plain" id="data-mesh">__MESH_B64__</script>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const say = m => { $('bootMsg').textContent = m; };
+const grab = id => $(id).textContent.replaceAll('<\\/script', '</script');
+
+// ---------- 데이터 복원 ----------
+say('3D 엔진 로드 중…');
+const THREE = await import(URL.createObjectURL(new Blob([grab('src-three')], { type: 'text/javascript' })));
+const OrbitControls = new Function('THREE', grab('src-oc') + '\nreturn OrbitControls;')(THREE);
+const DATA = JSON.parse(grab('data-meta'));
+const IMGS = JSON.parse(grab('data-imgs'));
+
+say('3D 모델 푸는 중…');
+function b64ToBuf(b64) {                       // 큰 base64 를 조각 단위로 디코드
+  const CHUNK = 1 << 20;
+  const parts = [];
+  let total = 0;
+  for (let i = 0; i < b64.length; i += CHUNK) {
+    const bin = atob(b64.slice(i, i + CHUNK));
+    const u8 = new Uint8Array(bin.length);
+    for (let j = 0; j < bin.length; j++) u8[j] = bin.charCodeAt(j);
+    parts.push(u8); total += u8.length;
+  }
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out.buffer;
+}
+const buf = b64ToBuf(grab('data-mesh').trim());
+const dv = new DataView(buf);
+const NV = dv.getUint32(0, true), NF = dv.getUint32(4, true);
+const pad = (4 - (NV * 3) % 4) % 4;
+const positions = new Float32Array(buf, 8, NV * 3);
+const colors = new Uint8Array(buf, 8 + NV * 12, NV * 3);
+const indices = new Uint32Array(buf, 8 + NV * 12 + NV * 3 + pad, NF * 3);
+
+// ---------- 3D 무대 ----------
+const view = $('view3d');
+const W = () => view.clientWidth, H = () => view.clientHeight;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+const MAX_RATIO = Math.min(devicePixelRatio, 2);
+renderer.setPixelRatio(MAX_RATIO);
+renderer.setSize(W(), H());
+view.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14181d);
+const camera = new THREE.PerspectiveCamera(60, W() / H(), 0.01, 1000);
+
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geo.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
+geo.setIndex(new THREE.BufferAttribute(indices, 1));
+const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true }));
+scene.add(mesh);
+geo.computeBoundingSphere();
+geo.computeBoundingBox();
+const bs = geo.boundingSphere, bb = geo.boundingBox;
+
+camera.up.set(0, 0, 1);
+const HOME = bs.center.clone().add(new THREE.Vector3(0, -bs.radius * 2.2, bs.radius * 0.7));
+camera.position.copy(HOME);
+camera.near = bs.radius / 100;
+camera.far = bs.radius * 100;
+camera.updateProjectionMatrix();
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(bs.center);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.update();
+$('homeBtn').addEventListener('click', () => {
+  camera.position.copy(HOME);
+  controls.target.copy(bs.center);
+  controls.update();
+});
+
+const grid = new THREE.GridHelper(bb.getSize(new THREE.Vector3()).length() * 1.5, 40, 0x5a6672, 0x333c45);
+grid.rotation.x = Math.PI / 2;
+grid.position.set(bs.center.x, bs.center.y, bb.min.z);
+scene.add(grid);
+
+const MARKER_PX = 5;                             // 폰 화면 기준 표식 반지름(px)
+const marker = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 16, 16),
+  new THREE.MeshBasicMaterial({ color: 0xff33cc, depthTest: false }));
+marker.renderOrder = 999;
+marker.visible = false;
+scene.add(marker);
+function sizeMarker() {
+  if (!marker.visible) return;
+  const dist = camera.position.distanceTo(marker.position);
+  const wpp = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / H();
+  marker.scale.setScalar(Math.max(wpp * MARKER_PX, bs.radius * 1e-5));
+}
+
+$('boot').style.display = 'none';
+setTimeout(() => { $('hintPill').style.opacity = 0; }, 6000);
+
+// ---------- 사진 선택 (뷰어와 동일 로직: FOV 가드 + 가림 검사) ----------
+function projectToCam(cam, X) {
+  const rx = X.x - cam.pos[0], ry = X.y - cam.pos[1], rz = X.z - cam.pos[2];
+  const Zc = rx * cam.fwd[0] + ry * cam.fwd[1] + rz * cam.fwd[2];
+  if (Zc <= 1e-6) return null;
+  const Xc = rx * cam.right[0] + ry * cam.right[1] + rz * cam.right[2];
+  const Yc = -(rx * cam.up[0] + ry * cam.up[1] + rz * cam.up[2]);
+  const x = Xc / Zc, y = Yc / Zc;
+  const r2 = x * x + y * y;
+  const rcx = Math.max(cam.cx, cam.w - cam.cx) / cam.fx;
+  const rcy = Math.max(cam.cy, cam.h - cam.cy) / cam.fy;
+  if (r2 > (rcx * rcx + rcy * rcy) * 1.10) return null;
+  const d = (cam.dist || []).concat([0, 0, 0, 0, 0]).slice(0, 5);
+  const rad = 1 + d[0] * r2 + d[1] * r2 * r2 + d[4] * r2 * r2 * r2;
+  const xd = x * rad + 2 * d[2] * x * y + d[3] * (r2 + 2 * x * x);
+  const yd = y * rad + d[2] * (r2 + 2 * y * y) + 2 * d[3] * x * y;
+  const u = (cam.fx * xd + cam.cx) / cam.w, v = (cam.fy * yd + cam.cy) / cam.h;
+  return (u < 0 || u > 1 || v < 0 || v > 1) ? null : { u, v };
+}
+
+function cameraCandidates(p, n) {
+  const strict = [], loose = [];
+  for (const c of (DATA.cameras || [])) {
+    const dx = c.pos[0] - p.x, dy = c.pos[1] - p.y, dz = c.pos[2] - p.z;
+    const dist = Math.hypot(dx, dy, dz) || 1e-6;
+    if (!projectToCam(c, p)) continue;
+    const cos = n ? (n.x * dx + n.y * dy + n.z * dz) / dist : 1;
+    const item = { cam: c, cos, dist, score: Math.max(cos, 0) / dist };
+    loose.push(item);
+    if (!(n && cos <= 0)) strict.push(item);
+  }
+  let list = strict.length ? strict : loose;
+  if (!list.length)
+    list = (DATA.cameras || []).map(c => {
+      const dist = Math.hypot(c.pos[0] - p.x, c.pos[1] - p.y, c.pos[2] - p.z) || 1e-6;
+      return { cam: c, cos: 0, dist, score: 1 / dist };
+    });
+  return list.sort((a, b) => b.score - a.score);
+}
+
+const _occRay = new THREE.Raycaster();
+const _camPos = new THREE.Vector3(), _occDir = new THREE.Vector3();
+function cameraSeesPoint(cam, p) {
+  _camPos.set(cam.pos[0], cam.pos[1], cam.pos[2]);
+  _occDir.copy(p).sub(_camPos);
+  const dist = _occDir.length();
+  const tol = Math.max(dist * 0.01, bs.radius * 1.5e-3);
+  if (dist <= tol) return true;
+  _occRay.set(_camPos, _occDir.divideScalar(dist));
+  _occRay.near = 0;
+  _occRay.far = dist - tol;
+  return _occRay.intersectObject(mesh, false).length === 0;
+}
+function pickVisibleCam(cands, p) {
+  for (let i = 0; i < cands.length && i < 16; i++)
+    if (cameraSeesPoint(cands[i].cam, p)) return cands[i].cam;
+  return cands.length ? cands[0].cam : null;
+}
+
+// ---------- 하단 시트 ----------
+let lastPick = null;
+function showPhoto(cam, p) {
+  const img = $('photo'), mark = $('photoMark');
+  lastPick = { cam, uv: p ? projectToCam(cam, p) : null };
+  mark.style.display = 'none';
+  img.onload = () => {
+    if (!lastPick.uv) return;
+    mark.style.left = (lastPick.uv.u * 100) + '%';
+    mark.style.top = (lastPick.uv.v * 100) + '%';
+    const d = Math.max(16, img.clientWidth * 0.09);
+    mark.style.width = mark.style.height = d + 'px';
+    mark.style.display = 'block';
+  };
+  img.src = IMGS[cam.id].f;
+  $('pname').textContent = cam.source;
+  for (const el of document.querySelectorAll('#alts .alt'))
+    el.classList.toggle('sel', +el.dataset.id === cam.id);
+  $('sheet').classList.add('open');
+}
+
+function renderAlts(cands, p) {
+  const box = $('alts');
+  box.innerHTML = '';
+  const top = cands.slice(0, 12);
+  if (top.length < 2) { box.style.display = 'none'; return; }
+  for (const it of top) {
+    const uv = p ? projectToCam(it.cam, p) : null;
+    const el = document.createElement('div');
+    el.className = 'alt';
+    el.dataset.id = it.cam.id;
+    el.innerHTML = `<img src="${IMGS[it.cam.id].t}">`
+      + (uv ? `<div class="dot" style="left:${uv.u * 100}%;top:${uv.v * 100}%"></div>` : '');
+    el.addEventListener('click', () => showPhoto(it.cam, p));
+    box.appendChild(el);
+  }
+  box.style.display = 'flex';
+}
+
+$('closeSheet').addEventListener('click', () => {
+  $('sheet').classList.remove('open');
+  marker.visible = false;
+});
+
+// ---------- 탭 처리 ----------
+const ray = new THREE.Raycaster();
+function pickAt(cx, cy) {
+  const r = renderer.domElement.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const mx = ((cx - r.left) / r.width) * 2 - 1;
+  const my = -((cy - r.top) / r.height) * 2 + 1;
+  ray.setFromCamera(new THREE.Vector2(mx, my), camera);
+  const hit = ray.intersectObject(mesh, false);
+  if (!hit.length) return;
+  const p = hit[0].point;
+  let n = null;
+  if (hit[0].face) {
+    n = hit[0].face.normal.clone()
+      .applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
+    if (n.dot(camera.position.clone().sub(p)) < 0) n.negate();
+  }
+  marker.position.copy(p);
+  marker.visible = true;
+  const cands = cameraCandidates(p, n);
+  renderAlts(cands, p);
+  const best = pickVisibleCam(cands, p);
+  if (best) showPhoto(best, p);
+}
+
+let _dn = null, _dnCount = 0;
+renderer.domElement.addEventListener('pointerdown', e => {
+  _dnCount++;
+  _dn = _dnCount === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;  // 멀티터치는 탭 아님
+});
+renderer.domElement.addEventListener('pointerup', e => {
+  _dnCount = Math.max(0, _dnCount - 1);
+  if (!_dn) return;
+  const moved = Math.hypot(e.clientX - _dn.x, e.clientY - _dn.y);
+  const held = performance.now() - _dn.t;
+  _dn = null;
+  if (moved > 8 || held > 450) return;
+  pickAt(e.clientX, e.clientY);
+});
+renderer.domElement.addEventListener('pointercancel', () => { _dnCount = 0; _dn = null; });
+
+// ---------- 전체화면 확대 (핀치·드래그·더블탭) ----------
+const full = $('full'), stage = $('fullStage'), fimg = $('fullImg'), fmark = $('fullMark');
+let fv = { s: 1, tx: 0, ty: 0 }, fitS = 1;
+function applyFull() {
+  stage.style.transform = `translate(${fv.tx}px,${fv.ty}px) scale(${fv.s})`;
+  fmark.style.opacity = Math.max(0, Math.min(1, 1 - (fv.s / fitS - 1) / 2));
+}
+function openFull() {
+  if (!lastPick) return;
+  fimg.onload = () => {
+    const vw = innerWidth, vh = innerHeight;
+    fitS = Math.min(vw / fimg.naturalWidth, vh / fimg.naturalHeight) * 0.99;
+    fv = { s: fitS, tx: (vw - fimg.naturalWidth * fitS) / 2, ty: (vh - fimg.naturalHeight * fitS) / 2 };
+    if (lastPick.uv) {
+      const d = Math.max(30, fimg.naturalWidth * 0.05);
+      fmark.style.width = fmark.style.height = d + 'px';
+      fmark.style.left = (lastPick.uv.u * fimg.naturalWidth) + 'px';
+      fmark.style.top = (lastPick.uv.v * fimg.naturalHeight) + 'px';
+      fmark.style.display = 'block';
+    } else fmark.style.display = 'none';
+    applyFull();
+  };
+  fimg.src = IMGS[lastPick.cam.id].f;
+  full.style.display = 'block';
+}
+$('photo').addEventListener('click', openFull);
+$('fullClose').addEventListener('click', () => { full.style.display = 'none'; fimg.removeAttribute('src'); });
+
+const ptrs = new Map();
+let pinch0 = null, lastTap = 0;
+full.addEventListener('pointerdown', e => {
+  full.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()];
+    pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), s: fv.s,
+               cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, tx: fv.tx, ty: fv.ty };
+  } else if (ptrs.size === 1) {
+    const now = performance.now();
+    if (now - lastTap < 300) {                     // 더블탭: 확대 ↔ 원래대로
+      const target = fv.s > fitS * 1.5 ? fitS : fitS * 2.5;
+      const k = target / fv.s;
+      fv.tx = e.clientX - (e.clientX - fv.tx) * k;
+      fv.ty = e.clientY - (e.clientY - fv.ty) * k;
+      fv.s = target;
+      applyFull();
+    }
+    lastTap = now;
+  }
+});
+full.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return;
+  const prev = ptrs.get(e.pointerId);
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size === 2 && pinch0) {
+    const [a, b] = [...ptrs.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    const ns = Math.max(fitS * 0.5, Math.min(fitS * 40, pinch0.s * d / pinch0.d));
+    const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    fv.tx = cx - (pinch0.cx - pinch0.tx) * (ns / pinch0.s);
+    fv.ty = cy - (pinch0.cy - pinch0.ty) * (ns / pinch0.s);
+    fv.s = ns;
+    applyFull();
+  } else if (ptrs.size === 1) {
+    fv.tx += e.clientX - prev.x;
+    fv.ty += e.clientY - prev.y;
+    applyFull();
+  }
+});
+const endPtr = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; };
+full.addEventListener('pointerup', endPtr);
+full.addEventListener('pointercancel', endPtr);
+
+// ---------- 루프 (적응 해상도) ----------
+addEventListener('resize', () => {
+  camera.aspect = W() / H();
+  camera.updateProjectionMatrix();
+  renderer.setSize(W(), H());
+});
+let _ratio = MAX_RATIO, _acc = 0, _n = 0, _idle = 0;
+function adapt(dt) {
+  _acc += dt; _n++;
+  if (_n < 20) return;
+  const fps = _n / _acc;
+  _acc = 0; _n = 0;
+  const moving = _idle < 0.4;
+  let want = _ratio;
+  if (moving && fps < 35) want = Math.max(0.55, _ratio - 0.25);
+  else if (!moving || fps > 55) want = Math.min(MAX_RATIO, _ratio + 0.25);
+  if (Math.abs(want - _ratio) > 0.01) {
+    _ratio = want;
+    renderer.setPixelRatio(_ratio);
+    renderer.setSize(W(), H());
+  }
+}
+controls.addEventListener('change', () => { _idle = 0; });
+const _clock = new THREE.Clock();
+(function loop() {
+  requestAnimationFrame(loop);
+  const dt = Math.min(_clock.getDelta(), 0.25);
+  _idle += dt;
+  controls.update();
+  sizeMarker();
+  renderer.render(scene, camera);
+  adapt(dt);
+})();
+</script>
+</body></html>

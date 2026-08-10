@@ -97,12 +97,38 @@
         const el = document.createElement("div"); el.className = "ritem";
         el.innerHTML = `<svg class="ic ritem-ic"><use href="#i-file"/></svg>`
           + `<span class="nm">${rp.name}<br><span class="meta">${rp.mb} MB · ${new Date(rp.mtime*1000).toLocaleString()}</span></span>`;
+        const m = document.createElement("button"); m.className = "ghost";
+        m.textContent = "모바일";
+        m.title = "모바일 뷰어 내보내기 — 폰 브라우저에서 바로 열리는 단일 HTML 파일을 만듭니다";
+        m.onclick = () => exportMobile(rp.path, m);
         const b = document.createElement("button"); b.className = "primary";
         b.innerHTML = `<svg class="ic"><use href="#i-open"/></svg>열기`;
         b.onclick = () => openReport(rp.path);
-        el.appendChild(b); list.appendChild(el);
+        el.appendChild(m); el.appendChild(b); list.appendChild(el);
       });
     } catch (e) { list.innerHTML = '<div class="empty">목록 로드 실패: ' + e + '</div>'; }
+  }
+
+  // 모바일 뷰어 내보내기 — 잡을 띄우고 버튼에 진행 상황을 표시한다.
+  async function exportMobile(path, btn) {
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "생성 중…";
+    try {
+      const r = await fetch("/api/export_mobile", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      const t = setInterval(async () => {
+        const j = await (await fetch("/api/job?id=" + d.job)).json();
+        if (j.log && j.log.length) btn.textContent = "생성 중… " + (j.log[j.log.length - 1].length > 14 ? "" : j.log[j.log.length - 1]);
+        if (j.done) {
+          clearInterval(t); btn.disabled = false; btn.textContent = orig;
+          if (j.error) alert("모바일 뷰어 생성 실패: " + j.error);
+          else alert("모바일 뷰어 생성 완료!\n\n" + j.result +
+                     "\n\n이 HTML 파일 하나를 폰으로 보내서(메신저·메일·USB) 브라우저로 열면 됩니다.");
+        }
+      }, 500);
+    } catch (e) { btn.disabled = false; btn.textContent = orig; alert("실패: " + e.message); }
   }
 
   // ===== 도움말(?) — 카드 제목의 ? 버튼이 <template> 내용을 모달로 띄운다 =====
