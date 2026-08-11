@@ -107,14 +107,12 @@
           + `<span class="nm">${rp.name}<br><span class="meta">${rp.mb} MB · ${new Date(rp.mtime*1000).toLocaleString()}</span></span>`;
         const m = document.createElement("button"); m.className = "ghost";
         m.textContent = "모바일";
-        m.title = "모바일 뷰어 내보내기 — 폰 브라우저에서 바로 열리는 단일 HTML 파일을 만듭니다";
-        m.onclick = () => exportMobile(rp.path, m);
-        // 모바일 HTML 이 이미 있으면 그 파일 위치로 바로가기 버튼을 보여준다
+        m.title = "폰으로 보낼 파일 준비 — 모바일 뷰어를 만들고 보낼 파일 위치를 엽니다";
+        m.onclick = () => prepMobile(rp, m);
         const loc = document.createElement("button"); loc.className = "ghost";
         loc.innerHTML = `<svg class="ic"><use href="#i-folder"/></svg>위치`;
-        loc.title = "모바일 HTML 파일이 있는 폴더를 탐색기에서 엽니다";
-        loc.style.display = rp.mobile ? "" : "none";
-        loc.onclick = () => revealPath(rp.mobile_path);
+        loc.title = "이 보고서 파일이 있는 폴더를 탐색기에서 엽니다";
+        loc.onclick = () => revealPath(rp.path);
         const b = document.createElement("button"); b.className = "primary";
         b.innerHTML = `<svg class="ic"><use href="#i-open"/></svg>열기`;
         b.onclick = () => openReport(rp.path);
@@ -123,30 +121,24 @@
     } catch (e) { list.innerHTML = '<div class="empty">목록 로드 실패: ' + e + '</div>'; }
   }
 
-  // 모바일 뷰어 내보내기 — 잡을 띄우고 버튼에 진행 상황을 표시한다.
-  async function exportMobile(path, btn) {
+  // 폰으로 보낼 파일 준비 — 뷰어(고정 파일)를 만들고, 보낼 두 파일이 있는 폴더를 연다.
+  // 뷰어는 보고서 데이터를 담지 않아 즉시 만들어진다(예전처럼 사진을 굽지 않는다).
+  async function prepMobile(rp, btn) {
     const orig = btn.textContent;
-    btn.disabled = true; btn.textContent = "생성 중…";
+    btn.disabled = true; btn.textContent = "준비 중…";
     try {
-      const r = await fetch("/api/export_mobile", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
-      const d = await r.json();
+      const d = await (await fetch("/api/mobile_viewer", { method: "POST" })).json();
       if (d.error) throw new Error(d.error);
-      const t = setInterval(async () => {
-        const j = await (await fetch("/api/job?id=" + d.job)).json();
-        if (j.log && j.log.length) btn.textContent = "생성 중… " + (j.log[j.log.length - 1].length > 14 ? "" : j.log[j.log.length - 1]);
-        if (j.done) {
-          clearInterval(t); btn.disabled = false; btn.textContent = orig;
-          if (j.error) alert("모바일 뷰어 생성 실패: " + j.error);
-          else {
-            loadReports();      // 목록 갱신 → 해당 행에 '위치' 버튼이 나타난다
-            if (confirm("모바일 뷰어 생성 완료!\n\n" + j.result +
-                        "\n\n이 HTML 파일 하나를 폰으로 보내서(메신저·메일·USB) 브라우저로 열면 됩니다." +
-                        "\n\n파일 위치를 지금 열까요?")) revealPath(j.result);
-          }
-        }
-      }, 500);
-    } catch (e) { btn.disabled = false; btn.textContent = orig; alert("실패: " + e.message); }
+      const mb = Math.round(rp.mb);
+      if (confirm(
+        `폰으로 보낼 파일 2개가 준비됐습니다.\n\n` +
+        `① ${d.name}  (뷰어 · 한 번만 보내면 계속 재사용)\n` +
+        `② ${rp.name}  (보고서 · ${mb}MB)\n\n` +
+        `폰에서 ①을 열고 ②를 고르면 됩니다.\n\n파일 위치를 지금 열까요?`)) {
+        revealPath(rp.path);
+      }
+    } catch (e) { alert("준비 실패: " + e.message); }
+    finally { btn.disabled = false; btn.textContent = orig; }
   }
 
   // ===== 도움말(?) — 카드 제목의 ? 버튼이 <template> 내용을 모달로 띄운다 =====

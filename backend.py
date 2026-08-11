@@ -318,10 +318,8 @@ class Handler(BaseHTTPRequestHandler):
                     for f in sorted(os.listdir(REPORTS_DIR)):
                         if f.lower().endswith(".twin"):
                             fp = os.path.join(REPORTS_DIR, f)
-                            mob = os.path.splitext(fp)[0] + "_mobile.html"
                             items.append({"name": f, "path": fp, "mb": round(os.path.getsize(fp) / 1e6, 1),
-                                          "mtime": os.path.getmtime(fp),
-                                          "mobile": os.path.exists(mob), "mobile_path": mob})
+                                          "mtime": os.path.getmtime(fp)})
                 return self._json({"reports": items})
             if r == "/api/job":
                 j = _jobs.get(q.get("id", [""])[0])
@@ -334,32 +332,15 @@ class Handler(BaseHTTPRequestHandler):
             import traceback; traceback.print_exc(); self._send(500, "error: " + str(e), "text/plain; charset=utf-8")
 
     def do_POST(self):
-        """POST 라우트 — /api/create(보고서 생성) · /api/export_mobile(모바일 뷰어 내보내기)."""
+        """POST 라우트 — /api/create(보고서 생성) · /api/mobile_viewer(모바일 뷰어 만들기)."""
         rp = urllib.parse.urlparse(self.path).path
-        if rp == "/api/export_mobile":
+        if rp == "/api/mobile_viewer":
+            # 뷰어는 보고서 데이터를 담지 않는 고정 파일이라 즉시 만들어진다(잡·진행률 불필요).
+            # 매번 새로 쓴다 — 프로그램을 갱신했을 때 낡은 뷰어가 남지 않게.
             try:
-                d = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
-                twin = d.get("path", "")
-                if not twin or not os.path.exists(twin):
-                    return self._json({"error": "보고서 파일 없음"}, 400)
-                out = os.path.splitext(twin)[0] + "_mobile.html"
-                jid = uuid.uuid4().hex[:8]
-                _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
-
-                def run():
-                    j = _jobs[jid]
-                    def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
-                    try:
-                        import export_mobile as EM
-                        j["result"] = EM.export_mobile(twin, out, log=log)
-                        j["progress"] = 1.0
-                    except Exception as e:
-                        import traceback; traceback.print_exc(); j["error"] = str(e)
-                    finally:
-                        j["done"] = True
-
-                threading.Thread(target=run, daemon=True).start()
-                return self._json({"job": jid, "out": out})
+                import export_mobile as EM
+                out = EM.build_viewer(os.path.join(REPORTS_DIR, EM.VIEWER_NAME), log=lambda m: None)
+                return self._json({"out": out, "name": os.path.basename(out)})
             except Exception as e:
                 import traceback; traceback.print_exc(); return self._json({"error": str(e)}, 500)
         if rp != "/api/create":

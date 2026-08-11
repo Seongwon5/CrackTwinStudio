@@ -2,14 +2,26 @@
 <html lang="ko"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>__TITLE__ — 모바일 뷰어</title>
+<title>원전 디지털 트윈 — 모바일 뷰어</title>
 <style>
-/* 모바일 뷰어 — 전체 화면 3D + 하단 시트(사진) + 전체화면 확대 */
+/* 모바일 뷰어 — 보고서 선택 → 전체 화면 3D + 하단 시트(사진) + 전체화면 확대 */
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{width:100%;height:100%;overflow:hidden;background:#14181d;
   font-family:'Malgun Gothic','Apple SD Gothic Neo',system-ui,sans-serif;color:#dfe6ec;
   overscroll-behavior:none;touch-action:none}
-#boot{position:absolute;inset:0;display:flex;flex-direction:column;gap:10px;
+
+/* 첫 화면 — 보고서 파일 고르기 */
+#pick{position:absolute;inset:0;z-index:100;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;padding:28px;text-align:center;background:#14181d}
+#pick h1{font-size:19px;font-weight:600;color:#e7edf3;letter-spacing:.2px}
+#pick .sub{font-size:13px;color:#7d93a6;line-height:1.7}
+#pick label{margin-top:6px;padding:15px 26px;border-radius:12px;background:#12b5cc;color:#04222a;
+  font-size:16px;font-weight:700;border:none}
+#pick input{display:none}
+#pick .note{margin-top:10px;font-size:11.5px;color:#5d7284;line-height:1.65;max-width:320px}
+#err{color:#ff8b7e;font-size:13px;line-height:1.6;max-width:320px;min-height:1em}
+
+#boot{position:absolute;inset:0;display:none;flex-direction:column;gap:10px;
   align-items:center;justify-content:center;font-size:15px;color:#9ab;z-index:99;
   background:#14181d;text-align:center;padding:24px}
 #bar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:8px;
@@ -34,12 +46,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#14181d;
   padding:8px 12px calc(10px + env(safe-area-inset-bottom));max-height:62%;
   display:flex;flex-direction:column;gap:8px;touch-action:pan-y}
 #sheet.open{transform:translateY(0)}
-/* 슬라이드 홀더 — 실제 크기는 44×4 지만 위아래 패딩으로 터치 영역을 넓힌다(내려서 닫기) */
-#grip{align-self:center;width:44px;height:4px;border-radius:2px;background:#3a4550;flex:none;
-  box-sizing:content-box;padding:10px 36px;background-clip:content-box;
-  cursor:grab;touch-action:none}
-#sheetHead{touch-action:none}
-#sheetHead{display:flex;align-items:center;gap:8px;flex:none}
+#sheetHead{display:flex;align-items:center;gap:8px;flex:none;padding-top:4px}
 #pname{flex:1;font-size:12px;color:#9ab;font-family:ui-monospace,monospace;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #closeSheet{width:32px;height:32px;border-radius:8px;background:none;
@@ -74,15 +81,25 @@ html,body{width:100%;height:100%;overflow:hidden;background:#14181d;
   padding:6px 12px;border-radius:14px;white-space:nowrap}
 </style>
 </head><body>
-<div id="boot"><div id="bootMsg">뷰어 준비 중…</div>
-  <div style="font-size:12px;color:#64788a">단일 파일 뷰어 · 네트워크 불필요</div></div>
-<div id="bar"><span class="t">__TITLE__</span></div>
-<button id="homeBtn" title="처음 시점">⌂</button>
+
+<div id="pick">
+  <h1>원전 디지털 트윈 · 모바일 뷰어</h1>
+  <div class="sub">보고서 파일(<b>.twin</b>)을 골라 주세요.<br>사진과 3D 모델은 그 파일 안에 들어 있습니다.</div>
+  <label for="fileInput">보고서 파일 선택</label>
+  <input type="file" id="fileInput">
+  <div id="err"></div>
+  <div class="note">이 뷰어 파일은 보고서와 상관없이 계속 재사용할 수 있습니다.
+    다음부터는 <b>.twin</b> 파일만 받으면 됩니다.</div>
+</div>
+
+<div id="boot"><div id="bootMsg">여는 중…</div>
+  <div style="font-size:12px;color:#64788a">네트워크 없이 폰 안에서 처리합니다</div></div>
+<div id="bar"><span class="t" id="title"></span></div>
+<button id="homeBtn" title="처음 시점" style="display:none">⌂</button>
 <div id="view3d"></div>
-<div id="hintPill">한 손가락 회전 · 두 손가락 확대/이동 · 표면을 탭하면 사진</div>
+<div id="hintPill" style="display:none">한 손가락 회전 · 두 손가락 확대/이동 · 표면을 탭하면 사진</div>
 
 <div id="sheet">
-  <div id="grip"></div>
   <div id="sheetHead"><span id="pname"></span><button id="closeSheet">✕</button></div>
   <div id="photoWrap"><img id="photo" alt=""><div id="photoMark"></div></div>
   <div id="photoTip">사진을 탭하면 크게 보기 · 붉은 원 = 탭한 지점</div>
@@ -97,394 +114,423 @@ html,body{width:100%;height:100%;overflow:hidden;background:#14181d;
 
 <script type="text/plain" id="src-three">__THREE_SRC__</script>
 <script type="text/plain" id="src-oc">__OC_SRC__</script>
+<script type="text/plain" id="src-ply">__PLY_SRC__</script>
 <script type="text/plain" id="src-bvh">__BVH_SRC__</script>
-<script type="text/plain" id="data-meta">__META__</script>
-<script type="text/plain" id="data-imgs">__IMGS__</script>
-<script type="text/plain" id="data-mesh">__MESH_B64__</script>
+<script type="text/plain" id="src-zip">__ZIP_SRC__</script>
 
 <script type="module">
 const $ = id => document.getElementById(id);
 const say = m => { $('bootMsg').textContent = m; };
 const grab = id => $(id).textContent.replaceAll('<\\/script', '</script');
+// 안내 문구가 실제로 그려질 틈을 준다 — 뒤이어 오는 작업이 메인 스레드를 오래 잡는다.
+const paint = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-// ---------- 데이터 복원 ----------
-say('3D 엔진 로드 중…');
+// ---------- 엔진 (보고서와 무관하므로 미리 준비) ----------
 const THREE = await import(URL.createObjectURL(new Blob([grab('src-three')], { type: 'text/javascript' })));
 const OrbitControls = new Function('THREE', grab('src-oc') + '\nreturn OrbitControls;')(THREE);
+const PLYLoader = new Function('THREE', grab('src-ply') + '\nreturn PLYLoader;')(THREE);
 const buildBVH = new Function(grab('src-bvh') + '\nreturn buildBVH;')();
-const DATA = JSON.parse(grab('data-meta'));
-const IMGS = JSON.parse(grab('data-imgs'));
+const openTwin = await (async () => {
+  const src = grab('src-zip');
+  const m = await import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  return m.openTwin;
+})();
 
-say('3D 모델 푸는 중…');
-function b64ToBuf(b64) {                       // 큰 base64 를 조각 단위로 디코드
-  const CHUNK = 1 << 20;
-  const parts = [];
-  let total = 0;
-  for (let i = 0; i < b64.length; i += CHUNK) {
-    const bin = atob(b64.slice(i, i + CHUNK));
-    const u8 = new Uint8Array(bin.length);
-    for (let j = 0; j < bin.length; j++) u8[j] = bin.charCodeAt(j);
-    parts.push(u8); total += u8.length;
+// ---------- 보고서 고르기 ----------
+$('fileInput').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (f) start(f);
+});
+
+let started = false;
+async function start(file) {
+  if (started) return;
+  started = true;
+  $('pick').style.display = 'none';
+  $('boot').style.display = 'flex';
+  try {
+    await run(file);
+  } catch (err) {
+    // 실패하면 다시 고를 수 있게 첫 화면으로 되돌린다 — 막다른 길을 만들지 않는다.
+    started = false;
+    $('boot').style.display = 'none';
+    $('pick').style.display = 'flex';
+    $('err').textContent = '열 수 없습니다: ' + (err && err.message ? err.message : err);
+    $('fileInput').value = '';
   }
-  const out = new Uint8Array(total);
-  let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
-  return out.buffer;
 }
-const buf = b64ToBuf(grab('data-mesh').trim());
-const dv = new DataView(buf);
-const NV = dv.getUint32(0, true), NF = dv.getUint32(4, true);
-const pad = (4 - (NV * 3) % 4) % 4;
-const positions = new Float32Array(buf, 8, NV * 3);
-const colors = new Uint8Array(buf, 8 + NV * 12, NV * 3);
-const indices = new Uint32Array(buf, 8 + NV * 12 + NV * 3 + pad, NF * 3);
 
-// ---------- 3D 무대 ----------
-const view = $('view3d');
-const W = () => view.clientWidth, H = () => view.clientHeight;
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-const MAX_RATIO = Math.min(devicePixelRatio, 2);
-renderer.setPixelRatio(MAX_RATIO);
-renderer.setSize(W(), H());
-view.appendChild(renderer.domElement);
+async function run(file) {
+  say('보고서 여는 중…');
+  await paint();
+  const twin = await openTwin(file);
+  const DATA = await twin.json('meta.json');
+  const cams = DATA.cameras || [];
+  const name = (file.name || '보고서').replace(/\.twin$/i, '');
+  $('title').textContent = name;
+  document.title = name + ' — 모바일 뷰어';
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x14181d);
-const camera = new THREE.PerspectiveCamera(60, W() / H(), 0.01, 1000);
+  // ---------- 사진 — 실제로 볼 때만 디스크에서 읽는다 ----------
+  // .twin 안 이미지는 무압축이라 slice 를 그대로 Blob 으로 감싼다(복사·디코드 없음).
+  // URL 은 재사용을 위해 캐시한다. Blob 이 파일을 참조할 뿐이라 메모리를 차지하지 않는다.
+  const urlCache = new Map();
+  function imgName(id, kind) { return `img/${String(id).padStart(4, '0')}_${kind}.jpg`; }
+  async function imgURL(id, kind) {
+    const n = imgName(id, kind);
+    if (urlCache.has(n)) return urlCache.get(n);
+    if (!twin.has(n)) return null;
+    const u = await twin.url(n, 'image/jpeg');
+    urlCache.set(n, u);
+    return u;
+  }
 
-const geo = new THREE.BufferGeometry();
-geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-geo.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
-geo.setIndex(new THREE.BufferAttribute(indices, 1));
-const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true }));
-scene.add(mesh);
-geo.computeBoundingSphere();
-geo.computeBoundingBox();
-const bs = geo.boundingSphere, bb = geo.boundingBox;
+  say('3D 모델 읽는 중…');
+  await paint();
+  const meshBuf = await twin.bytes('mesh.ply');
+  say('3D 모델 푸는 중…');
+  await paint();
+  const geo = new PLYLoader().parse(meshBuf);
 
-camera.up.set(0, 0, 1);
-const HOME = bs.center.clone().add(new THREE.Vector3(0, -bs.radius * 2.2, bs.radius * 0.7));
-camera.position.copy(HOME);
-camera.near = bs.radius / 100;
-camera.far = bs.radius * 100;
-camera.updateProjectionMatrix();
+  // ---------- 3D 무대 ----------
+  const view = $('view3d');
+  const W = () => view.clientWidth, H = () => view.clientHeight;
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  const MAX_RATIO = Math.min(devicePixelRatio, 2);
+  renderer.setPixelRatio(MAX_RATIO);
+  renderer.setSize(W(), H());
+  view.appendChild(renderer.domElement);
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.copy(bs.center);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.update();
-$('homeBtn').addEventListener('click', () => {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x14181d);
+  const camera = new THREE.PerspectiveCamera(60, W() / H(), 0.01, 1000);
+
+  const hasColor = geo.hasAttribute('color');
+  if (hasColor && geo.hasAttribute('normal')) geo.deleteAttribute('normal');
+  const mat = hasColor ? new THREE.MeshBasicMaterial({ vertexColors: true })
+                       : new THREE.MeshStandardMaterial({ color: 0x9aa4ad });
+  if (!hasColor) {
+    geo.computeVertexNormals();
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const dl = new THREE.DirectionalLight(0xffffff, 0.6);
+    dl.position.set(1, 1, 2);
+    scene.add(dl);
+  }
+  const mesh = new THREE.Mesh(geo, mat);
+  scene.add(mesh);
+  geo.computeBoundingSphere();
+  geo.computeBoundingBox();
+  const bs = geo.boundingSphere, bb = geo.boundingBox;
+
+  camera.up.set(0, 0, 1);
+  const HOME = bs.center.clone().add(new THREE.Vector3(0, -bs.radius * 2.2, bs.radius * 0.7));
   camera.position.copy(HOME);
+  camera.near = bs.radius / 100;
+  camera.far = bs.radius * 100;
+  camera.updateProjectionMatrix();
+
+  const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.copy(bs.center);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
   controls.update();
-});
+  $('homeBtn').style.display = '';
+  $('homeBtn').addEventListener('click', () => {
+    camera.position.copy(HOME);
+    controls.target.copy(bs.center);
+    controls.update();
+  });
 
-const grid = new THREE.GridHelper(bb.getSize(new THREE.Vector3()).length() * 1.5, 40, 0x5a6672, 0x333c45);
-grid.rotation.x = Math.PI / 2;
-grid.position.set(bs.center.x, bs.center.y, bb.min.z);
-scene.add(grid);
+  const grid = new THREE.GridHelper(bb.getSize(new THREE.Vector3()).length() * 1.5, 40, 0x5a6672, 0x333c45);
+  grid.rotation.x = Math.PI / 2;
+  grid.position.set(bs.center.x, bs.center.y, bb.min.z);
+  scene.add(grid);
 
-const MARKER_PX = 5;                             // 폰 화면 기준 표식 반지름(px)
-const marker = new THREE.Mesh(
-  new THREE.SphereGeometry(1, 16, 16),
-  new THREE.MeshBasicMaterial({ color: 0xff33cc, depthTest: false }));
-marker.renderOrder = 999;
-marker.visible = false;
-scene.add(marker);
-function sizeMarker() {
-  if (!marker.visible) return;
-  const dist = camera.position.distanceTo(marker.position);
-  const wpp = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / H();
-  marker.scale.setScalar(Math.max(wpp * MARKER_PX, bs.radius * 1e-5));
-}
-
-// 탭 가속 구조 — 없으면 큰 메시에서 탭 한 번에 수십 초가 걸린다(bvh.js 머리말 참조).
-// 폰 CPU 는 더 느리므로 필수다. 안내 문구가 그려진 뒤에 시작한다.
-say('탭 가속 구조 준비 중…');
-await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-const BVH = buildBVH(positions, indices);
-
-$('boot').style.display = 'none';
-setTimeout(() => { $('hintPill').style.opacity = 0; }, 6000);
-
-// ---------- 사진 선택 (뷰어와 동일 로직: FOV 가드 + 가림 검사) ----------
-function projectToCam(cam, X) {
-  const rx = X.x - cam.pos[0], ry = X.y - cam.pos[1], rz = X.z - cam.pos[2];
-  const Zc = rx * cam.fwd[0] + ry * cam.fwd[1] + rz * cam.fwd[2];
-  if (Zc <= 1e-6) return null;
-  const Xc = rx * cam.right[0] + ry * cam.right[1] + rz * cam.right[2];
-  const Yc = -(rx * cam.up[0] + ry * cam.up[1] + rz * cam.up[2]);
-  const x = Xc / Zc, y = Yc / Zc;
-  const r2 = x * x + y * y;
-  const rcx = Math.max(cam.cx, cam.w - cam.cx) / cam.fx;
-  const rcy = Math.max(cam.cy, cam.h - cam.cy) / cam.fy;
-  if (r2 > (rcx * rcx + rcy * rcy) * 1.10) return null;
-  const d = (cam.dist || []).concat([0, 0, 0, 0, 0]).slice(0, 5);
-  const rad = 1 + d[0] * r2 + d[1] * r2 * r2 + d[4] * r2 * r2 * r2;
-  const xd = x * rad + 2 * d[2] * x * y + d[3] * (r2 + 2 * x * x);
-  const yd = y * rad + d[2] * (r2 + 2 * y * y) + 2 * d[3] * x * y;
-  const u = (cam.fx * xd + cam.cx) / cam.w, v = (cam.fy * yd + cam.cy) / cam.h;
-  return (u < 0 || u > 1 || v < 0 || v > 1) ? null : { u, v };
-}
-
-function cameraCandidates(p, n) {
-  const strict = [], loose = [];
-  for (const c of (DATA.cameras || [])) {
-    const dx = c.pos[0] - p.x, dy = c.pos[1] - p.y, dz = c.pos[2] - p.z;
-    const dist = Math.hypot(dx, dy, dz) || 1e-6;
-    if (!projectToCam(c, p)) continue;
-    const cos = n ? (n.x * dx + n.y * dy + n.z * dz) / dist : 1;
-    const item = { cam: c, cos, dist, score: Math.max(cos, 0) / dist };
-    loose.push(item);
-    if (!(n && cos <= 0)) strict.push(item);
+  const MARKER_PX = 5;                             // 폰 화면 기준 표식 반지름(px)
+  const marker = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0xff33cc, depthTest: false }));
+  marker.renderOrder = 999;
+  marker.visible = false;
+  scene.add(marker);
+  function sizeMarker() {
+    if (!marker.visible) return;
+    const dist = camera.position.distanceTo(marker.position);
+    const wpp = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / H();
+    marker.scale.setScalar(Math.max(wpp * MARKER_PX, bs.radius * 1e-5));
   }
-  let list = strict.length ? strict : loose;
-  if (!list.length)
-    list = (DATA.cameras || []).map(c => {
-      const dist = Math.hypot(c.pos[0] - p.x, c.pos[1] - p.y, c.pos[2] - p.z) || 1e-6;
-      return { cam: c, cos: 0, dist, score: 1 / dist };
-    });
-  return list.sort((a, b) => b.score - a.score);
-}
 
-const _camPos = new THREE.Vector3(), _occDir = new THREE.Vector3();
-function cameraSeesPoint(cam, p) {
-  _camPos.set(cam.pos[0], cam.pos[1], cam.pos[2]);
-  _occDir.copy(p).sub(_camPos);
-  const dist = _occDir.length();
-  const tol = Math.max(dist * 0.01, bs.radius * 1.5e-3);
-  if (dist <= tol) return true;
-  _occDir.divideScalar(dist);
-  return BVH.raycast(_camPos, _occDir, dist - tol, true) === null;   // 하나라도 막으면 가려짐
-}
-function pickVisibleCam(cands, p) {
-  for (let i = 0; i < cands.length && i < 16; i++)
-    if (cameraSeesPoint(cands[i].cam, p)) return cands[i].cam;
-  return cands.length ? cands[0].cam : null;
-}
+  // 탭 가속 구조 — 없으면 큰 메시에서 탭 한 번에 수십 초가 걸린다(bvh.js 머리말 참조).
+  say('탭 가속 구조 준비 중…');
+  await paint();
+  const positions = geo.attributes.position.array;
+  const BVH = buildBVH(positions, geo.index ? geo.index.array : null);
 
-// ---------- 하단 시트 ----------
-let lastPick = null;
-function showPhoto(cam, p) {
-  const img = $('photo'), mark = $('photoMark');
-  lastPick = { cam, uv: p ? projectToCam(cam, p) : null };
-  mark.style.display = 'none';
-  img.onload = () => {
-    if (!lastPick.uv) return;
-    mark.style.left = (lastPick.uv.u * 100) + '%';
-    mark.style.top = (lastPick.uv.v * 100) + '%';
-    const d = Math.max(16, img.clientWidth * 0.09);
-    mark.style.width = mark.style.height = d + 'px';
-    mark.style.display = 'block';
-  };
-  img.src = IMGS[cam.id].f;
-  $('pname').textContent = cam.source;
-  for (const el of document.querySelectorAll('#alts .alt'))
-    el.classList.toggle('sel', +el.dataset.id === cam.id);
-  $('sheet').classList.add('open');
-}
+  $('boot').style.display = 'none';
+  $('hintPill').style.display = '';
+  setTimeout(() => { $('hintPill').style.opacity = 0; }, 6000);
 
-function renderAlts(cands, p) {
-  const box = $('alts');
-  box.innerHTML = '';
-  const top = cands.slice(0, 12);
-  if (top.length < 2) { box.style.display = 'none'; return; }
-  for (const it of top) {
-    const uv = p ? projectToCam(it.cam, p) : null;
-    const el = document.createElement('div');
-    el.className = 'alt';
-    el.dataset.id = it.cam.id;
-    el.innerHTML = `<img src="${IMGS[it.cam.id].t}">`
-      + (uv ? `<div class="dot" style="left:${uv.u * 100}%;top:${uv.v * 100}%"></div>` : '');
-    el.addEventListener('click', () => showPhoto(it.cam, p));
-    box.appendChild(el);
+  // ---------- 사진 선택 (데스크톱 뷰어와 동일 로직: FOV 가드 + 가림 검사) ----------
+  function projectToCam(cam, X) {
+    const rx = X.x - cam.pos[0], ry = X.y - cam.pos[1], rz = X.z - cam.pos[2];
+    const Zc = rx * cam.fwd[0] + ry * cam.fwd[1] + rz * cam.fwd[2];
+    if (Zc <= 1e-6) return null;
+    const Xc = rx * cam.right[0] + ry * cam.right[1] + rz * cam.right[2];
+    const Yc = -(rx * cam.up[0] + ry * cam.up[1] + rz * cam.up[2]);
+    const x = Xc / Zc, y = Yc / Zc;
+    const r2 = x * x + y * y;
+    // FOV 가드 — 화각 밖 점이 왜곡식에 접혀 들어와 유효한 척하는 것을 막는다.
+    const rcx = Math.max(cam.cx, cam.w - cam.cx) / cam.fx;
+    const rcy = Math.max(cam.cy, cam.h - cam.cy) / cam.fy;
+    if (r2 > (rcx * rcx + rcy * rcy) * 1.10) return null;
+    const d = (cam.dist || []).concat([0, 0, 0, 0, 0]).slice(0, 5);
+    const rad = 1 + d[0] * r2 + d[1] * r2 * r2 + d[4] * r2 * r2 * r2;
+    const xd = x * rad + 2 * d[2] * x * y + d[3] * (r2 + 2 * x * x);
+    const yd = y * rad + d[2] * (r2 + 2 * y * y) + 2 * d[3] * x * y;
+    const u = (cam.fx * xd + cam.cx) / cam.w, v = (cam.fy * yd + cam.cy) / cam.h;
+    return (u < 0 || u > 1 || v < 0 || v > 1) ? null : { u, v };
   }
-  box.style.display = 'flex';
-}
 
-const sheetEl = $('sheet');
-function closeSheet() { sheetEl.classList.remove('open'); marker.visible = false; }
-$('closeSheet').addEventListener('click', closeSheet);
+  function cameraCandidates(p, n) {
+    const strict = [], loose = [];
+    for (const c of cams) {
+      const dx = c.pos[0] - p.x, dy = c.pos[1] - p.y, dz = c.pos[2] - p.z;
+      const dist = Math.hypot(dx, dy, dz) || 1e-6;
+      if (!projectToCam(c, p)) continue;
+      const cos = n ? (n.x * dx + n.y * dy + n.z * dz) / dist : 1;
+      const item = { cam: c, cos, dist, score: Math.max(cos, 0) / dist };
+      loose.push(item);
+      if (!(n && cos <= 0)) strict.push(item);
+    }
+    let list = strict.length ? strict : loose;
+    if (!list.length)
+      list = cams.map(c => {
+        const dist = Math.hypot(c.pos[0] - p.x, c.pos[1] - p.y, c.pos[2] - p.z) || 1e-6;
+        return { cam: c, cos: 0, dist, score: 1 / dist };
+      });
+    return list.sort((a, b) => b.score - a.score);
+  }
 
-// 시트를 아래로 끌어 닫기 — grip(슬라이드 홀더)·헤더 드래그
-let sdrag = null;
-function sheetDown(e) {
-  if (e.target.closest('#closeSheet')) return;        // ✕ 버튼은 클릭 그대로
-  sdrag = { y: e.clientY, dy: 0 };
-  sheetEl.style.transition = 'none';                  // 손가락을 즉시 따라오게
-  // 캡처는 있으면 좋을 뿐 — 실패해도 드래그 자체는 동작해야 하므로 삼킨다.
-  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
-}
-function sheetMove(e) {
-  if (!sdrag) return;
-  sdrag.dy = Math.max(0, e.clientY - sdrag.y);        // 아래로만
-  sheetEl.style.transform = `translateY(${sdrag.dy}px)`;
-}
-function sheetUp() {
-  if (!sdrag) return;
-  const dy = sdrag.dy; sdrag = null;
-  sheetEl.style.transition = '';                      // 전환 복원 → 스냅 애니메이션
-  sheetEl.style.transform = '';                       // 위치는 .open 클래스가 결정
-  if (dy > 90) closeSheet();                           // 충분히 내리면 닫고, 아니면 원위치
-}
-for (const el of [$('grip'), $('sheetHead')]) {
-  el.addEventListener('pointerdown', sheetDown);
-  el.addEventListener('pointermove', sheetMove);
-  el.addEventListener('pointerup', sheetUp);
-  el.addEventListener('pointercancel', sheetUp);
-}
+  const _camPos = new THREE.Vector3(), _occDir = new THREE.Vector3();
+  function cameraSeesPoint(cam, p) {
+    _camPos.set(cam.pos[0], cam.pos[1], cam.pos[2]);
+    _occDir.copy(p).sub(_camPos);
+    const dist = _occDir.length();
+    const tol = Math.max(dist * 0.01, bs.radius * 1.5e-3);
+    if (dist <= tol) return true;
+    _occDir.divideScalar(dist);
+    return BVH.raycast(_camPos, _occDir, dist - tol, true) === null;   // 하나라도 막으면 가려짐
+  }
+  function pickVisibleCam(cands, p) {
+    for (let i = 0; i < cands.length && i < 16; i++)
+      if (cameraSeesPoint(cands[i].cam, p)) return cands[i].cam;
+    return cands.length ? cands[0].cam : null;
+  }
 
-// ---------- 탭 처리 ----------
-const ray = new THREE.Raycaster();
-// 면 번호 → 월드 법선. 메시에 변환을 걸지 않으므로 정점 좌표가 곧 월드 좌표다.
-const _fa = new THREE.Vector3(), _fb = new THREE.Vector3(), _fc = new THREE.Vector3();
-function faceNormal(tri) {
-  const [ia, ib, ic] = BVH.faceVerts(tri);
-  _fa.fromArray(positions, ia * 3); _fb.fromArray(positions, ib * 3); _fc.fromArray(positions, ic * 3);
-  const n = _fb.sub(_fa).cross(_fc.sub(_fa));
-  return n.lengthSq() > 0 ? n.normalize().clone() : null;
-}
-function pickAt(cx, cy) {
-  const r = renderer.domElement.getBoundingClientRect();
-  if (!r.width || !r.height) return;
-  const mx = ((cx - r.left) / r.width) * 2 - 1;
-  const my = -((cy - r.top) / r.height) * 2 + 1;
-  ray.setFromCamera(new THREE.Vector2(mx, my), camera);
-  const hit = BVH.raycast(ray.ray.origin, ray.ray.direction, Infinity, false);
-  if (!hit) return;
-  const p = ray.ray.at(hit.distance, new THREE.Vector3());
-  const n = faceNormal(hit.triangle);
-  if (n && n.dot(camera.position.clone().sub(p)) < 0) n.negate();
-  marker.position.copy(p);
-  marker.visible = true;
-  const cands = cameraCandidates(p, n);
-  renderAlts(cands, p);
-  const best = pickVisibleCam(cands, p);
-  if (best) showPhoto(best, p);
-}
+  // ---------- 하단 시트 ----------
+  let lastPick = null;
+  async function showPhoto(cam, p) {
+    const img = $('photo'), mark = $('photoMark');
+    lastPick = { cam, uv: p ? projectToCam(cam, p) : null };
+    mark.style.display = 'none';
+    img.onload = () => {
+      if (!lastPick.uv) return;
+      mark.style.left = (lastPick.uv.u * 100) + '%';
+      mark.style.top = (lastPick.uv.v * 100) + '%';
+      const d = Math.max(16, img.clientWidth * 0.09);
+      mark.style.width = mark.style.height = d + 'px';
+      mark.style.display = 'block';
+    };
+    const u = await imgURL(cam.id, 'full');
+    if (u) img.src = u;
+    $('pname').textContent = cam.source;
+    for (const el of document.querySelectorAll('#alts .alt'))
+      el.classList.toggle('sel', +el.dataset.id === cam.id);
+    $('sheet').classList.add('open');
+  }
 
-let _dn = null, _dnCount = 0;
-renderer.domElement.addEventListener('pointerdown', e => {
-  _dnCount++;
-  _dn = _dnCount === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;  // 멀티터치는 탭 아님
-});
-renderer.domElement.addEventListener('pointerup', e => {
-  _dnCount = Math.max(0, _dnCount - 1);
-  if (!_dn) return;
-  const moved = Math.hypot(e.clientX - _dn.x, e.clientY - _dn.y);
-  const held = performance.now() - _dn.t;
-  _dn = null;
-  if (moved > 8 || held > 450) return;
-  pickAt(e.clientX, e.clientY);
-});
-renderer.domElement.addEventListener('pointercancel', () => { _dnCount = 0; _dn = null; });
+  function renderAlts(cands, p) {
+    const box = $('alts');
+    box.innerHTML = '';
+    const top = cands.slice(0, 12);
+    if (top.length < 2) { box.style.display = 'none'; return; }
+    for (const it of top) {
+      const uv = p ? projectToCam(it.cam, p) : null;
+      const el = document.createElement('div');
+      el.className = 'alt';
+      el.dataset.id = it.cam.id;
+      const im = document.createElement('img');
+      imgURL(it.cam.id, 'thumb').then(u => { if (u) im.src = u; });
+      el.appendChild(im);
+      if (uv) {
+        const dot = document.createElement('div');
+        dot.className = 'dot';
+        dot.style.left = (uv.u * 100) + '%';
+        dot.style.top = (uv.v * 100) + '%';
+        el.appendChild(dot);
+      }
+      el.addEventListener('click', () => showPhoto(it.cam, p));
+      box.appendChild(el);
+    }
+    box.style.display = 'flex';
+  }
 
-// ---------- 전체화면 확대 (핀치·드래그·더블탭) ----------
-const full = $('full'), stage = $('fullStage'), fimg = $('fullImg'), fmark = $('fullMark');
-let fv = { s: 1, tx: 0, ty: 0 }, fitS = 1;
-function applyFull() {
-  stage.style.transform = `translate(${fv.tx}px,${fv.ty}px) scale(${fv.s})`;
-  fmark.style.opacity = Math.max(0, Math.min(1, 1 - (fv.s / fitS - 1) / 2));
-}
-function openFull() {
-  if (!lastPick) return;
-  fimg.onload = () => {
-    const vw = innerWidth, vh = innerHeight;
-    fitS = Math.min(vw / fimg.naturalWidth, vh / fimg.naturalHeight) * 0.99;
-    fv = { s: fitS, tx: (vw - fimg.naturalWidth * fitS) / 2, ty: (vh - fimg.naturalHeight * fitS) / 2 };
-    if (lastPick.uv) {
-      const d = Math.max(30, fimg.naturalWidth * 0.05);
-      fmark.style.width = fmark.style.height = d + 'px';
-      fmark.style.left = (lastPick.uv.u * fimg.naturalWidth) + 'px';
-      fmark.style.top = (lastPick.uv.v * fimg.naturalHeight) + 'px';
-      fmark.style.display = 'block';
-    } else fmark.style.display = 'none';
-    applyFull();
-  };
-  fimg.src = IMGS[lastPick.cam.id].f;
-  full.style.display = 'block';
-}
-$('photo').addEventListener('click', openFull);
-$('fullClose').addEventListener('click', () => { full.style.display = 'none'; fimg.removeAttribute('src'); });
+  // 시트는 ✕ 버튼으로만 닫는다 — 끌어내리는 제스처는 3D 조작과 헷갈려 쓰지 않는다.
+  const sheetEl = $('sheet');
+  function closeSheet() { sheetEl.classList.remove('open'); marker.visible = false; }
+  $('closeSheet').addEventListener('click', closeSheet);
 
-const ptrs = new Map();
-let pinch0 = null, lastTap = 0;
-full.addEventListener('pointerdown', e => {
-  full.setPointerCapture(e.pointerId);
-  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (ptrs.size === 2) {
-    const [a, b] = [...ptrs.values()];
-    pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), s: fv.s,
-               cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, tx: fv.tx, ty: fv.ty };
-  } else if (ptrs.size === 1) {
-    const now = performance.now();
-    if (now - lastTap < 300) {                     // 더블탭: 확대 ↔ 원래대로
-      const target = fv.s > fitS * 1.5 ? fitS : fitS * 2.5;
-      const k = target / fv.s;
-      fv.tx = e.clientX - (e.clientX - fv.tx) * k;
-      fv.ty = e.clientY - (e.clientY - fv.ty) * k;
-      fv.s = target;
+  // ---------- 탭 처리 ----------
+  const ray = new THREE.Raycaster();
+  // 면 번호 → 월드 법선. 메시에 변환을 걸지 않으므로 정점 좌표가 곧 월드 좌표다.
+  const _fa = new THREE.Vector3(), _fb = new THREE.Vector3(), _fc = new THREE.Vector3();
+  function faceNormal(tri) {
+    const [ia, ib, ic] = BVH.faceVerts(tri);
+    _fa.fromArray(positions, ia * 3); _fb.fromArray(positions, ib * 3); _fc.fromArray(positions, ic * 3);
+    const n = _fb.sub(_fa).cross(_fc.sub(_fa));
+    return n.lengthSq() > 0 ? n.normalize().clone() : null;
+  }
+  function pickAt(cx, cy) {
+    const r = renderer.domElement.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const mx = ((cx - r.left) / r.width) * 2 - 1;
+    const my = -((cy - r.top) / r.height) * 2 + 1;
+    ray.setFromCamera(new THREE.Vector2(mx, my), camera);
+    const hit = BVH.raycast(ray.ray.origin, ray.ray.direction, Infinity, false);
+    if (!hit) return;
+    const p = ray.ray.at(hit.distance, new THREE.Vector3());
+    const n = faceNormal(hit.triangle);
+    if (n && n.dot(camera.position.clone().sub(p)) < 0) n.negate();
+    marker.position.copy(p);
+    marker.visible = true;
+    const cands = cameraCandidates(p, n);
+    renderAlts(cands, p);
+    const best = pickVisibleCam(cands, p);
+    if (best) showPhoto(best, p);
+  }
+
+  let _dn = null, _dnCount = 0;
+  renderer.domElement.addEventListener('pointerdown', e => {
+    _dnCount++;
+    _dn = _dnCount === 1 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;  // 멀티터치는 탭 아님
+  });
+  renderer.domElement.addEventListener('pointerup', e => {
+    _dnCount = Math.max(0, _dnCount - 1);
+    if (!_dn) return;
+    const moved = Math.hypot(e.clientX - _dn.x, e.clientY - _dn.y);
+    const held = performance.now() - _dn.t;
+    _dn = null;
+    if (moved > 8 || held > 450) return;
+    pickAt(e.clientX, e.clientY);
+  });
+  renderer.domElement.addEventListener('pointercancel', () => { _dnCount = 0; _dn = null; });
+
+  // ---------- 전체화면 확대 (핀치·드래그·더블탭) ----------
+  const full = $('full'), stage = $('fullStage'), fimg = $('fullImg'), fmark = $('fullMark');
+  let fv = { s: 1, tx: 0, ty: 0 }, fitS = 1;
+  function applyFull() {
+    stage.style.transform = `translate(${fv.tx}px,${fv.ty}px) scale(${fv.s})`;
+    fmark.style.opacity = Math.max(0, Math.min(1, 1 - (fv.s / fitS - 1) / 2));
+  }
+  async function openFull() {
+    if (!lastPick) return;
+    fimg.onload = () => {
+      const vw = innerWidth, vh = innerHeight;
+      fitS = Math.min(vw / fimg.naturalWidth, vh / fimg.naturalHeight) * 0.99;
+      fv = { s: fitS, tx: (vw - fimg.naturalWidth * fitS) / 2, ty: (vh - fimg.naturalHeight * fitS) / 2 };
+      if (lastPick.uv) {
+        const d = Math.max(30, fimg.naturalWidth * 0.05);
+        fmark.style.width = fmark.style.height = d + 'px';
+        fmark.style.left = (lastPick.uv.u * fimg.naturalWidth) + 'px';
+        fmark.style.top = (lastPick.uv.v * fimg.naturalHeight) + 'px';
+        fmark.style.display = 'block';
+      } else fmark.style.display = 'none';
+      applyFull();
+    };
+    const u = await imgURL(lastPick.cam.id, 'full');
+    if (u) fimg.src = u;
+    full.style.display = 'block';
+  }
+  $('photo').addEventListener('click', openFull);
+  $('fullClose').addEventListener('click', () => { full.style.display = 'none'; });
+
+  const ptrs = new Map();
+  let pinch0 = null, lastTap = 0;
+  full.addEventListener('pointerdown', e => {
+    try { full.setPointerCapture(e.pointerId); } catch (_) {}
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      pinch0 = { d: Math.hypot(a.x - b.x, a.y - b.y), s: fv.s,
+                 cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, tx: fv.tx, ty: fv.ty };
+    } else if (ptrs.size === 1) {
+      const now = performance.now();
+      if (now - lastTap < 300) {                     // 더블탭: 확대 ↔ 원래대로
+        const target = fv.s > fitS * 1.5 ? fitS : fitS * 2.5;
+        const k = target / fv.s;
+        fv.tx = e.clientX - (e.clientX - fv.tx) * k;
+        fv.ty = e.clientY - (e.clientY - fv.ty) * k;
+        fv.s = target;
+        applyFull();
+      }
+      lastTap = now;
+    }
+  });
+  full.addEventListener('pointermove', e => {
+    if (!ptrs.has(e.pointerId)) return;
+    const prev = ptrs.get(e.pointerId);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 2 && pinch0) {
+      const [a, b] = [...ptrs.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const ns = Math.max(fitS * 0.5, Math.min(fitS * 40, pinch0.s * d / pinch0.d));
+      const cx2 = (a.x + b.x) / 2, cy2 = (a.y + b.y) / 2;
+      fv.tx = cx2 - (pinch0.cx - pinch0.tx) * (ns / pinch0.s);
+      fv.ty = cy2 - (pinch0.cy - pinch0.ty) * (ns / pinch0.s);
+      fv.s = ns;
+      applyFull();
+    } else if (ptrs.size === 1) {
+      fv.tx += e.clientX - prev.x;
+      fv.ty += e.clientY - prev.y;
       applyFull();
     }
-    lastTap = now;
-  }
-});
-full.addEventListener('pointermove', e => {
-  if (!ptrs.has(e.pointerId)) return;
-  const prev = ptrs.get(e.pointerId);
-  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (ptrs.size === 2 && pinch0) {
-    const [a, b] = [...ptrs.values()];
-    const d = Math.hypot(a.x - b.x, a.y - b.y);
-    const ns = Math.max(fitS * 0.5, Math.min(fitS * 40, pinch0.s * d / pinch0.d));
-    const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-    fv.tx = cx - (pinch0.cx - pinch0.tx) * (ns / pinch0.s);
-    fv.ty = cy - (pinch0.cy - pinch0.ty) * (ns / pinch0.s);
-    fv.s = ns;
-    applyFull();
-  } else if (ptrs.size === 1) {
-    fv.tx += e.clientX - prev.x;
-    fv.ty += e.clientY - prev.y;
-    applyFull();
-  }
-});
-const endPtr = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; };
-full.addEventListener('pointerup', endPtr);
-full.addEventListener('pointercancel', endPtr);
+  });
+  const endPtr = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; };
+  full.addEventListener('pointerup', endPtr);
+  full.addEventListener('pointercancel', endPtr);
 
-// ---------- 루프 (적응 해상도) ----------
-addEventListener('resize', () => {
-  camera.aspect = W() / H();
-  camera.updateProjectionMatrix();
-  renderer.setSize(W(), H());
-});
-let _ratio = MAX_RATIO, _acc = 0, _n = 0, _idle = 0;
-function adapt(dt) {
-  _acc += dt; _n++;
-  if (_n < 20) return;
-  const fps = _n / _acc;
-  _acc = 0; _n = 0;
-  const moving = _idle < 0.4;
-  let want = _ratio;
-  if (moving && fps < 35) want = Math.max(0.55, _ratio - 0.25);
-  else if (!moving || fps > 55) want = Math.min(MAX_RATIO, _ratio + 0.25);
-  if (Math.abs(want - _ratio) > 0.01) {
-    _ratio = want;
-    renderer.setPixelRatio(_ratio);
+  // ---------- 루프 (적응 해상도) ----------
+  addEventListener('resize', () => {
+    camera.aspect = W() / H();
+    camera.updateProjectionMatrix();
     renderer.setSize(W(), H());
+  });
+  let _ratio = MAX_RATIO, _acc = 0, _n = 0, _idle = 0;
+  function adapt(dt) {
+    _acc += dt; _n++;
+    if (_n < 20) return;
+    const fps = _n / _acc;
+    _acc = 0; _n = 0;
+    const moving = _idle < 0.4;
+    let want = _ratio;
+    if (moving && fps < 35) want = Math.max(0.55, _ratio - 0.25);
+    else if (!moving || fps > 55) want = Math.min(MAX_RATIO, _ratio + 0.25);
+    if (Math.abs(want - _ratio) > 0.01) {
+      _ratio = want;
+      renderer.setPixelRatio(_ratio);
+      renderer.setSize(W(), H());
+    }
   }
+  controls.addEventListener('change', () => { _idle = 0; });
+  const _clock = new THREE.Clock();
+  (function loop() {
+    requestAnimationFrame(loop);
+    const dt = Math.min(_clock.getDelta(), 0.25);
+    _idle += dt;
+    controls.update();
+    sizeMarker();
+    renderer.render(scene, camera);
+    adapt(dt);
+  })();
 }
-controls.addEventListener('change', () => { _idle = 0; });
-const _clock = new THREE.Clock();
-(function loop() {
-  requestAnimationFrame(loop);
-  const dt = Math.min(_clock.getDelta(), 0.25);
-  _idle += dt;
-  controls.update();
-  sizeMarker();
-  renderer.render(scene, camera);
-  adapt(dt);
-})();
 </script>
 </body></html>

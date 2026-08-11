@@ -189,7 +189,9 @@ def build_report(folder, ply_path, out_path, log, progress):
                 },
                 "cameras": cams,
             }
-            z.writestr("meta.json", json.dumps(meta, ensure_ascii=False), zipfile.ZIP_DEFLATED)
+            # 무압축 — 모바일 뷰어가 브라우저에서 압축 해제 없이 바로 읽는다(구형 폰 대응).
+            # 카메라 수백 대라도 수백 KB 수준이라 용량 이득이 의미 없다.
+            z.writestr("meta.json", json.dumps(meta, ensure_ascii=False), zipfile.ZIP_STORED)
         os.replace(tmp, out_path)
     except BaseException:
         if os.path.exists(tmp):
