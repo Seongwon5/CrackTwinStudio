@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+import { buildBVH } from '/bvh.js';
 
 const REPORT = window.__VIEWER_REPORT__;
 const _q = encodeURIComponent(REPORT);
@@ -102,6 +103,13 @@ function sizeMarker() {
   const worldPerPx = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * dist / H();
   marker.scale.setScalar(Math.max(worldPerPx * MARKER_PX, bs.radius * 1e-5));
 }
+
+// 클릭 가속 구조 — 없으면 큰 메시에서 클릭 한 번에 수 초가 걸린다(bvh.js 머리말 참조).
+// 구축은 메인 스레드를 수 초 잡으므로, 안내 문구가 실제로 그려진 뒤에 시작한다.
+_say('클릭 가속 구조 준비 중…');
+await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+const BVH = buildBVH(geo.attributes.position.array,
+                     geo.index ? geo.index.array : null);
 
 _boot.style.display = 'none';
 
@@ -210,7 +218,6 @@ function syncAltSelection(cam) {
 // 카메라에서 클릭 점까지의 시야가 트였는지 — 사이를 다른 면이 막고 있으면 그 사진엔 이 점이 안 보인다.
 // 사진측량 모델은 자기 가림이 많아, 기하학적으로 프레임 안이어도 실제로는 가려진 카메라가 흔하다(댐 실측 ~24%).
 // 이 검사가 없으면 점수 1등 사진이 엉뚱한 표면을 가리켜 붉은 점이 어긋난다. 작은 볼록 모델은 가림이 없어 티가 안 났다.
-const _occRay = new THREE.Raycaster();
 const _camPos = new THREE.Vector3(), _occDir = new THREE.Vector3();
 function cameraSeesPoint(cam, p) {
   _camPos.set(cam.pos[0], cam.pos[1], cam.pos[2]);
@@ -218,10 +225,9 @@ function cameraSeesPoint(cam, p) {
   const dist = _occDir.length();
   const tol = Math.max(dist * 0.01, bs.radius * 1.5e-3);   // 점 자신·메시 노이즈를 가림으로 오인하지 않게
   if (dist <= tol) return true;
-  _occRay.set(_camPos, _occDir.divideScalar(dist));
-  _occRay.near = 0;
-  _occRay.far = dist - tol;                                // 점보다 '앞'을 막는 면만 검사
-  return _occRay.intersectObject(mesh, false).length === 0;
+  _occDir.divideScalar(dist);
+  // 점보다 '앞'을 막는 면이 하나라도 있으면 가려진 것 — 가장 가까운 것을 찾을 필요는 없다.
+  return BVH.raycast(_camPos, _occDir, dist - tol, true) === null;
 }
 
 // 점수 순으로 내려가며 실제로 보이는 첫 카메라를 고른다. 전부 가려지면 최고점으로 되돌린다(표시 자체는 유지).
@@ -236,24 +242,31 @@ function pickVisibleCam(cands, p) {
 
 const ray = new THREE.Raycaster();
 
+// 면 번호 → 월드 법선. 메시에 변환을 걸지 않으므로 정점 좌표가 곧 월드 좌표다.
+const _fa = new THREE.Vector3(), _fb = new THREE.Vector3(), _fc = new THREE.Vector3();
+function faceNormal(tri) {
+  const P = geo.attributes.position.array;
+  const [ia, ib, ic] = BVH.faceVerts(tri);
+  _fa.fromArray(P, ia * 3); _fb.fromArray(P, ib * 3); _fc.fromArray(P, ic * 3);
+  const n = _fb.sub(_fa).cross(_fc.sub(_fa));
+  return n.lengthSq() > 0 ? n.normalize().clone() : null;
+}
+
 function pickAt(clientX, clientY) {
   const r = renderer.domElement.getBoundingClientRect();
   if (!r.width || !r.height) return false;
   const mx = ((clientX - r.left) / r.width) * 2 - 1;
   const my = -((clientY - r.top) / r.height) * 2 + 1;
   ray.setFromCamera(new THREE.Vector2(mx, my), camera);
-  const hit = ray.intersectObject(mesh, false);
-  if (!hit.length) return false;
+  const hit = BVH.raycast(ray.ray.origin, ray.ray.direction, Infinity, false);
+  if (!hit) return false;
 
-  const p = hit[0].point;
-  let n = null;
-  if (hit[0].face) {
-    n = hit[0].face.normal.clone()
-      .applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
-    // 클릭했다는 건 이 면이 지금 보인다는 뜻 — 법선을 시점 쪽으로 맞춰 바깥을 확정한다.
-    // PLY의 면 winding이 일관되지 않아도 앞/뒤 판정이 뒤집히지 않는다.
-    if (n.dot(camera.position.clone().sub(p)) < 0) n.negate();
-  }
+  const p = ray.ray.at(hit.distance, new THREE.Vector3());
+  // 맞은 면의 법선을 세 정점으로 직접 구한다(BVH 는 면 번호만 돌려준다).
+  const n = faceNormal(hit.triangle);
+  // 클릭했다는 건 이 면이 지금 보인다는 뜻 — 법선을 시점 쪽으로 맞춰 바깥을 확정한다.
+  // PLY의 면 winding이 일관되지 않아도 앞/뒤 판정이 뒤집히지 않는다.
+  if (n && n.dot(camera.position.clone().sub(p)) < 0) n.negate();
   marker.position.copy(p);
   marker.visible = true;
 

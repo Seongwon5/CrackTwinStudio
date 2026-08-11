@@ -140,6 +140,12 @@ def _oc_source():
     return src
 
 
+def _bvh_source():
+    """bvh.js → export 를 떼어 인라인 가능한 본문으로. three 의존이 없어 변환은 이것뿐이다."""
+    src = open(os.path.join(UI, "bvh.js"), encoding="utf-8").read()
+    return re.sub(r"^export\s+", "", src, flags=re.MULTILINE)
+
+
 def export_mobile(twin_path, out_path=None, log=print):
     """단일 HTML 모바일 뷰어를 생성하고 경로를 반환한다."""
     out_path = out_path or os.path.splitext(twin_path)[0] + "_mobile.html"
@@ -173,6 +179,7 @@ def export_mobile(twin_path, out_path=None, log=print):
             .replace("__TITLE__", name)
             .replace("__THREE_SRC__", _esc(open(os.path.join(LIBS, "three.module.js"), encoding="utf-8").read()))
             .replace("__OC_SRC__", _esc(_oc_source()))
+            .replace("__BVH_SRC__", _esc(_bvh_source()))
             .replace("__META__", _esc(json.dumps({"name": name, "cameras": cams}, ensure_ascii=False)))
             .replace("__IMGS__", _esc(json.dumps(imgs)))
             .replace("__MESH_B64__", mesh_b64))
