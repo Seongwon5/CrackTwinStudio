@@ -34,7 +34,11 @@ html,body{width:100%;height:100%;overflow:hidden;background:#14181d;
   padding:8px 12px calc(10px + env(safe-area-inset-bottom));max-height:62%;
   display:flex;flex-direction:column;gap:8px;touch-action:pan-y}
 #sheet.open{transform:translateY(0)}
-#grip{align-self:center;width:44px;height:4px;border-radius:2px;background:#3a4550;flex:none}
+/* 슬라이드 홀더 — 실제 크기는 44×4 지만 위아래 패딩으로 터치 영역을 넓힌다(내려서 닫기) */
+#grip{align-self:center;width:44px;height:4px;border-radius:2px;background:#3a4550;flex:none;
+  box-sizing:content-box;padding:10px 36px;background-clip:content-box;
+  cursor:grab;touch-action:none}
+#sheetHead{touch-action:none}
 #sheetHead{display:flex;align-items:center;gap:8px;flex:none}
 #pname{flex:1;font-size:12px;color:#9ab;font-family:ui-monospace,monospace;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -294,10 +298,36 @@ function renderAlts(cands, p) {
   box.style.display = 'flex';
 }
 
-$('closeSheet').addEventListener('click', () => {
-  $('sheet').classList.remove('open');
-  marker.visible = false;
-});
+const sheetEl = $('sheet');
+function closeSheet() { sheetEl.classList.remove('open'); marker.visible = false; }
+$('closeSheet').addEventListener('click', closeSheet);
+
+// 시트를 아래로 끌어 닫기 — grip(슬라이드 홀더)·헤더 드래그
+let sdrag = null;
+function sheetDown(e) {
+  if (e.target.closest('#closeSheet')) return;        // ✕ 버튼은 클릭 그대로
+  sdrag = { y: e.clientY, dy: 0 };
+  sheetEl.style.transition = 'none';                  // 손가락을 즉시 따라오게
+  e.currentTarget.setPointerCapture(e.pointerId);
+}
+function sheetMove(e) {
+  if (!sdrag) return;
+  sdrag.dy = Math.max(0, e.clientY - sdrag.y);        // 아래로만
+  sheetEl.style.transform = `translateY(${sdrag.dy}px)`;
+}
+function sheetUp() {
+  if (!sdrag) return;
+  const dy = sdrag.dy; sdrag = null;
+  sheetEl.style.transition = '';                      // 전환 복원 → 스냅 애니메이션
+  sheetEl.style.transform = '';                       // 위치는 .open 클래스가 결정
+  if (dy > 90) closeSheet();                           // 충분히 내리면 닫고, 아니면 원위치
+}
+for (const el of [$('grip'), $('sheetHead')]) {
+  el.addEventListener('pointerdown', sheetDown);
+  el.addEventListener('pointermove', sheetMove);
+  el.addEventListener('pointerup', sheetUp);
+  el.addEventListener('pointercancel', sheetUp);
+}
 
 // ---------- 탭 처리 ----------
 const ray = new THREE.Raycaster();

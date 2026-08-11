@@ -4,10 +4,10 @@
 산출물은 서버·설치 없이 폰 브라우저에서 바로 열리는 자체완결 파일이다.
 three.js·조작 코드·메시·사진을 전부 한 파일에 인라인한다.
 
-파일이 무한정 커지지 않도록 두 가지를 줄인다:
-  메시  — 정점 격자 병합(vertex clustering)으로 목표 면 수 이하로 다운샘플 후
-          컴팩트 바이너리(f32 위치 + u8 색 + u32 인덱스)로 재포장
-  사진  — 최대변 MOBILE_FULL_PX·품질 MOBILE_JPEG_Q 로 재인코딩
+다운샘플 없이 원본 그대로 담는다:
+  메시  — 전체 정점·면을 컴팩트 바이너리(f32 위치 + u8 색 + u32 인덱스)로 재포장
+  사진  — .twin 에 들어 있는 이미지 바이트를 그대로 임베드(썸네일만 작게 재인코딩)
+주의: 메시·사진이 크면 결과 HTML 도 커진다(폰 메모리에 따라 로딩이 느릴 수 있음).
 
 ESM 모듈(three)은 단일 파일에서 <script src>로 불러올 수 없으므로,
 소스를 text/plain 으로 심어 두고 런타임에 Blob URL 로 동적 import 한다.
@@ -26,9 +26,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LIBS = os.path.join(HERE, "libs")
 UI = os.path.join(HERE, "ui")
 
-MAX_FACES = 400_000            # 모바일 GPU·파싱 시간 기준 상한
-MOBILE_FULL_PX = 1600          # 사진 최대변(px)
-MOBILE_JPEG_Q = 70
+THUMB_PX = 320                 # 하단 썸네일 스트립용(작게 재인코딩)
+THUMB_Q = 60
 
 
 # ────────────────────────────────────────────────────────── PLY 파싱
@@ -93,45 +92,7 @@ def parse_ply(buf):
     return pos, col, faces
 
 
-# ────────────────────────────────────────────────────────── 다운샘플·포장
-def decimate(pos, col, faces, max_faces):
-    """정점 격자 병합 다운샘플 — 격자 크기를 이분 탐색해 면 수를 목표 이하로."""
-    if len(faces) <= max_faces:
-        return pos, col, faces
-    diag = float(np.linalg.norm(pos.max(0) - pos.min(0))) or 1.0
-    lo, hi = diag / 4096, diag / 8               # 격자 한 변 탐색 구간
-    best = None
-    for _ in range(10):
-        mid = (lo + hi) / 2
-        key = np.floor(pos / mid).astype(np.int64)
-        _, inv = np.unique(key, axis=0, return_inverse=True)
-        f = inv[faces]
-        valid = (f[:, 0] != f[:, 1]) & (f[:, 1] != f[:, 2]) & (f[:, 0] != f[:, 2])
-        nf = int(valid.sum())
-        if nf <= max_faces:
-            best = (mid, nf)
-            hi = mid                              # 더 세밀하게 시도
-        else:
-            lo = mid
-    voxel = best[0] if best else hi
-    key = np.floor(pos / voxel).astype(np.int64)
-    uniq, inv = np.unique(key, axis=0, return_inverse=True)
-    V = len(uniq)
-    np_pos = np.zeros((V, 3), np.float64)
-    cnt = np.bincount(inv, minlength=V).astype(np.float64)[:, None]
-    for k in range(3):
-        np_pos[:, k] = np.bincount(inv, weights=pos[:, k], minlength=V)
-    np_pos /= cnt
-    if col is not None:
-        nc = np.zeros((V, 3), np.float64)
-        for k in range(3):
-            nc[:, k] = np.bincount(inv, weights=col[:, k].astype(np.float64), minlength=V)
-        col = (nc / cnt).clip(0, 255).astype(np.uint8)
-    f = inv[faces]
-    valid = (f[:, 0] != f[:, 1]) & (f[:, 1] != f[:, 2]) & (f[:, 0] != f[:, 2])
-    return np_pos, col, f[valid]
-
-
+# ────────────────────────────────────────────────────────── 포장
 def pack_mesh(pos, col, faces):
     """[u32 V][u32 F] + f32 pos + u8 col(+4바이트 정렬 패딩) + u32 idx → base64."""
     V, F = len(pos), len(faces)
@@ -146,7 +107,15 @@ def pack_mesh(pos, col, faces):
 
 
 # ────────────────────────────────────────────────────────── 사진
+def _embed_raw(z, name):
+    """.twin 안 이미지 바이트를 재인코딩 없이 그대로 data URI 로 임베드(원본 화질 유지)."""
+    with z.open(name) as f:
+        raw = f.read()
+    return "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+
+
 def _reencode(z, name, max_px, q):
+    """썸네일 스트립용 — 최대변 max_px 로 축소해 재인코딩(파일 크기 절감)."""
     with z.open(name) as f:
         im = Image.open(io.BytesIO(f.read())).convert("RGB")
     s = max_px / max(im.size)
@@ -180,9 +149,7 @@ def export_mobile(twin_path, out_path=None, log=print):
         meta = json.loads(z.read("meta.json").decode("utf-8"))
         log("메시 파싱…")
         pos, col, faces = parse_ply(z.read("mesh.ply"))
-        log(f"  원본 {len(pos):,} 정점 · {len(faces):,} 면")
-        pos, col, faces = decimate(pos, col, faces, MAX_FACES)
-        log(f"  다운샘플 → {len(pos):,} 정점 · {len(faces):,} 면")
+        log(f"  전체 메시 그대로 담기 — {len(pos):,} 정점 · {len(faces):,} 면")
         mesh_b64, V, F = pack_mesh(pos, col, faces)
 
         cams = []
@@ -195,8 +162,8 @@ def export_mobile(twin_path, out_path=None, log=print):
             cams.append({k: c[k] for k in
                          ("id", "source", "pos", "fwd", "up", "right",
                           "fx", "fy", "cx", "cy", "w", "h", "dist") if k in c})
-            full = _reencode(z, f"img/{cid:04d}_full.jpg", MOBILE_FULL_PX, MOBILE_JPEG_Q)
-            thumb = _reencode(z, f"img/{cid:04d}_thumb.jpg", 320, 60)
+            full = _embed_raw(z, f"img/{cid:04d}_full.jpg")     # 원본 화질 그대로
+            thumb = _reencode(z, f"img/{cid:04d}_thumb.jpg", THUMB_PX, THUMB_Q)
             imgs[str(cid)] = {"f": full, "t": thumb}
             total += len(full) + len(thumb)
             log(f"  사진 {i + 1}/{len(cam_list)}")
