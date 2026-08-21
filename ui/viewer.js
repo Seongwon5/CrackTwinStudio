@@ -1,6 +1,5 @@
 // viewer.js — 3D 모델을 돌려보고, 표면 한 점을 클릭하면 그 지점을 찍은 사진을 보여준다.
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { buildBVH } from '/bvh.js';
 import { shiftToLocalOrigin } from '/origin.js';
@@ -46,6 +45,35 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x14181d);
 const camera = new THREE.PerspectiveCamera(60, W() / H(), 0.01, 1000);
 
+// ---------------------------------------------------------------- FPS 카메라
+// 좌드래그=시점 회전 · WASD/Space/Ctrl=이동 · 우클릭 홀드=확대(FOV) · 휠=전진/후진.
+// 궤도(orbit)·패닝은 없다 — 회전 중심이 따로 없으니 벽면에 바짝 붙어 훑는 조작이 자연스럽다.
+// 시선은 yaw(월드 Z축 회전) + pitch(수평선 기준 올려본 각)로만 표현한다. 따라서:
+//  · camera.up 은 항상 (0,0,1) — 롤이 생길 수 없다
+//  · pitch 는 언제나 atan2(dz, 수평거리) 로 계산 → 부호가 뒤집힐 경로가 없다(상하 반전 금지)
+let camYaw = 0, camPitch = 0;
+const PITCH_LIMIT = Math.PI / 2 - 0.02;          // 수직(±90°)에서 lookAt 특이점 회피
+const BASE_FOV = 60, SCOPE_FOV = 22;             // 우클릭 스코프 확대 FOV
+let scoping = false;                             // 우클릭 홀드 중?
+let _idle = 0;                                   // 마지막 조작 이후 흐른 시간(초) — 해상도 적응이 읽는다
+const _ld = new THREE.Vector3();
+const clampPitch = p => Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p));
+
+function lookDir(out) {                          // yaw/pitch → 단위 시선 벡터(Z-up)
+  const cp = Math.cos(camPitch);
+  return out.set(cp * Math.cos(camYaw), cp * Math.sin(camYaw), Math.sin(camPitch));
+}
+function applyLook() {                           // 현재 위치에서 yaw/pitch 방향을 바라보게
+  lookDir(_ld);
+  camera.up.set(0, 0, 1);                        // 매 프레임 강제 → up 절대 불변
+  camera.lookAt(camera.position.x + _ld.x, camera.position.y + _ld.y, camera.position.z + _ld.z);
+}
+function lookToward(fromV, toV) {                // 한 점을 바라보도록 yaw/pitch 설정(일관 부호)
+  const dx = toV.x - fromV.x, dy = toV.y - fromV.y, dz = toV.z - fromV.z;
+  camYaw = Math.atan2(dy, dx);
+  camPitch = clampPitch(Math.atan2(dz, Math.hypot(dx, dy)));
+}
+
 // 큰 절대좌표(UTM)를 국소좌표로 — float32 로 내려가기 전에 옮겨야 한다(origin.js 머리말 참조).
 // 메시·카메라가 같은 만큼 이동하므로 투영·거리·법선은 그대로고, 정밀도만 회복된다.
 shiftToLocalOrigin(_meshBuf, DATA);
@@ -78,12 +106,9 @@ camera.near = bs.radius / 100;
 camera.far = bs.radius * 100;
 camera.updateProjectionMatrix();
 
-// 좌드래그 회전 · 휠 확대 · 우드래그 이동. up을 컨트롤 생성 전에 정해야 회전축이 Z로 고정된다.
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.copy(bs.center);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.update();
+const modelDiag = bb.getSize(new THREE.Vector3()).length();   // 이동 속도·휠 보폭의 기준 크기
+lookToward(camera.position, bs.center);          // 모델 중심을 바라보게 yaw/pitch 초기화
+applyLook();
 
 // 바닥 그리드 — 모델 최저면에 깔아 크기·자세의 기준을 준다
 const grid = new THREE.GridHelper(bb.getSize(new THREE.Vector3()).length() * 1.5, 50, 0x5a6672, 0x333c45);
@@ -282,19 +307,89 @@ function pickAt(clientX, clientY) {
   return true;
 }
 
-// 짧은 탭만 클릭으로 인정한다 — 드래그(회전)와 구분.
-let _dn = null;
-renderer.domElement.addEventListener('pointerdown', e => {
-  _dn = { x: e.clientX, y: e.clientY, t: performance.now() };
+// ---- FPS 입력: 좌드래그=시점 회전 · 짧은 탭=사진 선택 · 우클릭 홀드=스코프 확대 ----
+// 좌버튼을 누른 뒤 4px 넘게 움직이거나 180ms 넘게 유지하면 '시점 모드'로 확정한다.
+// → 짧게 탭하면 그 지점의 사진, 살짝만 끌거나 조금 오래 눌러도 곧바로 시점 회전으로 넘어간다.
+const LOOK_SENS = 0.0025, HOLD_MS = 180, MOVE_PX = 4;
+const _drag = { down: false, sx: 0, sy: 0, lx: 0, ly: 0, t: 0, look: false };
+renderer.domElement.addEventListener('mousedown', e => {
+  if (e.button === 2) { scoping = true; e.preventDefault(); return; }   // 우클릭 = 스코프
+  if (e.button !== 0) return;
+  Object.assign(_drag, { down: true, look: false, sx: e.clientX, sy: e.clientY,
+                         lx: e.clientX, ly: e.clientY, t: performance.now() });
 });
-renderer.domElement.addEventListener('pointerup', e => {
-  if (!_dn) return;
-  const moved = Math.hypot(e.clientX - _dn.x, e.clientY - _dn.y);
-  const held = performance.now() - _dn.t;
-  _dn = null;
-  if (moved > 5 || held > 400 || e.button !== 0) return;
-  pickAt(e.clientX, e.clientY);
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());   // 우클릭 메뉴 차단
+addEventListener('mousemove', e => {
+  if (!_drag.down) return;
+  if (!_drag.look && (Math.abs(e.clientX - _drag.sx) + Math.abs(e.clientY - _drag.sy) > MOVE_PX
+                      || performance.now() - _drag.t > HOLD_MS)) {
+    _drag.look = true;
+  }
+  if (_drag.look) {
+    camYaw -= (e.clientX - _drag.lx) * LOOK_SENS;                        // 좌우: yaw
+    camPitch = clampPitch(camPitch - (e.clientY - _drag.ly) * LOOK_SENS);// 상하: pitch(반전 없음)
+    _idle = 0;
+  }
+  _drag.lx = e.clientX; _drag.ly = e.clientY;
 });
+addEventListener('mouseup', e => {
+  if (e.button === 2) { scoping = false; return; }
+  if (e.button !== 0 || !_drag.down) return;
+  _drag.down = false;
+  if (!_drag.look && performance.now() - _drag.t <= HOLD_MS) pickAt(e.clientX, e.clientY);
+});
+addEventListener('blur', () => { _drag.down = false; _drag.look = false; scoping = false; });
+
+// 휠 = 시선 방향 전진/후진(줌). 위로 굴리면 전진. Shift 로 4배 가속. 방향은 그대로 유지된다.
+renderer.domElement.addEventListener('wheel', e => {
+  e.preventDefault();
+  const step = modelDiag * 0.004 * (e.shiftKey ? 4 : 1) * (e.deltaY < 0 ? 1 : -1);
+  camera.position.addScaledVector(lookDir(_ld), step);
+  _idle = 0;
+}, { passive: false });
+
+// ---- WASD 자유 이동(플라이) ----
+// 시선(yaw/pitch)은 그대로 두고 카메라 위치만 옮긴다 — 방향은 루프의 applyLook() 이 매 프레임 유지.
+// 속도는 모델 크기에 비례(모델이 570m든 50m든 체감 일정). Space/Ctrl 은 시선과 무관하게 월드 상하.
+const _keys = new Set();
+const _MOVE = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ControlLeft', 'ControlRight'];
+// 지금 입력 칸에 타이핑 중인가 — 맞으면 WASD 를 이동으로 가로채지 않는다.
+function _typingTarget() {
+  const t = document.activeElement, tag = t && t.tagName;
+  return tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+}
+addEventListener('keydown', e => {
+  if (_typingTarget()) return;
+  if (_MOVE.includes(e.code)) { _keys.add(e.code); e.preventDefault(); }        // Space 스크롤 방지
+  else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') _keys.add(e.code);// 가속(단축키 방해 X)
+});
+addEventListener('keyup', e => { _keys.delete(e.code); });
+addEventListener('blur', () => _keys.clear());   // 포커스 이탈 시 키 잔류로 계속 움직이는 것 방지
+
+const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _move = new THREE.Vector3();
+let _flyRamp = 0;                                // 0→1 가속 램프
+const FLY_ACCEL = 1.2;                           // 최대 속도까지 걸리는 시간(초)
+const FLY_MIN = 0.05;                            // 시작 속도 = 최대의 5% (천천히 출발)
+// 멈췄다 다시 누르면 램프가 0부터라 항상 천천히 출발한다. Shift 는 4배 가속.
+function updateFly(dt) {
+  const f = (_keys.has('KeyW') ? 1 : 0) - (_keys.has('KeyS') ? 1 : 0);
+  const r = (_keys.has('KeyD') ? 1 : 0) - (_keys.has('KeyA') ? 1 : 0);
+  const u = (_keys.has('Space') ? 1 : 0)
+          - ((_keys.has('ControlLeft') || _keys.has('ControlRight')) ? 1 : 0);
+  if (!f && !r && !u) { _flyRamp = 0; return; }   // 멈추면 램프 리셋 → 다음엔 다시 천천히 출발
+  _flyRamp = Math.min(1, _flyRamp + dt / FLY_ACCEL);
+  lookDir(_fwd);
+  _right.crossVectors(_fwd, camera.up).normalize();
+  _move.set(0, 0, 0).addScaledVector(_fwd, f).addScaledVector(_right, r);
+  _move.z += u;                                  // 상하는 월드 Z(카메라가 어딜 보든 위/아래)
+  if (_move.lengthSq() === 0) return;
+  _move.normalize();                             // 대각 이동이 빨라지지 않게
+  const sprint = (_keys.has('ShiftLeft') || _keys.has('ShiftRight')) ? 4 : 1;
+  const speed = FLY_MIN + (1 - FLY_MIN) * _flyRamp;             // 처음 느리게 → 가속 → 최대
+  _move.multiplyScalar(modelDiag * 0.15 * dt * sprint * speed); // 모델 크기 비례 속도
+  camera.position.add(_move);                    // 위치만 이동(방향은 applyLook 이 유지)
+  _idle = 0;
+}
 
 // ---------------------------------------------------------------- 확대 창
 
@@ -397,13 +492,15 @@ const GZ = (function () {
     return e;
   };
 
-  // 그 축 방향에서 모델 중심을 본다(거리 유지). ±Z는 up과 시선이 평행한 특이점이라 살짝 비껴 세운다.
+  // 그 축 방향에서 모델 중심을 본다(현재 거리 유지). ±Z는 시선이 up과 평행해지는 특이점이라
+  // 살짝 비껴 세운다 — clampPitch 가 잘라 주지만 yaw 가 불안정해지는 것을 막는다.
   function snapView(dir) {
-    const dist = camera.position.distanceTo(controls.target);
-    const p = controls.target.clone().addScaledVector(dir, dist);
+    const dist = camera.position.distanceTo(bs.center);
+    const p = bs.center.clone().addScaledVector(dir, dist);
     if (Math.abs(dir.z) > 0.99) p.y -= dist * 0.02;
     camera.position.copy(p);
-    controls.update();
+    lookToward(camera.position, bs.center);      // 방향은 yaw/pitch 로 — 루프의 applyLook 이 반영
+    _idle = 0;
   }
 
   const nodes = [];
@@ -456,7 +553,7 @@ addEventListener('resize', () => {
 
 // 조작 중 프레임이 떨어지면 내부 해상도를 낮추고, 여유가 생기거나 멈추면 되돌린다.
 // 큰 메시에서 병목은 대개 픽셀이라 해상도를 줄이면 바로 회복된다.
-let _ratio = MAX_RATIO, _acc = 0, _n = 0, _idle = 0;
+let _ratio = MAX_RATIO, _acc = 0, _n = 0;
 const MIN_RATIO = 0.6;
 
 function adapt(dt) {
@@ -475,14 +572,20 @@ function adapt(dt) {
   }
 }
 
-controls.addEventListener('change', () => { _idle = 0; });
-
 const _clock = new THREE.Clock();
 (function loop() {
   requestAnimationFrame(loop);
   const dt = Math.min(_clock.getDelta(), 0.25);
   _idle += dt;
-  controls.update();
+  updateFly(dt);                                 // WASD 이동(위치만) — _idle 도 여기서 리셋된다
+  // 우클릭 스코프: fov 를 목표값으로 부드럽게 좁혔다 되돌린다
+  const fovT = scoping ? SCOPE_FOV : BASE_FOV;
+  if (Math.abs(camera.fov - fovT) > 0.05) {
+    camera.fov += (fovT - camera.fov) * Math.min(1, dt * 12);
+    camera.updateProjectionMatrix();
+    _idle = 0;
+  }
+  applyLook();                                   // yaw/pitch(+이동된 위치)를 반영 · up 항상 Z
   GZ.update();
   sizeMarker();
   renderer.render(scene, camera);
