@@ -59,8 +59,9 @@ def build_viewer(out_path=None, log=print):
             .replace("__PLY_SRC__", _esc(_fn_source(os.path.join(LIBS, "addons", "loaders", "PLYLoader.js"))))
             .replace("__BVH_SRC__", _esc(_plain_source(os.path.join(UI, "bvh.js"))))
             .replace("__LOD_SRC__", _esc(_plain_source(os.path.join(UI, "lod.js"))))
+            .replace("__ORIGIN_SRC__", _esc(_plain_source(os.path.join(UI, "origin.js"))))
             .replace("__ZIP_SRC__", _esc(_module_source(os.path.join(UI, "twin_reader.js")))))
-    left = re.findall(r"__(?:THREE_SRC|OC_SRC|PLY_SRC|BVH_SRC|LOD_SRC|ZIP_SRC)__", html)
+    left = re.findall(r"__(?:THREE_SRC|OC_SRC|PLY_SRC|BVH_SRC|LOD_SRC|ORIGIN_SRC|ZIP_SRC)__", html)
     if left:
         raise RuntimeError("치환되지 않은 자리표시자: " + ", ".join(sorted(set(left))))
 

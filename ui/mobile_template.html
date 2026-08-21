@@ -117,6 +117,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#14181d;
 <script type="text/plain" id="src-ply">__PLY_SRC__</script>
 <script type="text/plain" id="src-bvh">__BVH_SRC__</script>
 <script type="text/plain" id="src-lod">__LOD_SRC__</script>
+<script type="text/plain" id="src-origin">__ORIGIN_SRC__</script>
 <script type="text/plain" id="src-zip">__ZIP_SRC__</script>
 
 <script type="module">
@@ -132,6 +133,7 @@ const OrbitControls = new Function('THREE', grab('src-oc') + '\nreturn OrbitCont
 const PLYLoader = new Function('THREE', grab('src-ply') + '\nreturn PLYLoader;')(THREE);
 const buildBVH = new Function(grab('src-bvh') + '\nreturn buildBVH;')();
 const buildLOD = new Function(grab('src-lod') + '\nreturn buildLOD;')();
+const shiftToLocalOrigin = new Function(grab('src-origin') + '\nreturn shiftToLocalOrigin;')();
 const openTwin = await (async () => {
   const src = grab('src-zip');
   const m = await import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
@@ -191,6 +193,8 @@ async function run(file) {
   const meshBuf = await twin.bytes('mesh.ply');
   say('3D 모델 푸는 중…');
   await paint();
+  // 큰 절대좌표(UTM)를 국소좌표로 — float32 로 내려가기 전에 옮긴다(origin.js 머리말 참조).
+  shiftToLocalOrigin(meshBuf, DATA);
   const geo = new PLYLoader().parse(meshBuf);
 
   // ---------- 3D 무대 ----------

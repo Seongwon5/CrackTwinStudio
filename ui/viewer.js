@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { buildBVH } from '/bvh.js';
+import { shiftToLocalOrigin } from '/origin.js';
 
 const REPORT = window.__VIEWER_REPORT__;
 const _q = encodeURIComponent(REPORT);
@@ -44,6 +45,10 @@ view.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x14181d);
 const camera = new THREE.PerspectiveCamera(60, W() / H(), 0.01, 1000);
+
+// 큰 절대좌표(UTM)를 국소좌표로 — float32 로 내려가기 전에 옮겨야 한다(origin.js 머리말 참조).
+// 메시·카메라가 같은 만큼 이동하므로 투영·거리·법선은 그대로고, 정밀도만 회복된다.
+shiftToLocalOrigin(_meshBuf, DATA);
 
 const geo = new PLYLoader().parse(_meshBuf); _meshBuf = null;
 const hasColor = geo.hasAttribute('color');
