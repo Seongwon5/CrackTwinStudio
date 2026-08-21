@@ -76,6 +76,119 @@ try {
 document.getElementById('hdrCounts').textContent =
   `분석 이미지: ${DATA.counts.cameras}장 · 검출 포인트: ${DATA.counts.hotspots}개`;
 
+// ================= 좌표 원점 이동(float32 정밀도 확보) =================
+// PLY 와 meta 는 UTM 절대좌표(예: Y≈4,113,800)를 double 로 담는데, three.js 는 위치를
+// Float32BufferAttribute 로만 GPU 에 올린다. float32 의 눈금 간격은 값 크기에 비례하므로
+// Y≈4.11e6 에서 0.25 m, X≈3.0e5 에서 0.031 m 다 — 삼각형 변(≈57mm)보다 큰 단차라
+// 표면이 한 방향으로 계단처럼 층이 지고, 크랙 튜브 중심선도 함께 밀린다.
+//   실측(100MEDIA): 벽면 평면 잔차 14.8mm → 46.9mm · 리본 중심선 변위 중앙 98.7mm
+// 그래서 그리기 전에 메시 바이너리와 meta 좌표에서 같은 원점을 뺀다. 원점 근처(±300m)면
+// 눈금이 0.03mm 로 떨어져 사실상 무손실이다.
+//
+// .twin 파일은 건드리지 않는다 — 메모리 안에서만 옮기며, 기존 보고서도 그대로 열린다.
+// 대신 화면·CSV 에 절대좌표를 내보내는 자리에서는 wpt() 로 원점을 다시 더한다.
+// 길이·거리·각도는 차분량이라 이동과 무관하다(캘리브레이션·측정 결과 불변).
+const _PLY_SZ = {char:1, uchar:1, int8:1, uint8:1, short:2, ushort:2, int16:2, uint16:2,
+                 int:4, uint:4, int32:4, uint32:4, float:4, float32:4, double:8, float64:8};
+
+// PLY 헤더를 읽어 vertex 블록의 x/y/z 바이트 위치를 찾는다.
+// 이동을 안전하게 적용할 수 없는 형식이면 null 을 돌려준다(호출측은 원본 그대로 진행).
+function plyVertexLayout(buf){
+  const head = new TextDecoder('latin1').decode(
+    new Uint8Array(buf, 0, Math.min(buf.byteLength, 1 << 16)));
+  const m = /end_header[ \t]*\r?\n/.exec(head);
+  if(!m) return null;
+  const lines = head.slice(0, m.index).split(/\r?\n/).map(s => s.trim());
+  const fmt = lines.find(l => l.startsWith('format '));
+  if(!fmt || !/^format\s+binary_little_endian/.test(fmt)) return null;   // ascii·big-endian 은 미지원
+  // 첫 element 가 vertex 여야 한다 — 앞에 다른 요소가 있으면 시작 오프셋을 확정할 수 없다.
+  const ei = lines.findIndex(l => l.startsWith('element '));
+  if(ei < 0) return null;
+  const ep = lines[ei].split(/\s+/);
+  if(ep[1] !== 'vertex') return null;
+  const count = parseInt(ep[2], 10);
+  if(!(count > 0)) return null;
+  let off = 0; const at = {}, ty = {};
+  for(let i = ei + 1; i < lines.length; i++){
+    const l = lines[i];
+    if(l.startsWith('element ')) break;                 // vertex 요소 끝
+    if(!l.startsWith('property ')) continue;
+    const p = l.split(/\s+/);
+    if(p[1] === 'list') return null;                    // 가변 길이 → 고정 스트라이드 불가
+    const sz = _PLY_SZ[p[1]];
+    if(!sz) return null;                                // 모르는 타입 → 안전하게 포기
+    if(p[2] === 'x' || p[2] === 'y' || p[2] === 'z'){ at[p[2]] = off; ty[p[2]] = p[1]; }
+    off += sz;
+  }
+  if(at.x == null || at.y == null || at.z == null) return null;
+  if(ty.x !== ty.y || ty.y !== ty.z) return null;       // 축마다 타입이 다르면 미지원
+  const dbl = (ty.x === 'double' || ty.x === 'float64');
+  if(!dbl && !(ty.x === 'float' || ty.x === 'float32')) return null;
+  const dataStart = m.index + m[0].length;
+  if(dataStart + count * off > buf.byteLength) return null;   // 헤더와 실제 크기가 어긋남
+  return {dataStart, count, stride: off, off: [at.x, at.y, at.z], dbl};
+}
+
+// vertex 를 성글게 훑어 경계상자 중심(정수 m)을 구한다. 원점은 대충 가운데면 충분하므로
+// 최대 20만 점만 표본으로 본다(GB 급 메시에서 전수 조회를 피한다).
+function plyOrigin(buf, L){
+  const dv = new DataView(buf), get = L.dbl ? 'getFloat64' : 'getFloat32';
+  const step = Math.max(1, Math.floor(L.count / 200000));
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for(let i = 0; i < L.count; i += step){
+    const b = L.dataStart + i * L.stride;
+    for(let k = 0; k < 3; k++){
+      const v = dv[get](b + L.off[k], true);
+      if(v < lo[k]) lo[k] = v;
+      if(v > hi[k]) hi[k] = v;
+    }
+  }
+  return lo.map((v, k) => Math.round((v + hi[k]) / 2));
+}
+
+// vertex 블록의 x/y/z 에서 원점을 뺀다(버퍼 제자리 수정).
+function plyShift(buf, L, O){
+  const dv = new DataView(buf);
+  const get = L.dbl ? 'getFloat64' : 'getFloat32', set = L.dbl ? 'setFloat64' : 'setFloat32';
+  for(let i = 0; i < L.count; i++){
+    const b = L.dataStart + i * L.stride;
+    for(let k = 0; k < 3; k++){
+      const a = b + L.off[k];
+      dv[set](a, dv[get](a, true) - O[k], true);
+    }
+  }
+}
+
+let WORLD_ORIGIN = [0, 0, 0];        // 국소좌표에 더하면 보고서 원본(절대) 좌표가 된다
+(function shiftToLocalOrigin(){
+  const L = plyVertexLayout(_meshBuf);
+  if(!L){
+    console.warn('[좌표] PLY 형식을 해석할 수 없어 원점 이동을 건너뜁니다. ' +
+                 '절대좌표가 크면 표면이 계단처럼 보일 수 있습니다.');
+    return;
+  }
+  const O = plyOrigin(_meshBuf, L);
+  if(!O.every(Number.isFinite)) return;
+  if(Math.max(...O.map(Math.abs)) < 1024) return;      // 이미 국소좌표 — 옮길 이유가 없다
+  _say('좌표계 정리 중...');
+  plyShift(_meshBuf, L, O);
+  WORLD_ORIGIN = O;
+  const sub = p => { p[0] -= O[0]; p[1] -= O[1]; p[2] -= O[2]; };
+  (DATA.cameras || []).forEach(c => sub(c.pos));       // fwd/up/right 는 방향 — 건드리지 않는다
+  (DATA.ribbons || []).forEach(r => (r.poly || []).forEach(sub));   // poly_n 도 방향이라 제외
+  (DATA.hotspots || []).forEach(h => { if(h.xyz) sub(h.xyz); if(h.poly) h.poly.forEach(sub); });
+  (DATA.text_points || []).forEach(sub);
+  console.info('[좌표] 원점 이동 적용:', O.join(', '));
+})();
+// 국소좌표 → 표시용 절대좌표
+const wpt = p => [p[0] + WORLD_ORIGIN[0], p[1] + WORLD_ORIGIN[1], p[2] + WORLD_ORIGIN[2]];
+// 좌표 한 줄 표기(회색). 화면에는 국소좌표가 아니라 보고서 원본 좌표를 보여준다.
+function fmtXYZ(p, d = 2){
+  const w = wpt(p);
+  return '<span style="color:#888">X ' + w[0].toFixed(d) +
+         '  Y ' + w[1].toFixed(d) + '  Z ' + w[2].toFixed(d) + '</span>';
+}
+
 // ===== 검사원 검토(확인/유형수정/오탐) — 사이드카(<twin>.review.json) 영속 =====
 // (유형 분류는 폐지됨 — 검토는 확인/오탐/메모만. 오탐 라벨은 검출 모델 재학습 데이터가 된다.)
 let REVIEW = {version:1, reviews:{}};
@@ -674,6 +787,10 @@ async function loadGhost(){
     const Tp=new THREE.Matrix4().fromArray([].concat(...prev.T_to_ref)).transpose();  // 행우선→Matrix4
     const Tc=new THREE.Matrix4().fromArray([].concat(...cur.T_to_ref)).transpose();
     const M=new THREE.Matrix4().copy(Tc).invert().multiply(Tp);   // 이전좌표 → 현재좌표
+    // 이전 meta 는 절대좌표 그대로다(원점 이동은 현재 DATA 에만 적용됨) → 변환 뒤 원점을 빼
+    // 현재 국소좌표계에 맞춘다. 변환에 이어붙이면 점마다 따로 뺄 필요가 없다.
+    M.premultiply(new THREE.Matrix4().makeTranslation(
+      -WORLD_ORIGIN[0], -WORLD_ORIGIN[1], -WORLD_ORIGIN[2]));
     const missSet=new Set(CMP.missingPrev);
     const segMiss=[], segMatch=[]; const v=new THREE.Vector3();
     const rbs = meta.ribbons || (meta.hotspots||[]).filter(h=>h.poly);
@@ -1001,8 +1118,9 @@ function selectCamera(c, fly){
   selectedCam = g; setCamColor(g, CAM_YELLOW);
   document.getElementById('caminfo').style.display='block';
   document.getElementById('camName').textContent = c.source;
+  const _cw = wpt(c.pos);                          // 국소좌표 → 보고서 원본 좌표로 되돌려 표시
   document.getElementById('camCoord').innerHTML =
-    'X : '+c.pos[0].toFixed(3)+'<br>Y : '+c.pos[1].toFixed(3)+'<br>Z : '+c.pos[2].toFixed(3);
+    'X : '+_cw[0].toFixed(3)+'<br>Y : '+_cw[1].toFixed(3)+'<br>Z : '+_cw[2].toFixed(3);
   document.querySelectorAll('.imgItem').forEach(el=>el.classList.toggle('active', el.dataset.src===c.source));
   if(fly) flyToCamera(c);
 }
@@ -1078,7 +1196,7 @@ function renderImageList(cams, hotspot, uvmap, info){
   document.getElementById('imgReset').style.display = (hotspot || info) ? 'inline-block' : 'none';
   document.getElementById('imgHot').innerHTML = info ? info : (hotspot
     ? ('▶ "'+fmtHotText(hotspot)+'" · 신뢰도 '+(hotspot.conf*100).toFixed(0)+'% · '+cams.length+'장<br>'+
-       '<span style="color:#888">X '+hotspot.xyz[0].toFixed(2)+'  Y '+hotspot.xyz[1].toFixed(2)+'  Z '+hotspot.xyz[2].toFixed(2)+'</span>')
+       fmtXYZ(hotspot.xyz))
     : (allCams.length+'장 · 이미지를 클릭하면 촬영 카메라 시점으로 이동합니다.'));
   cams.forEach(c=>{
     const el=document.createElement('div'); el.className='imgItem'; el.dataset.src=c.source;
@@ -1266,7 +1384,7 @@ function showHotspotRep(h){
       + ` · ${fmtLen(h)}`
     : (h.text||'크랙')) + _gr + _fl + cmpLine(_hi) + _cmp;
   document.getElementById('imgHot').innerHTML =
-    '▶ '+wtxt+'<br><span style="color:#888">X '+h.xyz[0].toFixed(2)+'  Y '+h.xyz[1].toFixed(2)+'  Z '+h.xyz[2].toFixed(2)+'</span>'
+    '▶ '+wtxt+'<br>'+fmtXYZ(h.xyz)
     + buildReviewRow(_hi);
   wireReviewRow(_hi, h);
   const items=document.getElementById('imgItems'); items.innerHTML='';
@@ -2048,7 +2166,7 @@ function clCsvText(){
       _rv.state||'', '"'+String(_rv.note||'').replace(/"/g,'""')+'"',
       fx(cmm(h.width_mm_median)), fx(cmm(h.width_mm_max)), fx(cmm(h.width_mm_p95)), fx(cmm(h.width_mm_3d)),
       fx(cmm(h.length_mm)), fx(ltot(h)), (h.views||[]).length, h.conf??'',
-      h.xyz[0], h.xyz[1], h.xyz[2], calibScale,
+      ...wpt(h.xyz), calibScale,                       // CSV 는 보고서 원본(절대) 좌표로 내보낸다
       '"'+(h.views||[]).map(v=>v.source).join('|')+'"'].join(','));
   }
   return lines.join('\r\n');
