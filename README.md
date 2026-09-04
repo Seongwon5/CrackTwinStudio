@@ -89,6 +89,8 @@ python app.py
 app.py            실행 진입점 (대시보드 + 멀티윈도우)
 backend.py        로컬 서버 (라우팅 · .twin 스트리밍 · 백그라운드 잡)
 pipeline.py       분석 파이프라인 (기하 · 검출 · 정량화 · 융합 · 저장)
+tiler.py          PLY → 계층 LOD 타일 (6GB 메시 지원 · docs/DEV_LOD.md)
+build.py          배포용 빌드 (PyInstaller 폴더 배포)
 ui/               대시보드 + three.js 뷰어
 libs/             three.js r160 오프라인 번들
 network/          best.pt 언피클용 DeepLabV3+ 패키지
@@ -105,7 +107,8 @@ docs/             개발자 문서 · 사용자 매뉴얼 · 설계 문서
 | 멤버 | 내용 |
 |---|---|
 | `meta.json` | 카메라 포즈 · 균열 통계 · 형상(ribbons) — 기하만 |
-| `mesh.ply` | 원본 메시 (바이너리 스트리밍) |
+| `tiles/N.bin` | 계층 LOD 타일 — 뷰어가 보이는 것만 거리별 해상도로 스트리밍 (면 수 제한 없음) |
+| `mesh.ply` | 타일로 만들 수 없는 PLY 일 때만 원본 메시 |
 | `img/NNNN_thumb.jpg` / `_full.jpg` / `_mask.png` | 썸네일 / 원본 / 검출 마스크 |
 
 파일 하나만 옮기면 다른 PC에서 그대로 열립니다.

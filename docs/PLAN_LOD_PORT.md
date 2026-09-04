@@ -1,4 +1,8 @@
-# 계층 LOD 타일 — main 브랜치 포팅 계획
+# 계층 LOD 타일 — main 브랜치 포팅 계획 (완료 · 2026-09-04)
+
+> 아래 계획은 전부 반영됐다: `tools/twin_mesh.py`(정점 표본) · `ui/viewer.js` 6개 지점 · `ui/origin.js` 분리 ·
+> `KEEP_MESH_PLY = False` · 문서. 검증: choco(타일/옛 보고서) 지점 검사 클릭, 울산 6GB 타일 7,071개 로드.
+> 이후 참고용으로 남긴다.
 
 > 원본 구현·설계 근거는 viewer-simple 브랜치의 `docs/DEV_LOD.md` 를 보세요.
 > 이 문서는 main 에서 **무엇이 이미 들어왔고, 무엇을 더 해야 하는지**를 적은 작업 계획입니다.

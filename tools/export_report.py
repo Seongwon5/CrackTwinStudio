@@ -169,11 +169,8 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
         # ---------- 2) 위치도 ----------
         log("[2/4] 위치도(메시 실루엣 + 균열 등급색) …")
         try:
-            import trimesh
-            mesh = trimesh.load(io.BytesIO(z.read("mesh.ply")), file_type="ply", process=False)
-            V = np.asarray(mesh.vertices, float)
-            if len(V) > 60000:
-                V = V[np.random.default_rng(0).choice(len(V), 60000, replace=False)]
+            import twin_mesh                                       # mesh.ply · LOD 타일 둘 다
+            V = twin_mesh.vertex_sample(z, 60000, seed=0, meta=meta)
             c = V.mean(0)
             _, _, Vt = np.linalg.svd(V - c, full_matrices=False)      # 지배 평면(주성분 1·2축) 투영
             e1, e2 = Vt[0], Vt[1]

@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+import { buildBVH } from '/bvh.js';
+import { buildLOD } from '/lod.js';
+import { shiftToLocalOrigin, shiftMetaOrigin } from '/origin.js';
+import { createTileSet, parseTile, legacySource } from '/tiles.js';
 
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0e1319);
 // Z축을 위(UP)로 설정 (일반적인 드론/사진 측량 좌표계)
@@ -63,12 +67,27 @@ async function _fetch(url, as) {
 const _boot = document.getElementById('bootMsg');
 const _say = m => { if (_boot) _boot.textContent = m; };
 
-let DATA, _meshBuf;
+let DATA, tileSrc;
+let WORLD_ORIGIN = [0, 0, 0];        // 국소좌표에 더하면 보고서 원본(절대) 좌표가 된다(아래 원점 이동 참조)
 try {
   _say('보고서 메타 읽는 중...');
   DATA = await _fetch(api('meta'), 'json');
-  _say(`3D 메시 받는 중... (카메라 ${DATA.counts.cameras}대 · 크랙 ${DATA.counts.hotspots}개)`);
-  _meshBuf = await _fetch(api('mesh'), 'buf');
+  if (DATA.tiles) {
+    // 계층 LOD 타일 보고서(tiler.py) — 타일 좌표는 이미 국소좌표라 meta 쪽만 같은 원점으로 맞춘다.
+    WORLD_ORIGIN = DATA.tiles.origin.slice();
+    shiftMetaOrigin(DATA, WORLD_ORIGIN);
+    const color = !!DATA.tiles.color;
+    tileSrc = { nodes: DATA.tiles.nodes, root: DATA.tiles.root, box: DATA.tiles.box, color,
+                load: async id => parseTile(THREE, await _fetch(api('tile', `&id=${id}`), 'buf'), !color) };
+    _say(`3D 타일 ${DATA.tiles.nodes.length.toLocaleString()}개 (카메라 ${DATA.counts.cameras}대 · 크랙 ${DATA.counts.hotspots}개) — 첫 화면 준비 중...`);
+  } else {
+    // 옛 보고서(mesh.ply) — 통째로 받아 간략 메시(lod.js) + 원본의 두 단계 타일셋으로 감싼다.
+    _say(`3D 메시 받는 중... (카메라 ${DATA.counts.cameras}대 · 크랙 ${DATA.counts.hotspots}개)`);
+    const buf = await _fetch(api('mesh'), 'buf');
+    _say('좌표계 정리 중...');
+    WORLD_ORIGIN = shiftToLocalOrigin(buf, DATA);     // origin.js — 메시 바이너리와 meta 를 같은 원점으로
+    tileSrc = legacySource(THREE, buildLOD, new PLYLoader().parse(buf), 700000);
+  }
 } catch (e) {
   _say('보고서를 열 수 없습니다: ' + e.message);
   throw e;
@@ -78,108 +97,12 @@ document.getElementById('hdrCounts').textContent =
 
 // ================= 좌표 원점 이동(float32 정밀도 확보) =================
 // PLY 와 meta 는 UTM 절대좌표(예: Y≈4,113,800)를 double 로 담는데, three.js 는 위치를
-// Float32BufferAttribute 로만 GPU 에 올린다. float32 의 눈금 간격은 값 크기에 비례하므로
-// Y≈4.11e6 에서 0.25 m, X≈3.0e5 에서 0.031 m 다 — 삼각형 변(≈57mm)보다 큰 단차라
-// 표면이 한 방향으로 계단처럼 층이 지고, 크랙 튜브 중심선도 함께 밀린다.
-//   실측(100MEDIA): 벽면 평면 잔차 14.8mm → 46.9mm · 리본 중심선 변위 중앙 98.7mm
-// 그래서 그리기 전에 메시 바이너리와 meta 좌표에서 같은 원점을 뺀다. 원점 근처(±300m)면
-// 눈금이 0.03mm 로 떨어져 사실상 무손실이다.
-//
-// .twin 파일은 건드리지 않는다 — 메모리 안에서만 옮기며, 기존 보고서도 그대로 열린다.
-// 대신 화면·CSV 에 절대좌표를 내보내는 자리에서는 wpt() 로 원점을 다시 더한다.
+// Float32BufferAttribute 로만 GPU 에 올린다. 값이 크면 눈금이 0.25 m 까지 벌어져 표면이 계단처럼
+// 층지고 크랙 튜브 중심선도 밀린다(실측·근거는 ui/origin.js 머리말). 그래서 그리기 전에 같은 원점을 뺀다.
+//   · 타일 보고서: tiler.py 가 생성 시 원점을 빼 두었고 meta.tiles.origin 에 적어 둔다 → meta 만 옮긴다
+//   · 옛 보고서  : origin.js 의 shiftToLocalOrigin 이 메시 바이너리와 meta 를 함께 옮긴다
+// 화면·CSV 에 절대좌표를 내보내는 자리에서는 wpt() 로 원점을 다시 더한다.
 // 길이·거리·각도는 차분량이라 이동과 무관하다(캘리브레이션·측정 결과 불변).
-const _PLY_SZ = {char:1, uchar:1, int8:1, uint8:1, short:2, ushort:2, int16:2, uint16:2,
-                 int:4, uint:4, int32:4, uint32:4, float:4, float32:4, double:8, float64:8};
-
-// PLY 헤더를 읽어 vertex 블록의 x/y/z 바이트 위치를 찾는다.
-// 이동을 안전하게 적용할 수 없는 형식이면 null 을 돌려준다(호출측은 원본 그대로 진행).
-function plyVertexLayout(buf){
-  const head = new TextDecoder('latin1').decode(
-    new Uint8Array(buf, 0, Math.min(buf.byteLength, 1 << 16)));
-  const m = /end_header[ \t]*\r?\n/.exec(head);
-  if(!m) return null;
-  const lines = head.slice(0, m.index).split(/\r?\n/).map(s => s.trim());
-  const fmt = lines.find(l => l.startsWith('format '));
-  if(!fmt || !/^format\s+binary_little_endian/.test(fmt)) return null;   // ascii·big-endian 은 미지원
-  // 첫 element 가 vertex 여야 한다 — 앞에 다른 요소가 있으면 시작 오프셋을 확정할 수 없다.
-  const ei = lines.findIndex(l => l.startsWith('element '));
-  if(ei < 0) return null;
-  const ep = lines[ei].split(/\s+/);
-  if(ep[1] !== 'vertex') return null;
-  const count = parseInt(ep[2], 10);
-  if(!(count > 0)) return null;
-  let off = 0; const at = {}, ty = {};
-  for(let i = ei + 1; i < lines.length; i++){
-    const l = lines[i];
-    if(l.startsWith('element ')) break;                 // vertex 요소 끝
-    if(!l.startsWith('property ')) continue;
-    const p = l.split(/\s+/);
-    if(p[1] === 'list') return null;                    // 가변 길이 → 고정 스트라이드 불가
-    const sz = _PLY_SZ[p[1]];
-    if(!sz) return null;                                // 모르는 타입 → 안전하게 포기
-    if(p[2] === 'x' || p[2] === 'y' || p[2] === 'z'){ at[p[2]] = off; ty[p[2]] = p[1]; }
-    off += sz;
-  }
-  if(at.x == null || at.y == null || at.z == null) return null;
-  if(ty.x !== ty.y || ty.y !== ty.z) return null;       // 축마다 타입이 다르면 미지원
-  const dbl = (ty.x === 'double' || ty.x === 'float64');
-  if(!dbl && !(ty.x === 'float' || ty.x === 'float32')) return null;
-  const dataStart = m.index + m[0].length;
-  if(dataStart + count * off > buf.byteLength) return null;   // 헤더와 실제 크기가 어긋남
-  return {dataStart, count, stride: off, off: [at.x, at.y, at.z], dbl};
-}
-
-// vertex 를 성글게 훑어 경계상자 중심(정수 m)을 구한다. 원점은 대충 가운데면 충분하므로
-// 최대 20만 점만 표본으로 본다(GB 급 메시에서 전수 조회를 피한다).
-function plyOrigin(buf, L){
-  const dv = new DataView(buf), get = L.dbl ? 'getFloat64' : 'getFloat32';
-  const step = Math.max(1, Math.floor(L.count / 200000));
-  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-  for(let i = 0; i < L.count; i += step){
-    const b = L.dataStart + i * L.stride;
-    for(let k = 0; k < 3; k++){
-      const v = dv[get](b + L.off[k], true);
-      if(v < lo[k]) lo[k] = v;
-      if(v > hi[k]) hi[k] = v;
-    }
-  }
-  return lo.map((v, k) => Math.round((v + hi[k]) / 2));
-}
-
-// vertex 블록의 x/y/z 에서 원점을 뺀다(버퍼 제자리 수정).
-function plyShift(buf, L, O){
-  const dv = new DataView(buf);
-  const get = L.dbl ? 'getFloat64' : 'getFloat32', set = L.dbl ? 'setFloat64' : 'setFloat32';
-  for(let i = 0; i < L.count; i++){
-    const b = L.dataStart + i * L.stride;
-    for(let k = 0; k < 3; k++){
-      const a = b + L.off[k];
-      dv[set](a, dv[get](a, true) - O[k], true);
-    }
-  }
-}
-
-let WORLD_ORIGIN = [0, 0, 0];        // 국소좌표에 더하면 보고서 원본(절대) 좌표가 된다
-(function shiftToLocalOrigin(){
-  const L = plyVertexLayout(_meshBuf);
-  if(!L){
-    console.warn('[좌표] PLY 형식을 해석할 수 없어 원점 이동을 건너뜁니다. ' +
-                 '절대좌표가 크면 표면이 계단처럼 보일 수 있습니다.');
-    return;
-  }
-  const O = plyOrigin(_meshBuf, L);
-  if(!O.every(Number.isFinite)) return;
-  if(Math.max(...O.map(Math.abs)) < 1024) return;      // 이미 국소좌표 — 옮길 이유가 없다
-  _say('좌표계 정리 중...');
-  plyShift(_meshBuf, L, O);
-  WORLD_ORIGIN = O;
-  const sub = p => { p[0] -= O[0]; p[1] -= O[1]; p[2] -= O[2]; };
-  (DATA.cameras || []).forEach(c => sub(c.pos));       // fwd/up/right 는 방향 — 건드리지 않는다
-  (DATA.ribbons || []).forEach(r => (r.poly || []).forEach(sub));   // poly_n 도 방향이라 제외
-  (DATA.hotspots || []).forEach(h => { if(h.xyz) sub(h.xyz); if(h.poly) h.poly.forEach(sub); });
-  (DATA.text_points || []).forEach(sub);
-  console.info('[좌표] 원점 이동 적용:', O.join(', '));
-})();
 // 국소좌표 → 표시용 절대좌표
 const wpt = p => [p[0] + WORLD_ORIGIN[0], p[1] + WORLD_ORIGIN[1], p[2] + WORLD_ORIGIN[2]];
 // 좌표 한 줄 표기(회색). 화면에는 국소좌표가 아니라 보고서 원본 좌표를 보여준다.
@@ -369,32 +292,37 @@ renderMeta();
 const gridGroup = new THREE.Group();
 scene.add(gridGroup);
 
-let globalMesh = null;
+// ================= 3D 메시: 계층 LOD 타일 (ui/tiles.js 머리말 참조) =================
+// 처음엔 루트 타일 하나로 그리고, 카메라가 다가가는 영역만 세밀한 타일로 바꿔 간다.
+// 6GB(면 1억 9천만) 메시도 화면엔 수백만 면만 올라간다. 모든 타일이 meshMat 하나를 공유한다.
+let globalMesh = null;                   // 타일 그룹(THREE.Group) — 예전 단일 Mesh 자리
+let meshMat = null;                      // 타일 공용 재질(어두운 메시 토글이 만진다)
+let tiles = null;                        // 타일셋 — update/raycast/faceNormal/box/sphere
 let originalMeshColor = 0xcccccc;
 let hasVertexColors = false;
 let sceneCenter = new THREE.Vector3();   // 물체 중심(회전 피벗 기준)
 
 try {
-  const geo = new PLYLoader().parse(_meshBuf);   // 바이너리 그대로 → atob/base64 불필요
-  _meshBuf = null;                               // 파싱 후 원본 버퍼는 놔줄 수 있다(GB 급)
-  geo.computeVertexNormals();
-  hasVertexColors = !!geo.getAttribute('color');
+  hasVertexColors = !!tileSrc.color;
   originalMeshColor = hasVertexColors ? 0xffffff : 0xcccccc;
-  
-  globalMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-      vertexColors: hasVertexColors, 
-      color: originalMeshColor, 
-      side: THREE.DoubleSide
-  }));
+  // DoubleSide — LOD 타일은 요약 과정에서 감기 방향이 뒤집힐 수 있다(tiler.py simplify 참조)
+  meshMat = new THREE.MeshBasicMaterial({ vertexColors: hasVertexColors, color: originalMeshColor,
+                                         side: THREE.DoubleSide });
+  // 예산: 화면 500만 면 · 타일 1.5GB · 정제 문턱 2px(조작 중 5px). 넘치면 문턱이 스스로 올라간다.
+  tiles = createTileSet({ THREE, buildBVH }, tileSrc,
+                        { material: meshMat, triBudget: 5e6, byteBudget: 1.5e9, ssePx: 2, movingScale: 2.5 });
+  await tiles.ready;                     // 루트 타일 도착 → 경계·중심을 안다
+  globalMesh = tiles.group;
   scene.add(globalMesh);
-  
-  geo.computeBoundingSphere(); const s=geo.boundingSphere;
+  window.__tiles = tiles;                // 개발자 도구 디버그용(__tiles.stats)
+
+  const s = tiles.sphere;
   sceneCenter.copy(s.center);
   camera.position.copy(s.center).add(new THREE.Vector3(0,-s.radius*2.5,s.radius*0.6));
   lookToward(camera.position, s.center);         // 중심을 바라보게 yaw/pitch 초기화
   camera.near=s.radius/100; camera.far=s.radius*100; camera.updateProjectionMatrix(); applyLook();
 } catch(e) {
-  alert('내장 3D 모델(PLY) 로드 실패: ' + e);
+  alert('내장 3D 모델 로드 실패: ' + e);
 }
 
 // 둥근 점 텍스처(가운데 꽉 찬 원 + 부드러운 가장자리). PointsMaterial 기본은 각진 사각형이라
@@ -1567,7 +1495,8 @@ let baseScale=1;
 // 메시 크기를 재서 모델 의존 값들을 한 번에 정한다 — 화면상 크기 기준(baseScale),
 // 카메라 글리프, 바닥 그리드와 좌표축. 메시 로드가 끝난 뒤 한 번 부른다.
 function fitSizes(){
-  const box = new THREE.Box3().setFromObject(globalMesh || scene);
+  // 타일 그룹은 타일이 흘러들어오는 중이라 setFromObject 로는 경계를 못 잰다 — 타일 메타의 전체 경계를 쓴다
+  const box = tiles ? tiles.box.clone() : new THREE.Box3().setFromObject(scene);
   const d = box.getSize(new THREE.Vector3()).length();
   baseScale = d * 0.005;
   modelDiag = d; buildCameras(d);
@@ -1591,7 +1520,7 @@ function fitSizes(){
   axesHelper.material.linewidth = 3;
   gridGroup.add(axesHelper);
 }
-setTimeout(fitSizes, 500);
+fitSizes();                              // 경계는 tiles.ready 시점에 확정돼 있다(지연 불필요)
 
 // 이벤트 리스너: UI 기능 매핑
 document.getElementById('ckRibbon').onchange = e => { ribbonGroup.visible = e.target.checked; };
@@ -1612,17 +1541,17 @@ document.getElementById('ckGrid').onchange = e => { gridGroup.visible = e.target
 
 // 메쉬 다크 모드 스위치
 document.getElementById('ckDarkMesh').onchange = e => {
-  if(!globalMesh) return;
+  if(!meshMat) return;                   // 모든 타일이 meshMat 하나를 공유하므로 한 번만 바꾸면 된다
   if(e.target.checked) {
       // 메시를 매우 어두운 색상으로 변경하고 고유 색상(VertexColor) 비활성화
-      globalMesh.material.color.setHex(0x111111);
-      if(globalMesh.material.vertexColors) globalMesh.material.vertexColors = false;
+      meshMat.color.setHex(0x111111);
+      if(meshMat.vertexColors) meshMat.vertexColors = false;
   } else {
       // 원래 상태로 복구
-      globalMesh.material.color.setHex(originalMeshColor);
-      if(hasVertexColors) globalMesh.material.vertexColors = true;
+      meshMat.color.setHex(originalMeshColor);
+      if(hasVertexColors) meshMat.vertexColors = true;
   }
-  globalMesh.material.needsUpdate = true;
+  meshMat.needsUpdate = true;
 };
 
 // 상호작용 (Raycaster)
@@ -1821,17 +1750,18 @@ function setMode(m){
 
 // 표면 한 점 픽킹(월드 좌표 + 표면 법선)
 function pickMesh(e){
-  if(!globalMesh) return null;
+  if(!tiles) return null;
   const mx=(e.clientX/innerWidth)*2-1, my=-(e.clientY/innerHeight)*2+1;
   ray.setFromCamera(new THREE.Vector2(mx,my), camera);
-  const hit=ray.intersectObject(globalMesh,false);
-  if(!hit.length) return null;
-  const h=hit[0]; let normal=null;
-  if(h.face){
-    normal=h.face.normal.clone()
-      .applyMatrix3(new THREE.Matrix3().getNormalMatrix(globalMesh.matrixWorld)).normalize();
-  }
-  return {point:h.point.clone(), normal};
+  // 지금 그려지는 타일에 대해 교차(타일별 BVH 는 처음 광선이 지날 때 만들어 붙여 둔다).
+  // 타일에 변환을 걸지 않으므로 정점 좌표가 곧 월드 좌표다.
+  const h = tiles.raycast(ray.ray.origin, ray.ray.direction, Infinity, false);
+  if(!h) return null;
+  const point = ray.ray.at(h.distance, new THREE.Vector3());
+  const normal = tiles.faceNormal(h);
+  // 클릭했다는 건 이 면이 보인다는 뜻 — 법선을 시점 쪽으로 맞춘다(타일은 감기 방향을 보장하지 않는다)
+  if(normal && normal.dot(camera.position.clone().sub(point)) < 0) normal.negate();
+  return {point, normal};
 }
 
 // 측정 끝점 구슬 하나(깊이 테스트 없음 → 메시에 가려지지 않는다, 화면상 크기 고정).
@@ -2352,6 +2282,7 @@ function snapView(dirWorld){                          // 모델 중심을 dirWor
 }
 
 const _clock=new THREE.Clock();
+const _camPrev = new THREE.Matrix4(); let _camIdle = 9;   // 카메라가 멈춘 뒤 흐른 시간(초) — 타일 문턱 완화용
 (function loop(){
   requestAnimationFrame(loop);
   const _f0 = _st.on ? _now() : 0;
@@ -2363,6 +2294,14 @@ const _clock=new THREE.Clock();
     if(Math.abs(camera.fov-fovT) > 0.05){ camera.fov += (fovT-camera.fov)*Math.min(1,_dt*12); camera.updateProjectionMatrix(); }
   }
   applyLook();                          // yaw/pitch(+이동된 위치)를 카메라에 반영 · up 항상 Z
+  if(tiles){
+    // 보이는 타일 선택·요청·해제. 카메라가 움직이는 동안(멈춘 뒤 0.4초까지)은 거칠게 그린다.
+    camera.updateMatrixWorld();
+    const moved = !camera.matrixWorld.equals(_camPrev);
+    if(moved) _camPrev.copy(camera.matrixWorld);
+    _camIdle = moved ? 0 : _camIdle + _dt;
+    tiles.update(camera, renderer.domElement.clientHeight || innerHeight, _camIdle < 0.4);
+  }
   GZ.update();                          // 방향 기즈모 회전 동기화
   let t = _st.on ? _now() : 0;
   updateHover();                       if(_st.on){ _st.acc.hover += _now()-t; t = _now(); }

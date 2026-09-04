@@ -11,13 +11,19 @@
 ## [Unreleased]
 
 ### 추가
-- **계층 LOD 타일 포팅 준비 (feat/lod-tiles)** — 6.26GB(면 1억 9천만) PLY 를 열기 위해
-  viewer-simple 브랜치에서 만든 옥트리 타일 구조를 옮겨 오는 첫 단계.
-  `tiler.py` · `ui/tiles.js` · `ui/bvh.js` · `ui/lod.js` 를 그대로 가져왔고, `backend.py` 에
-  `/api/report/tile` 라우트와 zip 핸들 캐시, `pipeline.save_report` 에 타일 생성을 넣었다.
-  뷰어·`tools/compare_twins.py`·`tools/export_report.py` 가 아직 `mesh.ply` 를 읽으므로
-  `KEEP_MESH_PLY = True` 로 원본도 함께 담는다 — 동작은 종전과 같고 타일만 옆에 쌓인다.
-  남은 작업 순서는 `docs/PLAN_LOD_PORT.md`, 설계 근거는 viewer-simple 의 `docs/DEV_LOD.md`.
+- **계층 LOD 타일 — 6GB 메시 지원** — 원전 촬영본 PLY(6.26GB · 정점 9,628만 · 면 1억 9,247만)로
+  만든 보고서가 열리지 않던 문제. 뷰어가 `mesh.ply` 를 통째로 받던 구조를 버리고, 생성 시
+  `tiler.py` 가 메시를 옥트리 타일(잎=원본, 내부=격자 병합 요약)로 쪼개 `tiles/<id>.bin` 에
+  넣는다. 뷰어(`ui/tiles.js`)는 절두체 안 타일만 화면 오차(px) 기준으로 골라 스트리밍·교체·해제하고
+  화면 삼각형 예산(500만)을 넘으면 문턱을 스스로 올린다. 클릭·측정(`pickMesh`)은 그려지는 타일에만
+  BVH 를 지연 생성해 처리한다. 옛 보고서(`mesh.ply`)는 간략 메시 + 원본의 두 단계 타일셋으로
+  같은 경로에서 열린다. `tools/compare_twins.py`·`tools/export_report.py` 는 `tools/twin_mesh.py`
+  로 정점 표본을 타일에서 읽는다. 원점 이동은 `ui/origin.js` 로 분리(타일 보고서는 meta 만 옮김).
+  실측: 타일 7,071개 · 14.4분 · 결과 4.09GB(종전 6.9GB) · 루트 즉시 표시 · 클릭 62ms.
+  설계·처리 순서·수정 지점은 `docs/DEV_LOD.md`, 포팅 기록은 `docs/PLAN_LOD_PORT.md`.
+- **폴더 배포 빌드 (`build.py`)** — `py build.py` → `dist/크랙 디지털 트윈 스튜디오/` (PyInstaller
+  `--onedir`, torch CUDA 포함이라 수 GB). `app.py` 에 WebView2 런타임 확인·아이콘·오류 안내창을
+  넣었고, `backend.py` 는 exe 실행 시 보고서를 exe 옆 `reports/` 에 둔다.
 
 ### 수정
 - **3D 표면이 계단처럼 층져 보이던 문제 수정 (뷰어 좌표 원점 이동)** — PLY 와 meta 는

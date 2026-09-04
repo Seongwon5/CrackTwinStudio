@@ -9,6 +9,7 @@ env/
 
 # 로컬 도구 설정
 .claude/settings.local.json
+.claude/launch.json
 
 # 생성된 보고서 / 사용자 입력 데이터 (미포함 — 사용자 소유 · 대용량)
 reports/*.twin
@@ -25,3 +26,8 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 *.swp
+
+# 빌드 산출물 (build.py)
+build/
+dist/
+*.spec

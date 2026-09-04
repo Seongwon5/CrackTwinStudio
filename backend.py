@@ -28,11 +28,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pipeline as P
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-UI_DIR, LIBS_DIR, REPORTS_DIR = os.path.join(HERE, "ui"), os.path.join(HERE, "libs"), os.path.join(HERE, "reports")
+# 소스 실행과 exe 실행(build.py, PyInstaller --onedir)에서 기준 경로가 다르다.
+#   자원(ui·libs·tools·model): 번들 안(_MEIPASS = <앱 폴더>/_internal)
+#   보고서(reports)          : 실행 때마다 지워지면 안 되므로 exe 가 놓인 폴더
+import sys as _sys
+_FROZEN = getattr(_sys, "frozen", False)
+HERE = _sys._MEIPASS if _FROZEN else os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(_sys.executable) if _FROZEN else HERE
+UI_DIR, LIBS_DIR, REPORTS_DIR = os.path.join(HERE, "ui"), os.path.join(HERE, "libs"), os.path.join(BASE, "reports")
 _jobs = {}                       # job_id -> {progress, done, error, result, log[]}
 
-import sys as _sys
 _sys.path.insert(0, os.path.join(HERE, "tools"))
 import compare_twins as CT2      # 검사 간 비교(정합·매칭·판정) — 대시보드 '검사 비교' 가 사용
 

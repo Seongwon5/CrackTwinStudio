@@ -59,8 +59,11 @@ py app.py
 | [`app.py`](../app.py) | 진입점. 창 생성·멀티윈도우·종료 처리 | 89줄 |
 | [`backend.py`](../backend.py) | 로컬 HTTP 서버. 라우팅 · `.twin` 스트리밍 · 백그라운드 잡 | 약 600줄 |
 | [`pipeline.py`](../pipeline.py) | **분석 파이프라인 전체**. 기하·추론·정량화·융합·저장 | 약 1,370줄 |
+| [`tiler.py`](../tiler.py) | PLY → 계층 LOD 타일(옥트리). 6GB 메시를 열기 위한 생성 측 (`docs/DEV_LOD.md`) | 약 300줄 |
+| [`build.py`](../build.py) | PyInstaller 폴더 배포 빌드 (`dist/크랙 디지털 트윈 스튜디오/`) | — |
 | `network/` | `best.pt` 언피클에 필요한 DeepLabV3+ 구현 (외부 코드) | — |
-| `ui/viewer.js` | **뷰어 본체**. 3D 렌더링·상호작용·측정·검토 | 약 3,000줄 |
+| `ui/viewer.js` | **뷰어 본체**. 3D 렌더링·상호작용·측정·검토 | 약 2,300줄 |
+| `ui/tiles.js` · `ui/bvh.js` · `ui/lod.js` · `ui/origin.js` | 타일 스트리밍 런타임 · 레이-메시 BVH · 격자 병합 LOD(옛 보고서용) · 원점 이동 | 뷰어가 import |
 | `ui/dashboard.js` | 대시보드 로직 (잡 폴링·목록·비교 선택) | 약 380줄 |
 | `libs/` | three.js r160 오프라인 번들 | — |
 | `tools/compare_twins.py` | 검사 간 비교 (정합·매칭·성장 판정) | backend가 import |
@@ -115,7 +118,8 @@ app.py ──▶ backend.py ──▶ pipeline.py ──▶ network/ (best.pt �
              viewer.html 을 읽어 __REPORT__ 자리에 '경로 문자열만' 주입 → 수 KB 응답
    ▼
 [뷰어 JS]  GET /api/report/meta?p=…   → meta.json      (JSON.parse, 수 MB)
-           GET /api/report/mesh?p=…   → mesh.ply       (ArrayBuffer, 스트리밍)
+           GET /api/report/tile?p=…&id=N → tiles/N.bin  (보이는 타일만, 거리별 해상도)
+           GET /api/report/mesh?p=…   → mesh.ply       (타일이 없는 옛 보고서만)
            GET /api/report/img?p=…&id=N&kind=thumb|full|mask  (지연 로드)
 ```
 
@@ -376,8 +380,9 @@ ori=8 이미지가 180° 뒤집힌 채 분석되는 사고가 있었다(전 검�
 
 ```
 report.twin
-├── meta.json            DEFLATE   기하·통계만 (이미지·메시 제외)
-├── mesh.ply             STORED    원본 바이너리
+├── meta.json            DEFLATE   기하·통계·타일 목록("tiles") (이미지·메시 제외)
+├── tiles/<id>.bin       STORED    계층 LOD 타일 (tiler.py · 잎=원본 삼각형, 내부=격자 병합 요약)
+├── mesh.ply             STORED    (타일로 못 만드는 PLY 일 때만) 원본 바이너리
 └── img/
     ├── 0000_thumb.jpg   STORED    썸네일 (≤900px)
     ├── 0000_full.jpg    STORED    원본 (≤1920px, q82)
@@ -386,7 +391,7 @@ report.twin
 
 **압축 선택의 근거:**
 - JPEG/PNG는 이미 압축돼 있어 DEFLATE가 CPU만 태우고 이득이 없다 → `STORED`
-- PLY도 `STORED`. DEFLATE해도 **16%밖에 안 줄면서 30~60초**를 먹는다 (실측)
+- 타일·PLY도 `STORED`. DEFLATE해도 **16%밖에 안 줄면서 30~60초**를 먹는다 (실측)
 - `meta.json` 만 DEFLATE — 숫자 텍스트라 잘 줄어든다
 
 **`meta.json` 구조:**
@@ -404,6 +409,10 @@ report.twin
                    // split_suspect_pairs(3×eps 안까지 접근한 크랙 쌍)가 그 사각지대를 보완한다.
                    "merge_eps_mm", "view_reg_mm_median", "view_reg_mm_p90",
                    "view_reg_n", "split_suspect_pairs" },
+  "tiles": { "version":1, "origin":[x,y,z], "box":[6], "root":id, "color":bool, "grid":128,
+             "leaf_max":100000, "source":{"vertices","faces"},
+             "nodes": [{ "b":[minx,miny,minz,maxx,maxy,maxz], "e":기하오차m, "t":삼각형수, "v":정점수, "c":[자식 id] }] },
+                                          // 타일 좌표는 origin 을 뺀 국소좌표 — 뷰어는 meta 쪽만 같은 원점으로 옮긴다
   "text_points": [[x,y,z], ...],          // 크랙 점군(복셀 다운샘플)
   "ribbons":  [{ "poly", "poly_w", "poly_n", "hot" }],   // 형상
   "cameras":  [{ "id", "source", "pos","fwd","up","right", "fov","aspect","w","h",
@@ -436,12 +445,13 @@ report.twin
 | 메서드 | 경로 | 하는 일 |
 |---|---|---|
 | GET | `/`, `/dashboard.html` | 대시보드 |
-| GET | `/dashboard.js`, `/style.css`, `/viewer.js`, `/viewer.css` | 정적 자원 |
+| GET | `/dashboard.js`, `/style.css`, `/viewer.js`, `/viewer.css`, `/tiles.js`, `/bvh.js`, `/lod.js`, `/origin.js` | 정적 자원 |
 | GET | `/libs/*` | three.js 번들 (경로 탈출 방어 있음) |
 | GET | `/viewer?report=<path>` | 뷰어 HTML (경로만 주입) |
 | GET | `/viewer?asset=<path>` | 비교(자산) 모드 뷰어 |
 | GET | `/api/report/meta?p=` | `meta.json` |
-| GET | `/api/report/mesh?p=` | `mesh.ply` (스트리밍) |
+| GET | `/api/report/tile?p=&id=` | `tiles/<id>.bin` (스트리밍 · zip 핸들 캐시 `_open_twin`) |
+| GET | `/api/report/mesh?p=` | `mesh.ply` (옛 보고서 · 스트리밍) |
 | GET | `/api/report/img?p=&id=&kind=` | thumb / full / mask (스트리밍) |
 | GET | `/api/reports` | `reports/*.twin` 목록 |
 | GET | `/api/assets` | `asset.json` 목록 |
@@ -497,7 +507,8 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 | 블록 | 내용 |
 |---|---|
 | FPS 자유 이동 카메라 | OrbitControls 대체. 좌드래그=시점 회전, 우클릭 홀드=스코프 확대(FOV 60→22) |
-| 보고서 로딩 | `meta` → `mesh`(ArrayBuffer) → 이미지 지연 로드 |
+| 보고서 로딩 | `meta` → 타일셋(`createTileSet`, 루트 타일 하나로 첫 화면) → 이미지 지연 로드. 옛 보고서는 `mesh.ply` → `legacySource` |
+| 계층 LOD 타일 | 매 프레임 `tiles.update()` 가 절두체·화면 오차(px)로 타일을 고르고 요청·해제한다. 클릭은 `tiles.raycast()`(타일별 BVH 지연 생성). 설계는 `docs/DEV_LOD.md` |
 | 크랙 리본 | 실폭 반영 가변-반경 튜브. 표면 위로 `RIBBON_OFFSET_M=0.06` 띄움 |
 | **병합 렌더** | 수만 개 리본을 **메시 1개(드로우콜 1회)** 로 — 대규모 FPS의 핵심 |
 | 심각도/신뢰도 필터 | AND 적용. 병합 버퍼의 정점 알파를 0/1 로 바꿔 개별 크랙 on/off |
@@ -611,6 +622,9 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 | 심각도 경계 | `pipeline.SEV_BOUNDS_MM` — **뷰어·PDF가 meta에서 읽으므로 여기만 고치면 전파된다** |
 | 균열 신뢰도 구간 | `pipeline.CONF_BOUNDS` (0.7 / 0.9) |
 | 내장 이미지 화질·용량 | `pipeline.FULL_MAX_PX`, `FULL_JPEG_Q`, `THUMB_MAX_PX` |
+| 타일 크기·격자·요약 방식 | `tiler.LEAF_MAX_TRIS`, `GRID`, `simplify()` — `docs/DEV_LOD.md` §3 |
+| 뷰어 타일 예산·정제 문턱 | `ui/viewer.js` `createTileSet(... { triBudget, byteBudget, ssePx })` |
+| 원본 mesh.ply 도 함께 담기 | `pipeline.KEEP_MESH_PLY` (디버그용, 기본 False) |
 | XMP 파서 (다른 SW 지원) | `pipeline.parse_xmp()` |
 | `.twin` 에 필드 추가 | `pipeline.save_report()` 의 `meta` dict + 뷰어 소비처 |
 | API 라우트 추가 | `backend.Handler.do_GET` / `do_POST` |

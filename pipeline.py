@@ -1467,8 +1467,9 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             "cameras": all_cameras, "hotspots": merged, "report_meta": report_meta}
 
 
-# 타일과 함께 mesh.ply 원본도 .twin 에 넣을지. 뷰어·tools 가 타일로 옮겨질 때까지 True (save_report 참조).
-KEEP_MESH_PLY = True
+# 타일과 함께 mesh.ply 원본도 .twin 에 넣을지. 뷰어(ui/viewer.js)·tools(twin_mesh.vertex_sample)가
+# 모두 타일을 읽으므로 False — 켜면 보고서 크기만 커진다(디버그용).
+KEEP_MESH_PLY = False
 
 
 def save_report(scene_data, out_path, log=print, progress=None):
@@ -1477,13 +1478,10 @@ def save_report(scene_data, out_path, log=print, progress=None):
     파일은 여전히 하나지만 안이 나뉘어 있다:
         meta.json     기하만(수 MB) — 뷰어가 JSON.parse 로 읽는다
         tiles/*.bin   계층 LOD 타일(tiler.py) — 뷰어가 보이는 것만 받는다 (viewer-simple 과 동일 형식)
-        mesh.ply      원본 바이너리 — KEEP_MESH_PLY 가 True 인 동안 함께 담는다(아래 참조)
+        mesh.ply      원본 바이너리 — 타일로 못 만드는 PLY(비삼각형·ascii)일 때만, 또는 KEEP_MESH_PLY
         img/*.jpg     개별 스트리밍 — 보이는 것만 로드
-    PLY 는 DEFLATE 해도 16%밖에 안 줄면서 30~60초를 먹으므로(실측) STORED 로 넣는다.
-
-    [LOD 포팅 준비] 타일은 이미 쓰지만 main 의 뷰어(ui/viewer.js)·tools/compare_twins.py·
-    tools/export_report.py 는 아직 mesh.ply 를 읽는다. 셋을 타일 기반으로 옮긴 뒤
-    KEEP_MESH_PLY 를 False 로 내리면 큰 메시 보고서 크기가 절반 이하로 준다(docs/PLAN_LOD_PORT.md).
+    타일이 아닌 PLY 는 DEFLATE 해도 16%밖에 안 줄면서 30~60초를 먹으므로(실측) STORED 로 넣는다.
+    타일 생성의 왜·순서·수정 지점은 docs/DEV_LOD.md.
 
     원자적 쓰기: 임시(.tmp)에 다 쓴 뒤 성공하면 rename 한다. 예전엔 곧바로 out_path 에 써서,
     생성이 중간에 실패하면 손상된 .twin 이 남았다(예: 1234.twin = 1.6GB 빈 껍데기)."""

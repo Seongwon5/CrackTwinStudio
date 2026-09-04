@@ -35,14 +35,12 @@ GROW_L_MIN = 20.0          # (mm)
 
 
 def load_twin(path):
-    """meta(dict) + 메시 정점 서브샘플(Nx3)을 반환."""
+    """meta(dict) + 메시 정점 서브샘플(Nx3, 절대좌표)을 반환.
+    mesh.ply 원본 보고서와 계층 LOD 타일 보고서 둘 다 읽는다(twin_mesh.vertex_sample)."""
+    import twin_mesh
     z = zipfile.ZipFile(path)
     meta = json.loads(z.read("meta.json"))
-    import trimesh
-    mesh = trimesh.load(io.BytesIO(z.read("mesh.ply")), file_type="ply", process=False)
-    V = np.asarray(mesh.vertices, float)
-    if len(V) > REG_SAMPLES:
-        V = V[np.random.default_rng(0).choice(len(V), REG_SAMPLES, replace=False)]
+    V = twin_mesh.vertex_sample(z, REG_SAMPLES, seed=0, meta=meta)
     return meta, V
 
 
