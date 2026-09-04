@@ -2,7 +2,9 @@
 import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { buildBVH } from '/bvh.js';
-import { shiftToLocalOrigin } from '/origin.js';
+import { buildLOD } from '/lod.js';
+import { shiftToLocalOrigin, shiftMetaOrigin } from '/origin.js';
+import { createTileSet, parseTile, legacySource } from '/tiles.js';
 
 const REPORT = window.__VIEWER_REPORT__;
 const _q = encodeURIComponent(REPORT);
@@ -10,7 +12,24 @@ const api = (kind, extra = '') => `/api/report/${kind}?p=${_q}${extra}`;
 const _boot = document.getElementById('boot');
 const _say = m => { if (_boot) _boot.textContent = m; };
 
+// ---------------------------------------------------------------- 3D 무대
+
+const view = document.getElementById('view3d');
+const W = () => view.clientWidth, H = () => view.clientHeight;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+const MAX_RATIO = Math.min(devicePixelRatio, 1.5);   // 2배는 픽셀 부하 4배, 체감 차이는 작다
+renderer.setPixelRatio(MAX_RATIO);
+view.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14181d);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 1000);
+
 // ---------------------------------------------------------------- 보고서 로드
+// 메시는 계층 LOD 타일로 받는다(tiles.js 머리말 참조) — 처음엔 루트 타일 하나로 그리고,
+// 카메라가 다가가는 영역만 세밀한 타일로 바꿔 간다. 6GB 메시도 화면엔 수백만 면만 올라간다.
+// 타일이 없는 옛 보고서(mesh.ply)는 통째로 받아 간략 메시 + 원본의 두 단계 타일셋으로 감싼다.
 
 async function _fetch(url, as) {
   const r = await fetch(url);
@@ -18,32 +37,53 @@ async function _fetch(url, as) {
   return as === 'json' ? r.json() : r.arrayBuffer();
 }
 
-let DATA, _meshBuf;
+let DATA, tiles;
 try {
   _say('메타 읽는 중…');
   DATA = await _fetch(api('meta'), 'json');
-  _say(`3D 메시 받는 중… (사진 ${DATA.counts.cameras}장)`);
-  _meshBuf = await _fetch(api('mesh'), 'buf');   // ArrayBuffer — 문자열 한계와 무관
+  let src;
+  if (DATA.tiles) {
+    // 타일 좌표는 이미 국소좌표(tiler.py 가 원점을 뺐다) — 카메라만 같은 원점으로 맞춘다
+    shiftMetaOrigin(DATA, DATA.tiles.origin);
+    const color = !!DATA.tiles.color;
+    src = { nodes: DATA.tiles.nodes, root: DATA.tiles.root, box: DATA.tiles.box, color,
+            load: async id => parseTile(THREE, await _fetch(api('tile', `&id=${id}`), 'buf'), !color) };
+    _say(`3D 타일 ${DATA.tiles.nodes.length.toLocaleString()}개 · 사진 ${DATA.counts.cameras}장 — 첫 화면 준비 중…`);
+  } else {
+    _say(`3D 메시 받는 중… (사진 ${DATA.counts.cameras}장)`);
+    const buf = await _fetch(api('mesh'), 'buf');   // ArrayBuffer — 문자열 한계와 무관
+    // 큰 절대좌표(UTM)를 국소좌표로 — float32 로 내려가기 전에 옮겨야 한다(origin.js 머리말 참조).
+    shiftToLocalOrigin(buf, DATA);
+    const geo = new PLYLoader().parse(buf);
+    if (geo.hasAttribute('color') && geo.hasAttribute('normal')) geo.deleteAttribute('normal');
+    else if (!geo.hasAttribute('color')) geo.computeVertexNormals();
+    src = legacySource(THREE, buildLOD, geo, 700000);
+  }
+  const mat = src.color
+    ? new THREE.MeshBasicMaterial({ vertexColors: true })   // 정점색 — 법선 불필요
+    : new THREE.MeshStandardMaterial({ color: 0x9aa4ad });
+  // LOD 타일은 요약 단계에서 감기 방향이 뒤집힐 수 있어 양면으로 그린다(tiler.py simplify 참조).
+  if (!src.legacy) mat.side = THREE.DoubleSide;
+  if (!src.color) {
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const dl = new THREE.DirectionalLight(0xffffff, 0.6);
+    dl.position.set(1, 1, 2);
+    scene.add(dl);
+  }
+  // 예산: 화면 500만 면 · 타일 1.5GB — RTX 5050(8GB)·32GB PC 기준. 넘치면 문턱이 스스로 올라간다.
+  tiles = createTileSet({ THREE, buildBVH }, src,
+                        { material: mat, triBudget: 5e6, byteBudget: 1.5e9, ssePx: 2, movingScale: 2.5 });
+  await tiles.ready;
+  window.__tiles = tiles; window.__camera = camera;   // 개발자 도구 디버그용(__tiles.stats)
 } catch (e) {
   _say('보고서를 열 수 없습니다: ' + e.message);
   throw e;
 }
 
-// ---------------------------------------------------------------- 3D 무대
-
-const view = document.getElementById('view3d');
 document.getElementById('wrap').style.display = 'flex';
-const W = () => view.clientWidth, H = () => view.clientHeight;
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-const MAX_RATIO = Math.min(devicePixelRatio, 1.5);   // 2배는 픽셀 부하 4배, 체감 차이는 작다
-renderer.setPixelRatio(MAX_RATIO);
 renderer.setSize(W(), H());
-view.appendChild(renderer.domElement);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x14181d);
-const camera = new THREE.PerspectiveCamera(60, W() / H(), 0.01, 1000);
+camera.aspect = W() / H();
+scene.add(tiles.group);
 
 // ---------------------------------------------------------------- FPS 카메라
 // 좌드래그=시점 회전 · WASD/Space/Ctrl=이동 · 우클릭 홀드=확대(FOV) · 휠=전진/후진.
@@ -74,31 +114,7 @@ function lookToward(fromV, toV) {                // 한 점을 바라보도록 y
   camPitch = clampPitch(Math.atan2(dz, Math.hypot(dx, dy)));
 }
 
-// 큰 절대좌표(UTM)를 국소좌표로 — float32 로 내려가기 전에 옮겨야 한다(origin.js 머리말 참조).
-// 메시·카메라가 같은 만큼 이동하므로 투영·거리·법선은 그대로고, 정밀도만 회복된다.
-shiftToLocalOrigin(_meshBuf, DATA);
-
-const geo = new PLYLoader().parse(_meshBuf); _meshBuf = null;
-const hasColor = geo.hasAttribute('color');
-const mat = hasColor
-  ? new THREE.MeshBasicMaterial({ vertexColors: true })
-  : new THREE.MeshStandardMaterial({ color: 0x9aa4ad });
-if (hasColor) {
-  // MeshBasic은 법선을 쓰지 않는다 — 있으면 버려 정점당 12바이트를 아낀다
-  if (geo.hasAttribute('normal')) geo.deleteAttribute('normal');
-} else {
-  geo.computeVertexNormals();
-  scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-  const dl = new THREE.DirectionalLight(0xffffff, 0.6);
-  dl.position.set(1, 1, 2);
-  scene.add(dl);
-}
-const mesh = new THREE.Mesh(geo, mat);
-scene.add(mesh);
-
-geo.computeBoundingSphere();
-geo.computeBoundingBox();
-const bs = geo.boundingSphere, bb = geo.boundingBox;
+const bs = tiles.sphere, bb = tiles.box;         // 전체 모델의 경계(타일 메타에서)
 
 camera.up.set(0, 0, 1);                          // 사진측량 모델은 Z-up — 롤 없이 유지
 camera.position.copy(bs.center).add(new THREE.Vector3(0, -bs.radius * 2.2, bs.radius * 0.7));
@@ -134,13 +150,7 @@ function sizeMarker() {
   marker.scale.setScalar(Math.max(worldPerPx * MARKER_PX, bs.radius * 1e-5));
 }
 
-// 클릭 가속 구조 — 없으면 큰 메시에서 클릭 한 번에 수 초가 걸린다(bvh.js 머리말 참조).
-// 구축은 메인 스레드를 수 초 잡으므로, 안내 문구가 실제로 그려진 뒤에 시작한다.
-_say('클릭 가속 구조 준비 중…');
-await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-const BVH = buildBVH(geo.attributes.position.array,
-                     geo.index ? geo.index.array : null);
-
+// 클릭 가속 구조(BVH)는 tiles.js 가 광선이 실제로 지나는 타일에만 그때 만든다 — 미리 만들 게 없다.
 _boot.style.display = 'none';
 
 // ---------------------------------------------------------------- 사진 선택
@@ -257,7 +267,8 @@ function cameraSeesPoint(cam, p) {
   if (dist <= tol) return true;
   _occDir.divideScalar(dist);
   // 점보다 '앞'을 막는 면이 하나라도 있으면 가려진 것 — 가장 가까운 것을 찾을 필요는 없다.
-  return BVH.raycast(_camPos, _occDir, dist - tol, true) === null;
+  // 지금 그려지는 타일(멀리는 요약 메시)로 검사한다 — 허용오차가 요약 오차보다 크다.
+  return tiles.raycast(_camPos, _occDir, dist - tol, true) === null;
 }
 
 // 점수 순으로 내려가며 실제로 보이는 첫 카메라를 고른다. 전부 가려지면 최고점으로 되돌린다(표시 자체는 유지).
@@ -272,28 +283,19 @@ function pickVisibleCam(cands, p) {
 
 const ray = new THREE.Raycaster();
 
-// 면 번호 → 월드 법선. 메시에 변환을 걸지 않으므로 정점 좌표가 곧 월드 좌표다.
-const _fa = new THREE.Vector3(), _fb = new THREE.Vector3(), _fc = new THREE.Vector3();
-function faceNormal(tri) {
-  const P = geo.attributes.position.array;
-  const [ia, ib, ic] = BVH.faceVerts(tri);
-  _fa.fromArray(P, ia * 3); _fb.fromArray(P, ib * 3); _fc.fromArray(P, ic * 3);
-  const n = _fb.sub(_fa).cross(_fc.sub(_fa));
-  return n.lengthSq() > 0 ? n.normalize().clone() : null;
-}
-
 function pickAt(clientX, clientY) {
   const r = renderer.domElement.getBoundingClientRect();
   if (!r.width || !r.height) return false;
   const mx = ((clientX - r.left) / r.width) * 2 - 1;
   const my = -((clientY - r.top) / r.height) * 2 + 1;
   ray.setFromCamera(new THREE.Vector2(mx, my), camera);
-  const hit = BVH.raycast(ray.ray.origin, ray.ray.direction, Infinity, false);
+  // 지금 그려지는 타일에 대해 교차 — 타일에 변환을 걸지 않으므로 정점 좌표가 곧 월드 좌표다.
+  const hit = tiles.raycast(ray.ray.origin, ray.ray.direction, Infinity, false);
   if (!hit) return false;
 
   const p = ray.ray.at(hit.distance, new THREE.Vector3());
   // 맞은 면의 법선을 세 정점으로 직접 구한다(BVH 는 면 번호만 돌려준다).
-  const n = faceNormal(hit.triangle);
+  const n = tiles.faceNormal(hit);
   // 클릭했다는 건 이 면이 지금 보인다는 뜻 — 법선을 시점 쪽으로 맞춰 바깥을 확정한다.
   // PLY의 면 winding이 일관되지 않아도 앞/뒤 판정이 뒤집히지 않는다.
   if (n && n.dot(camera.position.clone().sub(p)) < 0) n.negate();
@@ -586,6 +588,8 @@ const _clock = new THREE.Clock();
     _idle = 0;
   }
   applyLook();                                   // yaw/pitch(+이동된 위치)를 반영 · up 항상 Z
+  camera.updateMatrixWorld();                    // 타일 선택이 이번 프레임의 카메라 행렬을 읽는다
+  tiles.update(camera, H(), _idle < 0.4);        // 보이는 타일 선택·요청·해제 (조작 중엔 거칠게)
   GZ.update();
   sizeMarker();
   renderer.render(scene, camera);

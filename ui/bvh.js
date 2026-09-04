@@ -16,9 +16,10 @@ const EPS = 1e-12;
 /**
  * @param {Float32Array} position  정점 좌표 (x,y,z 연속)
  * @param {Uint32Array|Uint16Array|null} index  면 인덱스. null 이면 position 을 3개씩 묶는다.
+ * @param {boolean} [bothSides]  true 면 뒷면도 맞은 것으로 센다(감기 방향이 일정하지 않은 LOD 타일용)
  * @returns {{raycast: function, triangleCount: number, nodeCount: number}}
  */
-export function buildBVH(position, index) {
+export function buildBVH(position, index, bothSides) {
   // 인덱스가 없는 지오메트리도 받도록 순번 인덱스를 만들어 이후 경로를 하나로 유지한다.
   let idx = index;
   if (!idx) {
@@ -139,11 +140,12 @@ export function buildBVH(position, index) {
           const t = order[k];
           const a = idx[t * 3] * 3, b = idx[t * 3 + 1] * 3, cc = idx[t * 3 + 2] * 3;
           // 뫼–트럼보어(Möller–Trumbore). det>0 만 받아 앞면만 센다(three.js FrontSide 와 동일).
+          // bothSides 면 |det| 로 뒷면도 받는다(DoubleSide 와 동일).
           const e1x = position[b] - position[a], e1y = position[b + 1] - position[a + 1], e1z = position[b + 2] - position[a + 2];
           const e2x = position[cc] - position[a], e2y = position[cc + 1] - position[a + 1], e2z = position[cc + 2] - position[a + 2];
           const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
           const det = e1x * px + e1y * py + e1z * pz;
-          if (det < EPS) continue;
+          if (bothSides ? (det > -EPS && det < EPS) : det < EPS) continue;
           const inv = 1 / det;
           const tx = ox - position[a], ty = oy - position[a + 1], tz = oz - position[a + 2];
           const u = (tx * px + ty * py + tz * pz) * inv;

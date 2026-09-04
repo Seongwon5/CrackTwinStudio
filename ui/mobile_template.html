@@ -118,6 +118,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#14181d;
 <script type="text/plain" id="src-bvh">__BVH_SRC__</script>
 <script type="text/plain" id="src-lod">__LOD_SRC__</script>
 <script type="text/plain" id="src-origin">__ORIGIN_SRC__</script>
+<script type="text/plain" id="src-tiles">__TILES_SRC__</script>
 <script type="text/plain" id="src-zip">__ZIP_SRC__</script>
 
 <script type="module">
@@ -133,7 +134,9 @@ const OrbitControls = new Function('THREE', grab('src-oc') + '\nreturn OrbitCont
 const PLYLoader = new Function('THREE', grab('src-ply') + '\nreturn PLYLoader;')(THREE);
 const buildBVH = new Function(grab('src-bvh') + '\nreturn buildBVH;')();
 const buildLOD = new Function(grab('src-lod') + '\nreturn buildLOD;')();
-const shiftToLocalOrigin = new Function(grab('src-origin') + '\nreturn shiftToLocalOrigin;')();
+const { shiftToLocalOrigin, shiftMetaOrigin } =
+  new Function(grab('src-origin') + '\nreturn { shiftToLocalOrigin, shiftMetaOrigin };')();
+const Tiles = new Function(grab('src-tiles') + '\nreturn { createTileSet, parseTile, legacySource };')();
 const openTwin = await (async () => {
   const src = grab('src-zip');
   const m = await import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
@@ -188,15 +191,6 @@ async function run(file) {
     return u;
   }
 
-  say('3D 모델 읽는 중…');
-  await paint();
-  const meshBuf = await twin.bytes('mesh.ply');
-  say('3D 모델 푸는 중…');
-  await paint();
-  // 큰 절대좌표(UTM)를 국소좌표로 — float32 로 내려가기 전에 옮긴다(origin.js 머리말 참조).
-  shiftToLocalOrigin(meshBuf, DATA);
-  const geo = new PLYLoader().parse(meshBuf);
-
   // ---------- 3D 무대 ----------
   const view = $('view3d');
   const W = () => view.clientWidth, H = () => view.clientHeight;
@@ -210,22 +204,51 @@ async function run(file) {
   scene.background = new THREE.Color(0x14181d);
   const camera = new THREE.PerspectiveCamera(60, W() / H(), 0.01, 1000);
 
-  const hasColor = geo.hasAttribute('color');
-  if (hasColor && geo.hasAttribute('normal')) geo.deleteAttribute('normal');
-  const mat = hasColor ? new THREE.MeshBasicMaterial({ vertexColors: true })
-                       : new THREE.MeshStandardMaterial({ color: 0x9aa4ad });
-  if (!hasColor) {
-    geo.computeVertexNormals();
+  // ---------- 3D 메시: 계층 LOD 타일 (tiles.js 머리말 참조) ----------
+  // 타일 보고서는 보이는 타일만 .twin 에서 조각조각 읽는다(twin_reader 의 slice — 6GB 메시도
+  // 폰 메모리에 올리지 않는다). 옛 보고서(mesh.ply)는 통째로 읽어 간략+원본 두 단계로 감싼다.
+  let _needsRender = true;                       // 타일 도착 콜백이 먼저 올 수 있어 여기서 선언
+  const invalidate = () => { _needsRender = true; };
+  let src;
+  if (DATA.tiles) {
+    shiftMetaOrigin(DATA, DATA.tiles.origin);    // 타일은 이미 국소좌표 — 카메라만 맞춘다
+    const color = !!DATA.tiles.color;
+    src = { nodes: DATA.tiles.nodes, root: DATA.tiles.root, box: DATA.tiles.box, color,
+            load: async id => Tiles.parseTile(THREE, await twin.bytes(`tiles/${id}.bin`), !color) };
+    say(`3D 타일 ${DATA.tiles.nodes.length.toLocaleString()}개 — 첫 화면 준비 중…`);
+    await paint();
+  } else {
+    say('3D 모델 읽는 중…');
+    await paint();
+    const meshBuf = await twin.bytes('mesh.ply');
+    say('3D 모델 푸는 중…');
+    await paint();
+    // 큰 절대좌표(UTM)를 국소좌표로 — float32 로 내려가기 전에 옮긴다(origin.js 머리말 참조).
+    shiftToLocalOrigin(meshBuf, DATA);
+    const geo = new PLYLoader().parse(meshBuf);
+    if (geo.hasAttribute('color') && geo.hasAttribute('normal')) geo.deleteAttribute('normal');
+    else if (!geo.hasAttribute('color')) geo.computeVertexNormals();
+    // 조작 중에 쓸 간략 메시 — 폰에서 버벅이는 원인은 정점 수다(lod.js 머리말 참조).
+    say('부드러운 조작 준비 중…');
+    await paint();
+    src = Tiles.legacySource(THREE, buildLOD, geo, 700000);
+  }
+  const mat = src.color ? new THREE.MeshBasicMaterial({ vertexColors: true })
+                        : new THREE.MeshStandardMaterial({ color: 0x9aa4ad });
+  if (!src.legacy) mat.side = THREE.DoubleSide;  // 타일은 감기 방향이 뒤집힐 수 있다(tiler.py 참조)
+  if (!src.color) {
     scene.add(new THREE.AmbientLight(0xffffff, 0.8));
     const dl = new THREE.DirectionalLight(0xffffff, 0.6);
     dl.position.set(1, 1, 2);
     scene.add(dl);
   }
-  const mesh = new THREE.Mesh(geo, mat);
-  scene.add(mesh);
-  geo.computeBoundingSphere();
-  geo.computeBoundingBox();
-  const bs = geo.boundingSphere, bb = geo.boundingBox;
+  // 폰 예산: 화면 150만 면 · 타일 400MB · 문턱 3px(조작 중 9px)
+  const tiles = Tiles.createTileSet({ THREE, buildBVH }, src,
+    { material: mat, triBudget: 1.5e6, byteBudget: 4e8, ssePx: 3, movingScale: 3, concurrency: 4,
+      onChange: invalidate });
+  await tiles.ready;
+  scene.add(tiles.group);
+  const bs = tiles.sphere, bb = tiles.box;
 
   camera.up.set(0, 0, 1);
   const HOME = bs.center.clone().add(new THREE.Vector3(0, -bs.radius * 2.2, bs.radius * 0.7));
@@ -265,31 +288,7 @@ async function run(file) {
     marker.scale.setScalar(Math.max(wpp * MARKER_PX, bs.radius * 1e-5));
   }
 
-  // 탭 가속 구조 — 없으면 큰 메시에서 탭 한 번에 수십 초가 걸린다(bvh.js 머리말 참조).
-  say('탭 가속 구조 준비 중…');
-  await paint();
-  const positions = geo.attributes.position.array;
-  const BVH = buildBVH(positions, geo.index ? geo.index.array : null);
-
-  // 조작 중에 쓸 간략 메시 — 폰에서 버벅이는 원인은 정점 수다(lod.js 머리말 참조).
-  // 손을 대고 있는 동안만 이걸 그리고, 멈추면 원본으로 되돌리므로 화질 손해가 남지 않는다.
-  say('부드러운 조작 준비 중…');
-  await paint();
-  let meshLod = null;
-  if (geo.index) {
-    const lod = buildLOD(positions, geo.index.array, bb, 700000);
-    if (lod) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', geo.attributes.position);   // 버퍼 공유 — 메모리 추가 없음
-      if (hasColor) g.setAttribute('color', geo.attributes.color);
-      g.setIndex(new THREE.BufferAttribute(lod.index, 1));
-      g.boundingSphere = bs; g.boundingBox = bb;
-      meshLod = new THREE.Mesh(g, mat);
-      meshLod.visible = false;
-      scene.add(meshLod);
-    }
-  }
-
+  // 탭 가속 구조(BVH)는 tiles.js 가 광선이 지나는 타일에만 그때 만든다(bvh.js 머리말 참조).
   $('boot').style.display = 'none';
   $('hintPill').style.display = '';
   setTimeout(() => { $('hintPill').style.opacity = 0; }, 6000);
@@ -343,7 +342,7 @@ async function run(file) {
     const tol = Math.max(dist * 0.01, bs.radius * 1.5e-3);
     if (dist <= tol) return true;
     _occDir.divideScalar(dist);
-    return BVH.raycast(_camPos, _occDir, dist - tol, true) === null;   // 하나라도 막으면 가려짐
+    return tiles.raycast(_camPos, _occDir, dist - tol, true) === null;   // 하나라도 막으면 가려짐
   }
   function pickVisibleCam(cands, p) {
     for (let i = 0; i < cands.length && i < 16; i++)
@@ -406,24 +405,17 @@ async function run(file) {
 
   // ---------- 탭 처리 ----------
   const ray = new THREE.Raycaster();
-  // 면 번호 → 월드 법선. 메시에 변환을 걸지 않으므로 정점 좌표가 곧 월드 좌표다.
-  const _fa = new THREE.Vector3(), _fb = new THREE.Vector3(), _fc = new THREE.Vector3();
-  function faceNormal(tri) {
-    const [ia, ib, ic] = BVH.faceVerts(tri);
-    _fa.fromArray(positions, ia * 3); _fb.fromArray(positions, ib * 3); _fc.fromArray(positions, ic * 3);
-    const n = _fb.sub(_fa).cross(_fc.sub(_fa));
-    return n.lengthSq() > 0 ? n.normalize().clone() : null;
-  }
   function pickAt(cx, cy) {
     const r = renderer.domElement.getBoundingClientRect();
     if (!r.width || !r.height) return;
     const mx = ((cx - r.left) / r.width) * 2 - 1;
     const my = -((cy - r.top) / r.height) * 2 + 1;
     ray.setFromCamera(new THREE.Vector2(mx, my), camera);
-    const hit = BVH.raycast(ray.ray.origin, ray.ray.direction, Infinity, false);
+    // 지금 그려지는 타일에 대해 교차 — 타일에 변환을 걸지 않으므로 정점 좌표가 곧 월드 좌표다.
+    const hit = tiles.raycast(ray.ray.origin, ray.ray.direction, Infinity, false);
     if (!hit) return;
     const p = ray.ray.at(hit.distance, new THREE.Vector3());
-    const n = faceNormal(hit.triangle);
+    const n = tiles.faceNormal(hit);
     if (n && n.dot(camera.position.clone().sub(p)) < 0) n.negate();
     marker.position.copy(p);
     marker.visible = true;
@@ -525,20 +517,11 @@ async function run(file) {
   full.addEventListener('pointercancel', endPtr);
 
   // ---------- 루프 ----------
-  // 조작 중에는 간략 메시로, 손을 떼면 원본으로 그린다. 그리고 달라진 게 없으면 아예 그리지
-  // 않는다 — 폰에서 계속 그리면 발열로 성능이 더 떨어진다.
-  let _idle = 999, _needsRender = true;
-  const IDLE_SEC = 0.25;                       // 이 시간 동안 조용하면 원본으로 되돌린다
+  // 조작 중에는 타일 문턱을 올려 거칠게(간략) 그리고, 손을 떼면 세밀한 타일로 돌아온다.
+  // 그리고 달라진 게 없으면 아예 그리지 않는다 — 폰에서 계속 그리면 발열로 성능이 더 떨어진다.
+  let _idle = 999;
+  const IDLE_SEC = 0.25;                       // 이 시간 동안 조용하면 세밀한 타일로 되돌린다
 
-  function setDetail(useLod) {
-    if (!meshLod) return;
-    const wantLod = useLod;
-    if (meshLod.visible === wantLod) return;
-    meshLod.visible = wantLod;
-    mesh.visible = !wantLod;
-    _needsRender = true;
-  }
-  const invalidate = () => { _needsRender = true; };
   addEventListener('resize', () => {
     camera.aspect = W() / H();
     camera.updateProjectionMatrix();
@@ -551,8 +534,9 @@ async function run(file) {
   (function loop() {
     requestAnimationFrame(loop);
     _idle += Math.min(_clock.getDelta(), 0.25);
-    setDetail(_idle < IDLE_SEC);               // 조작 중이면 간략 메시
     controls.update();                         // 감쇠가 끊기지 않게 항상 갱신 — 바뀌면 change 로 알려온다
+    camera.updateMatrixWorld();
+    if (tiles.update(camera, H(), _idle < IDLE_SEC).changed) _needsRender = true;   // 타일 집합이 바뀜
     if (!_needsRender) return;                 // 변화가 없으면 GPU 를 쉬게 둔다(발열·배터리)
     _needsRender = false;
     sizeMarker();

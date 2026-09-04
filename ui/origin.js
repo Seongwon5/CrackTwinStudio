@@ -111,6 +111,19 @@ export function shiftToLocalOrigin(meshBuf, DATA) {
   if (!O.every(Number.isFinite)) return [0, 0, 0];
   if (Math.max(...O.map(Math.abs)) < 1024) return [0, 0, 0];   // 이미 국소좌표 — 옮길 이유가 없다
   plyShift(meshBuf, L, O);
+  shiftMetaOrigin(DATA, O);
+  console.info('[좌표] 원점 이동 적용:', O.join(', '));
+  return O;
+}
+
+/**
+ * meta 의 좌표만 원점 O 만큼 옮긴다(제자리 수정). 타일 보고서는 메시가 이미 국소좌표라
+ * (tiler.py 가 원점을 빼서 저장) 카메라 쪽만 같은 원점으로 맞추면 된다.
+ * @param {object} DATA  meta.json
+ * @param {number[]} O   [x,y,z]
+ */
+export function shiftMetaOrigin(DATA, O) {
+  if (!O || !(O[0] || O[1] || O[2])) return;
   const sub = p => { p[0] -= O[0]; p[1] -= O[1]; p[2] -= O[2]; };
   // 방향 벡터(cameras[].fwd/up/right, ribbons[].poly_n)는 이동 대상이 아니라 건드리지 않는다.
   // ribbons/hotspots/text_points 는 이 브랜치가 쓰지 않지만, main 에서 만든 .twin 도 열리므로
@@ -120,6 +133,4 @@ export function shiftToLocalOrigin(meshBuf, DATA) {
   (D.ribbons || []).forEach(r => (r.poly || []).forEach(sub));
   (D.hotspots || []).forEach(h => { if (h.xyz) sub(h.xyz); if (h.poly) h.poly.forEach(sub); });
   (D.text_points || []).forEach(sub);
-  console.info('[좌표] 원점 이동 적용:', O.join(', '));
-  return O;
 }

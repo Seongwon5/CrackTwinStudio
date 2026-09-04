@@ -11,9 +11,12 @@ import zipfile
 import numpy as np
 import cv2
 
+import tiler
+
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 FULL_MAX_PX, FULL_JPEG_Q = 1920, 82   # 내장 원본 최대변 / 품질
 THUMB_MAX_PX = 900                    # 썸네일 최대변
+MESH_PROGRESS = 0.35                  # 진행률 중 메시 타일링 몫(나머지는 사진)
 
 
 # ---------------------------------------------------------------- 입력 · 기하
@@ -134,8 +137,10 @@ def encode_jpeg_bytes(img_bgr, max_px, quality):
 def build_report(folder, ply_path, out_path, log, progress):
     """이미지+XMP 폴더와 PLY를 .twin(zip) 하나로 묶는다.
 
-    구성은 meta.json / mesh.ply / img/*. 이미지는 처리 즉시 기록해 피크 메모리를
-    한 장 수준으로 유지하고, .tmp에 다 쓴 뒤 교체해 중간 실패 시 손상 파일을 남기지 않는다.
+    구성은 meta.json / tiles/*.bin / img/*. 메시는 tiler 가 계층 LOD 타일로 쪼개 넣는다
+    (타일로 만들 수 없는 PLY 는 예전처럼 mesh.ply 원본을 그대로 넣는다 — 뷰어가 둘 다 연다).
+    이미지는 처리 즉시 기록해 피크 메모리를 한 장 수준으로 유지하고, .tmp에 다 쓴 뒤
+    교체해 중간 실패 시 손상 파일을 남기지 않는다. progress 는 0~1 비율 하나로 받는다.
     """
     if not out_path.lower().endswith(".twin"):
         out_path += ".twin"
@@ -150,10 +155,18 @@ def build_report(folder, ply_path, out_path, log, progress):
 
     tmp = out_path + ".tmp"
     cams, skipped = [], list(no_xmp)
+    tiles_meta = None
     try:
         with zipfile.ZipFile(tmp, "w", allowZip64=True) as z:
-            # JPEG·PLY는 STORED — 이미 압축돼 있어 DEFLATE는 시간만 든다
-            z.write(ply_path, "mesh.ply", compress_type=zipfile.ZIP_STORED)
+            log(f"3D 메시 타일 생성: {os.path.basename(ply_path)} ({os.path.getsize(ply_path) / 1e9:.2f} GB)")
+            try:
+                tiles_meta = tiler.build_tiles(ply_path, z, log, lambda f: progress(f * MESH_PROGRESS))
+            except tiler.PlyError as e:
+                # 타일로 못 만드는 형식 — 원본을 그대로 넣는다(작은 메시는 이 경로로도 열린다).
+                log(f"  ⚠ 타일 생성 불가({e}) — 메시 원본을 그대로 담습니다. 큰 메시는 열리지 않을 수 있습니다.")
+                z.write(ply_path, "mesh.ply", compress_type=zipfile.ZIP_STORED)   # 이미 압축된 형식 → STORED
+            progress(MESH_PROGRESS)
+            log(f"사진 {len(pairs)}장 처리")
             for n, (img_path, xmp_path) in enumerate(pairs):
                 name = os.path.basename(img_path)
                 try:
@@ -172,7 +185,7 @@ def build_report(folder, ply_path, out_path, log, progress):
                 except Exception as e:
                     log(f"  [오류] {name}: {e}")
                     skipped.append(name)
-                progress(n + 1, len(pairs))
+                progress(MESH_PROGRESS + (1 - MESH_PROGRESS) * (n + 1) / len(pairs))
 
             import datetime
             meta = {
@@ -189,6 +202,8 @@ def build_report(folder, ply_path, out_path, log, progress):
                 },
                 "cameras": cams,
             }
+            if tiles_meta:
+                meta["tiles"] = tiles_meta        # 없으면 뷰어가 mesh.ply(구 형식)를 찾는다
             # 무압축 — 모바일 뷰어가 브라우저에서 압축 해제 없이 바로 읽는다(구형 폰 대응).
             # 카메라 수백 대라도 수백 KB 수준이라 용량 이득이 의미 없다.
             z.writestr("meta.json", json.dumps(meta, ensure_ascii=False), zipfile.ZIP_STORED)

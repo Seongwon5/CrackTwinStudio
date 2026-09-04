@@ -91,7 +91,9 @@
   <h4>3. PLY 내보내기</h4>
   <p><code>Export ▸ Export Mesh</code> → <b>PLY</b>, 정점 색(vertex color) 포함.
      포인트 클라우드가 아닌 삼각형 메시여야 합니다.</p>
-  <p class="note">모델이 크면 <code>Decimate</code> 로 면 수를 줄인 사본을 쓰면 가볍습니다.</p>
+  <p class="note">면 수 제한은 없습니다. 생성 시 메시를 계층 LOD 타일로 쪼개 넣으므로
+     수 GB(면 1억 개 이상) PLY 도 그대로 쓰면 됩니다(6GB 기준 타일 생성 약 15분, PC 메모리 16GB 이상 권장).
+     뷰어는 보이는 부분만 세밀하게 받아 그립니다.</p>
 
   <h4>4. 선택</h4>
   <ul>
