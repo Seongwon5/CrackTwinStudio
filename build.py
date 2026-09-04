@@ -18,6 +18,11 @@ viewer-simple 브랜치는 단일 exe(--onefile)지만 여기는 폴더(--onedir
   tools/               compare_twins · export_report · twin_mesh (backend 가 sys.path 에 넣는다)
 보고서(reports/)·추론 캐시(cache/)는 exe 가 놓인 폴더에 생긴다(backend.BASE · pipeline.BASE).
 
+첫 빌드는 torch·scipy·matplotlib 의존 분석 때문에 30분 안팎이 걸린다. 이후에는
+  py build.py --fast     (--clean 생략 → 분석 캐시 재사용, 몇 분)
+ui/·libs/·tools/·model/ 같은 자원만 고쳤다면 재빌드 없이 dist/…/_internal/ 아래 파일을
+바꿔치기해도 된다(파이썬 파일은 번들에 컴파일돼 들어가므로 재빌드 필요).
+
 사전 준비:  py -m pip install -r requirements.txt pyinstaller
 """
 import os
@@ -61,9 +66,10 @@ def main():
     sep = ";" if os.name == "nt" else ":"
     data = [("ui", "ui"), ("libs", "libs"), ("assets/icon.ico", "assets"),
             ("model", "model"), ("network", "network"), ("tools", "tools")]
+    fast = "--fast" in sys.argv                    # 분석 캐시 재사용(재빌드용)
     args = [
         sys.executable, "-m", "PyInstaller",
-        "--noconfirm", "--clean", "--onedir", "--windowed",
+        "--noconfirm", *([] if fast else ["--clean"]), "--onedir", "--windowed",
         "--name", NAME,
         "--icon", ICON,
         "--version-file", verfile,
