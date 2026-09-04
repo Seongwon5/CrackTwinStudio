@@ -2311,7 +2311,9 @@ const _camPrev = new THREE.Matrix4(); let _camIdle = 9;   // 카메라가 멈춘
   const cw=renderer.domElement.clientWidth||innerWidth, ch=renderer.domElement.clientHeight||innerHeight;
   const _r0 = _st.on ? _now() : 0;
   const a=cw/ch;
-  if(Math.abs(camera.aspect-a)>1e-4){ camera.aspect=a; camera.updateProjectionMatrix(); }
+  // NaN 가드: 창 높이 0 인 순간(숨겨진 창·최소화)에 만들어진 aspect 는 NaN 이라 '변화 없음'으로 통과해
+  // 영원히 아무것도 안 그려진다 — 유한하지 않거나 달라졌으면 고친다.
+  if(!(Math.abs(camera.aspect-a)<=1e-4) && Number.isFinite(a)){ camera.aspect=a; camera.updateProjectionMatrix(); }
   renderer.setViewport(0,0,cw,ch);
   renderer.render(scene,camera);
   if(_st.on){
