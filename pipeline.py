@@ -1467,14 +1467,23 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             "cameras": all_cameras, "hotspots": merged, "report_meta": report_meta}
 
 
-def save_report(scene_data, out_path):
+# 타일과 함께 mesh.ply 원본도 .twin 에 넣을지. 뷰어·tools 가 타일로 옮겨질 때까지 True (save_report 참조).
+KEEP_MESH_PLY = True
+
+
+def save_report(scene_data, out_path, log=print, progress=None):
     """scene_data 를 .twin(v2: zip 컨테이너)로 저장하고 경로를 반환한다.
 
     파일은 여전히 하나지만 안이 나뉘어 있다:
-        meta.json   기하만(수 MB) — 뷰어가 JSON.parse 로 읽는다
-        mesh.ply    원본 바이너리 — 뷰어가 ArrayBuffer 로 받는다(문자열 한계와 무관)
-        img/*.jpg   개별 스트리밍 — 보이는 것만 로드
+        meta.json     기하만(수 MB) — 뷰어가 JSON.parse 로 읽는다
+        tiles/*.bin   계층 LOD 타일(tiler.py) — 뷰어가 보이는 것만 받는다 (viewer-simple 과 동일 형식)
+        mesh.ply      원본 바이너리 — KEEP_MESH_PLY 가 True 인 동안 함께 담는다(아래 참조)
+        img/*.jpg     개별 스트리밍 — 보이는 것만 로드
     PLY 는 DEFLATE 해도 16%밖에 안 줄면서 30~60초를 먹으므로(실측) STORED 로 넣는다.
+
+    [LOD 포팅 준비] 타일은 이미 쓰지만 main 의 뷰어(ui/viewer.js)·tools/compare_twins.py·
+    tools/export_report.py 는 아직 mesh.ply 를 읽는다. 셋을 타일 기반으로 옮긴 뒤
+    KEEP_MESH_PLY 를 False 로 내리면 큰 메시 보고서 크기가 절반 이하로 준다(docs/PLAN_LOD_PORT.md).
 
     원자적 쓰기: 임시(.tmp)에 다 쓴 뒤 성공하면 rename 한다. 예전엔 곧바로 out_path 에 써서,
     생성이 중간에 실패하면 손상된 .twin 이 남았다(예: 1234.twin = 1.6GB 빈 껍데기)."""
@@ -1482,9 +1491,16 @@ def save_report(scene_data, out_path):
         out_path += ".twin"
     cams = scene_data["cameras"]
     tmp = out_path + ".tmp"
+    tiles_meta = None
     try:
         with zipfile.ZipFile(tmp, "w", allowZip64=True) as z:
-            z.write(scene_data["ply_path"], "mesh.ply", compress_type=zipfile.ZIP_STORED)
+            try:
+                import tiler
+                tiles_meta = tiler.build_tiles(scene_data["ply_path"], z, log, progress or (lambda f: None))
+            except tiler.PlyError as e:
+                log(f"  ⚠ 타일 생성 불가({e}) — 메시 원본만 담습니다.")
+            if KEEP_MESH_PLY or tiles_meta is None:
+                z.write(scene_data["ply_path"], "mesh.ply", compress_type=zipfile.ZIP_STORED)
             for c in cams:
                 cid = c["id"]
                 z.writestr(f"img/{cid:04d}_thumb.jpg", c.pop("_thumb"), zipfile.ZIP_STORED)
@@ -1499,6 +1515,8 @@ def save_report(scene_data, out_path):
                     "ribbons": scene_data.get("ribbons", []),   # 모든 2D 인스턴스의 3D 리본
                     "cameras": cams,
                     "hotspots": scene_data["hotspots"]}
+            if tiles_meta:
+                meta["tiles"] = tiles_meta           # 뷰어가 있으면 타일, 없으면 mesh.ply 를 찾는다
             z.writestr("meta.json", json.dumps(meta, ensure_ascii=False), zipfile.ZIP_DEFLATED)
         os.replace(tmp, out_path)                # 원자적 교체(성공 시에만 최종 파일이 생김)
     except BaseException:
@@ -1512,9 +1530,10 @@ def save_report(scene_data, out_path):
 def build_report(folder, ply_path, out_path, log, progress, detect=True, thr=CRACK_THR, limit=None):
     """분석 → scene_data 생성 → .twin 저장까지 한 번에 수행한다."""
     scene = build_scene_data(folder, ply_path, log, progress, detect=detect, thr=thr, limit=limit)
-    log(f"보고서 저장 중: {os.path.basename(out_path)} (메시·이미지 압축) …")
+    log(f"보고서 저장 중: {os.path.basename(out_path)} (메시 타일 · 이미지) …")
     _t_save = time.time()
-    p = save_report(scene, out_path)
+    # 타일 생성 진행률은 기존 (c, t) 규약에 맞춰 0~100 으로 다시 보고한다(막대가 한 번 더 찬다).
+    p = save_report(scene, out_path, log=log, progress=lambda f: progress(int(f * 100), 100))
     log(f"보고서 저장: {p} ({os.path.getsize(p)/1e6:.1f} MB) · 카메라 {len(scene['cameras'])} · "
         f"크랙 {len(scene['hotspots'])} · {time.time() - _t_save:.0f}s")
     return p

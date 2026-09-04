@@ -10,6 +10,15 @@
 
 ## [Unreleased]
 
+### 추가
+- **계층 LOD 타일 포팅 준비 (feat/lod-tiles)** — 6.26GB(면 1억 9천만) PLY 를 열기 위해
+  viewer-simple 브랜치에서 만든 옥트리 타일 구조를 옮겨 오는 첫 단계.
+  `tiler.py` · `ui/tiles.js` · `ui/bvh.js` · `ui/lod.js` 를 그대로 가져왔고, `backend.py` 에
+  `/api/report/tile` 라우트와 zip 핸들 캐시, `pipeline.save_report` 에 타일 생성을 넣었다.
+  뷰어·`tools/compare_twins.py`·`tools/export_report.py` 가 아직 `mesh.ply` 를 읽으므로
+  `KEEP_MESH_PLY = True` 로 원본도 함께 담는다 — 동작은 종전과 같고 타일만 옆에 쌓인다.
+  남은 작업 순서는 `docs/PLAN_LOD_PORT.md`, 설계 근거는 viewer-simple 의 `docs/DEV_LOD.md`.
+
 ### 수정
 - **3D 표면이 계단처럼 층져 보이던 문제 수정 (뷰어 좌표 원점 이동)** — PLY 와 meta 는
   UTM 절대좌표(예: Y≈4,113,800)를 double 로 담는데 three.js 는 위치를

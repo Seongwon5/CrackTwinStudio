@@ -72,8 +72,61 @@ def twin_version(path):
 def report_meta(path):
     """뷰어용 메타(JSON). 이미지·메시 같은 큰 덩어리는 빼고 기하만 담는다."""
     twin_version(path)                           # 형식 검증(구형식이면 여기서 예외)
-    with zipfile.ZipFile(path) as z:
+    with _open_twin(path) as z:
         return z.read("meta.json").decode("utf-8")
+
+
+# 타일 보고서(계층 LOD, tiler.py)는 뷰어가 수백~수천 개의 작은 요청을 보낸다. 요청마다 zip 중앙
+# 디렉터리(항목 수천 개)를 다시 읽지 않도록 열어 둔 ZipFile 을 경로별로 재사용한다. 파일이 바뀌면
+# (크기·수정시각) 새로 연다. ZipFile 은 open() 들을 락으로 직렬화하므로 여러 스레드가 함께 읽어도 된다.
+# 열어 둔 파일은 Windows 에서 교체(os.replace)를 막으므로, 몇 초 안 쓰이면 닫는다 — 같은 이름으로
+# 보고서를 다시 만들 때 생성이 실패하지 않게. (viewer-simple 브랜치와 동일 코드)
+_ZIP_IDLE_SEC = 3.0
+_zip_cache, _zip_lock = {}, threading.Lock()      # path -> [key, ZipFile, last_used, in_use]
+
+
+class _Shared:
+    """with 문으로 써도 닫지 않는 ZipFile 대리자 — 캐시가 소유하고, 쓰는 동안은 청소하지 않는다."""
+    def __init__(self, ent): self.ent = ent
+    def __enter__(self):
+        with _zip_lock: self.ent[3] += 1
+        return self.ent[1]
+    def __exit__(self, *a):
+        import time
+        with _zip_lock: self.ent[3] -= 1; self.ent[2] = time.monotonic()
+        return False
+
+
+def _open_twin(path):
+    import time
+    st = os.stat(path)
+    key = (st.st_size, st.st_mtime_ns)
+    with _zip_lock:
+        ent = _zip_cache.get(path)
+        if ent and ent[0] == key:
+            ent[2] = time.monotonic()
+            return _Shared(ent)
+        if ent and ent[3] == 0:
+            _zip_cache.pop(path)
+            try: ent[1].close()
+            except Exception: pass
+        ent = [key, zipfile.ZipFile(path), time.monotonic(), 0]
+        _zip_cache[path] = ent
+        return _Shared(ent)
+
+
+def _zip_janitor():
+    import time
+    while True:
+        time.sleep(1.0)
+        with _zip_lock:
+            now = time.monotonic()
+            for p in [p for p, e in _zip_cache.items() if e[3] == 0 and now - e[2] > _ZIP_IDLE_SEC]:
+                try: _zip_cache.pop(p)[1].close()
+                except Exception: pass
+
+
+threading.Thread(target=_zip_janitor, daemon=True).start()
 
 
 def _ps_dialog(script):
@@ -278,9 +331,21 @@ class Handler(BaseHTTPRequestHandler):
     def _report_mesh(self, path):
         """메시를 '바이너리'로 내려준다. base64/JSON 을 거치지 않으므로 문자열 한계와 무관."""
         twin_version(path)                                       # 형식 검증
-        with zipfile.ZipFile(path) as z:                         # 스트리밍: 피크 메모리 ≈ 청크
+        with _open_twin(path) as z:                              # 스트리밍: 피크 메모리 ≈ 청크
             info = z.getinfo("mesh.ply")
             with z.open("mesh.ply") as src:
+                return self._stream(src, info.file_size, "application/octet-stream")
+
+    def _report_tile(self, path, tid):
+        """계층 LOD 타일 하나(tiles/<id>.bin)를 스트리밍한다. 뷰어가 보이는 것만 골라 요청한다."""
+        twin_version(path)
+        name = f"tiles/{tid}.bin"
+        with _open_twin(path) as z:
+            try:
+                info = z.getinfo(name)
+            except KeyError:
+                return self._send(404, "타일 없음: " + name, "text/plain; charset=utf-8")
+            with z.open(name) as src:
                 return self._stream(src, info.file_size, "application/octet-stream")
 
     def _report_img(self, path, cid, kind):
@@ -308,7 +373,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if r in ("/", "/index.html", "/dashboard.html"):
                 return self._file(os.path.join(UI_DIR, "dashboard.html"), "text/html; charset=utf-8")
-            if r in ("/dashboard.js", "/style.css", "/viewer.js", "/viewer.css"):
+            if r in ("/dashboard.js", "/style.css", "/viewer.js", "/viewer.css",
+                     "/bvh.js", "/lod.js", "/origin.js", "/tiles.js"):
                 ct = "text/javascript" if r.endswith(".js") else "text/css"
                 return self._file(os.path.join(UI_DIR, r[1:]), ct + "; charset=utf-8")
             if r.startswith("/libs/"):
@@ -339,6 +405,10 @@ class Handler(BaseHTTPRequestHandler):
                 p = self._twin_arg(q)
                 if p is None: return
                 return self._report_mesh(p)
+            if r == "/api/report/tile":
+                p = self._twin_arg(q)
+                if p is None: return
+                return self._report_tile(p, int(q.get("id", ["-1"])[0]))
             if r == "/api/report/img":
                 p = self._twin_arg(q)
                 if p is None: return
