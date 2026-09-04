@@ -315,6 +315,7 @@ try {
   globalMesh = tiles.group;
   scene.add(globalMesh);
   window.__tiles = tiles;                // 개발자 도구 디버그용(__tiles.stats)
+  window.__viewer = { renderer, scene, camera, THREE };   // 진단용(이음새 검사 등) — 동작에는 관여하지 않는다
 
   const s = tiles.sphere;
   sceneCenter.copy(s.center);
