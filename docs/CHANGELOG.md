@@ -11,6 +11,14 @@
 ## [Unreleased]
 
 ### 수정
+- **배포 앱에서 사진 몇 장 만에 메모리가 고갈되던 문제 (embree 누락)** — 번들에 embreex 의 Cython 모듈
+  `rtcore` 와 dist-info 메타데이터가 빠져 `import embreex` 가 실패했고, trimesh 는 조용히 numpy 광선 교차
+  (`ray_triangle`)로 물러났다. 이 경로는 광선마다 전 삼각형 배열을 만들어 3천만 면 메시에서 장당 수십 GB 를
+  먹는다(실측: 커밋 111GB, 사진 5장째부터 "Unable to allocate", 크랙 0개 보고서). `build.py` 에
+  `--collect-all embreex --copy-metadata embreex` 를 넣고, 파이프라인은 교차 엔진 이름을 로그에 찍고
+  embree 가 아니면 즉시 오류로 멈춘다. `크랙 디지털 트윈 스튜디오.exe --selftest` 가 번들 자가진단
+  (torch CUDA·embree·모델 등)을 exe 옆 `selftest.txt` 에 남긴다 — 배포 전 확인용.
+  분석 로그의 장별 줄에 메모리 사용량을 붙였다. 디버그용으로 `/api/create` 가 `limit`(사진 수)을 받는다.
 - **요약 타일(코스 LOD)의 구멍 제거** — 멀리서 볼 때 돔이 점·선투성이로 보이던 문제. `tiler.simplify` 가
   3-클리크에 칸별 부채꼴(dual fan) 삼각형과 작은 경계 고리 메움을 더해, 돔 영역 배경 픽셀이 보통 LOD 에서
   원본 잎 타일과 같은 수준(24.5%)이 됐다(종전 25.1%, 루트 34.5%→27.1%). 아래 벽의 검은 선은 원본 스캔의

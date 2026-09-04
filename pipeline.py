@@ -1121,6 +1121,14 @@ def _load_mesh_for_measure(ply_path, log, pr, measure=None):
             pr.step(0.6, "trimesh.load 완료")
     if mesh.is_empty or len(mesh.faces) == 0:
         raise RuntimeError("PLY에 삼각형이 없습니다(메시가 아닌 포인트클라우드).")
+    # 가속 구조가 embree 가 아니면(번들에서 DLL 로드 실패 등) trimesh 는 순수 numpy 교차로 물러난다 —
+    # 광선마다 전 삼각형 배열을 만들어 3천만 면에서는 수십 GB 를 먹고 장당 수 분이 걸린다. 조용히
+    # 진행하지 않고 여기서 멈춘다(실측: 배포 앱에서 사진 5장 만에 메모리 고갈 의심 사례).
+    ray_mod = type(mesh.ray).__module__
+    log(f"  광선-메시 교차 엔진: {ray_mod.rsplit('.', 1)[-1]}")
+    if "pyembree" not in ray_mod:
+        raise RuntimeError("embree 가속 구조를 쓸 수 없습니다(" + ray_mod + "). embreex 설치/번들 상태를 확인하세요 — "
+                           "numpy 교차로는 큰 메시 역투영이 메모리를 다 씁니다.")
     pr.step(0.65, f"역투영 가속 구조(embree) 준비 · 면 {len(mesh.faces):,}개 — 큰 메시는 수 분")
     # 인터섹터는 첫 질의 때 BVH 를 만든다(지연) → 광선 하나를 미리 쏴서 여기서 시간이 들게 한다.
     lo, hi = mesh.vertices.min(0), mesh.vertices.max(0)
@@ -1340,7 +1348,8 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                                 pend[0].result()
                             except Exception:
                                 pass                   # 실제 오류는 수확 단계에서 이미지명과 함께 보고
-                    log(f"  [{i+1}/{len(pairs)}] {name}  crack_px={ncr}" + (" (캐시)" if hitc else ""))
+                    log(f"  [{i+1}/{len(pairs)}] {name}  crack_px={ncr}" + (" (캐시)" if hitc else "")
+                        + f" · 메모리 {_rss_gb():.1f}GB")
                 else:
                     log(f"  [{i+1}/{len(pairs)}] {name} (카메라만)")
             except Exception as e:

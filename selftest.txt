@@ -1,0 +1,11 @@
+python 3.14.3 · frozen=False
+ok   torch: 2.11.0+cu128 cuda=True
+ok   embreex: 4.4.0
+ok   embreex.rtcore_scene: embreex
+ok   trimesh.ray embree: has_embree=True
+ok   cv2: 5.0.0
+ok   skimage.morphology: skimage
+ok   scipy.ndimage: scipy
+ok   PIL: PIL
+ok   model/best.pt: 118MB
+ok   tiler: tiler

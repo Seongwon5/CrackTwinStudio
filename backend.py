@@ -270,7 +270,7 @@ def _run_compare_job(job_id, twin_a, twin_b, ida, idb, out_path, extend_asset=No
         j["done"] = True
 
 
-def _run_job(job_id, folder, ply, out_path, detect):
+def _run_job(job_id, folder, ply, out_path, detect, limit=None):
     """백그라운드에서 크랙 분석 보고서를 생성하고 진행률/로그/결과를 갱신한다."""
     j = _jobs[job_id]
     # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
@@ -278,7 +278,7 @@ def _run_job(job_id, folder, ply, out_path, detect):
     # 진행률 갱신(0.0~1.0). pipeline.Progress 가 전체 비율 하나(frac)를 넘긴다 — (c, t) 도 받는다.
     def prog(c, t=None): j["progress"] = max(0.0, min(1.0, (c / t) if t else float(c)))
     try:
-        j["result"] = P.build_report(folder, ply, out_path, log, prog, detect=detect); j["progress"] = 1.0
+        j["result"] = P.build_report(folder, ply, out_path, log, prog, detect=detect, limit=limit); j["progress"] = 1.0
     except Exception as e:
         import traceback; traceback.print_exc(); j["error"] = str(e)
     finally:
@@ -632,7 +632,7 @@ class Handler(BaseHTTPRequestHandler):
             detect = bool(d.get("detect", d.get("do_ocr", True)))
             jid = uuid.uuid4().hex[:8]
             _jobs[jid] = {"progress": 0.0, "done": False, "error": None, "result": None, "log": []}
-            threading.Thread(target=_run_job, args=(jid, folder, ply, out, detect), daemon=True).start()
+            threading.Thread(target=_run_job, args=(jid, folder, ply, out, detect, d.get("limit")), daemon=True).start()
             return self._json({"job": jid, "out": out})
         except Exception as e:
             import traceback; traceback.print_exc(); return self._json({"error": str(e)}, 500)

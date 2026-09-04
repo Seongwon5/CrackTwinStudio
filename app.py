@@ -131,7 +131,46 @@ def main():
     httpd.shutdown()
 
 
+def selftest():
+    """--selftest: 배포 번들 자가진단. 창 없이 exe 옆 selftest.txt 에 결과를 쓰고 끝난다.
+
+    빌드가 바뀔 때마다 17분짜리 실제 분석을 돌리지 않고도 '번들에 빠진 것'을 수 초 만에 잡기 위한 것.
+    확인 항목: torch CUDA · trimesh 의 embree 인터페이스(없으면 numpy 교차로 물러나 큰 메시에서
+    메모리 고갈) · embreex/cv2/skimage/scipy/PIL 임포트 · 모델 파일.
+    """
+    import traceback
+    base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+    out = os.path.join(base, "selftest.txt")
+    lines = [f"python {sys.version.split()[0]} · frozen={getattr(sys, 'frozen', False)}"]
+    def check(name, fn):
+        try:
+            lines.append(f"ok   {name}: {fn()}")
+        except Exception as e:
+            lines.append(f"FAIL {name}: {type(e).__name__}: {str(e)[:300]}")
+    check("torch", lambda: __import__("torch").__version__ + " cuda=" + str(__import__("torch").cuda.is_available()))
+    check("embreex", lambda: __import__("embreex").__version__)
+    check("embreex.rtcore_scene", lambda: __import__("embreex.rtcore_scene").__name__)
+    def _embree():
+        import trimesh.ray as R
+        if not R.has_embree:
+            R.ray_pyembree.RayMeshIntersector          # ExceptionWrapper — 원인 예외를 다시 던진다
+        return "has_embree=" + str(R.has_embree)
+    check("trimesh.ray embree", _embree)
+    check("cv2", lambda: __import__("cv2").__version__)
+    check("skimage.morphology", lambda: __import__("skimage.morphology").__name__)
+    check("scipy.ndimage", lambda: __import__("scipy.ndimage").__name__)
+    check("PIL", lambda: __import__("PIL.Image").__name__)
+    check("model/best.pt", lambda: f"{os.path.getsize(os.path.join(B.HERE, 'model', 'best.pt')) / 1e6:.0f}MB")
+    check("tiler", lambda: __import__("tiler").__name__)
+    with open(out, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+    return 0 if all(l.startswith("ok") for l in lines[1:]) else 1
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(selftest())
     # 콘솔 없는 exe 는 예외가 나도 아무 것도 보이지 않는다 → 항상 창으로 알린다.
     try:
         main()

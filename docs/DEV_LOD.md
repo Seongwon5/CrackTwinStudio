@@ -109,6 +109,12 @@ main 의 분석은 trimesh 로 이미지 픽셀을 메시에 역투영한다. tr
   이미지 분석 → 병합 → 융합 → (측정용 메시 해제 + gc) → 보고서 저장(이미지·meta). zip(.tmp) 은
   처음부터 열어 두고 채운다.
 
+### embree 가 없으면 멈춘다
+`_load_mesh_for_measure` 는 `type(mesh.ray).__module__` 을 로그에 찍고 `pyembree` 가 아니면 RuntimeError 를
+낸다. trimesh 는 embreex 임포트가 실패하면 조용히 `ray_triangle`(numpy)로 물러나는데, 이 경로는 광선마다
+(광선 수 × 면 수) 배열을 만들어 3천만 면에서는 장당 수십 GB 다(배포 앱 실측: 커밋 111GB, 사진 5장째부터
+할당 실패). 번들에는 `--collect-all embreex --copy-metadata embreex` 가 필요하고, `exe --selftest` 로 확인한다.
+
 ### 진행 로그 (`pipeline.Progress`)
 - 7단계 가중치(타일 25 · 메시 로드 5 · 모델 2 · 이미지 50 · 병합 5 · 융합 3 · 저장 10%)로 전체 %를 만든다.
   `stage(이름)` 이 "▶ [전체 NN%] (k/7) 이름 · 경과 · 메모리", `step(frac, 세부)` 이 5% 또는 10초마다

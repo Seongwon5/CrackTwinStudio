@@ -20,6 +20,9 @@ viewer-simple 브랜치는 단일 exe(--onefile)지만 여기는 폴더(--onedir
 
 첫 빌드는 torch·scipy·matplotlib 의존 분석 때문에 30분 안팎이 걸린다. 이후에는
   py build.py --fast     (--clean 생략 → 분석 캐시 재사용, 몇 분)
+  py build.py --dist D:\out   (다른 폴더에 빌드 — 실행 중인 앱 폴더를 덮어쓰지 않을 때)
+빌드 뒤 `크랙 디지털 트윈 스튜디오.exe --selftest` 를 돌리면 exe 옆 selftest.txt 에 번들 자가진단이
+남는다(torch CUDA · embree · 모델 등). 배포 전에 전부 ok 인지 확인할 것.
 ui/·libs/·tools/·model/ 같은 자원만 고쳤다면 재빌드 없이 dist/…/_internal/ 아래 파일을
 바꿔치기해도 된다(파이썬 파일은 번들에 컴파일돼 들어가므로 재빌드 필요).
 
@@ -31,7 +34,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "크랙 디지털 트윈 스튜디오"
-VERSION = (2, 0, 2, 0)          # 2.0.2: 코스 LOD 구멍 제거(부채꼴·고리 메움) · 진행 로그 · 측정용 옥트리 컷
+VERSION = (2, 0, 3, 0)          # 2.0.3: 배포 번들 embree 누락 수정(메모리 고갈) · --selftest
 COMPANY = "PRIMEPANO"
 ICON = os.path.join(HERE, "assets", "icon.ico")
 
@@ -67,9 +70,12 @@ def main():
     data = [("ui", "ui"), ("libs", "libs"), ("assets/icon.ico", "assets"),
             ("model", "model"), ("network", "network"), ("tools", "tools")]
     fast = "--fast" in sys.argv                    # 분석 캐시 재사용(재빌드용)
+    dist = os.path.join(HERE, "dist")
+    if "--dist" in sys.argv:                       # 실행 중인 앱 폴더를 덮어쓰지 않고 다른 곳에 빌드
+        dist = os.path.abspath(sys.argv[sys.argv.index("--dist") + 1])
     args = [
         sys.executable, "-m", "PyInstaller",
-        "--noconfirm", *([] if fast else ["--clean"]), "--onedir", "--windowed",
+        "--noconfirm", *([] if fast else ["--clean"]), "--onedir", "--windowed", "--distpath", dist,
         "--name", NAME,
         "--icon", ICON,
         "--version-file", verfile,
@@ -80,6 +86,11 @@ def main():
         "--hidden-import", "network.backbone",
         "--hidden-import", "compare_twins", "--hidden-import", "export_report", "--hidden-import", "twin_mesh",
         "--hidden-import", "tiler",
+        # embreex(embree 광선 교차): Cython 모듈 rtcore 는 컴파일된 rtcore_scene 안에서만 불려 분석기가
+        # 못 보고, __init__ 이 importlib.metadata 로 버전을 읽어 dist-info 도 있어야 한다. 둘 중 하나라도
+        # 빠지면 trimesh 가 조용히 numpy 교차(ray_triangle)로 물러나 큰 메시에서 메모리를 다 쓴다
+        # (실측: 배포 앱에서 사진 5장 만에 메모리 고갈). collect-all + copy-metadata 로 전부 넣는다.
+        "--collect-all", "embreex", "--copy-metadata", "embreex",
         "--collect-submodules", "network",
         "--collect-submodules", "skimage", "--collect-submodules", "scipy",
         "--collect-data", "trimesh", "--collect-data", "matplotlib",
@@ -90,7 +101,7 @@ def main():
     args.append(os.path.join(HERE, "app.py"))
     subprocess.check_call(args, cwd=HERE)
 
-    out = os.path.join(HERE, "dist", NAME)
+    out = os.path.join(dist, NAME)
     total = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(out) for f in fs)
     print("\n완료:", out, f"({total / 1024 / 1024:.0f} MB)")
 
