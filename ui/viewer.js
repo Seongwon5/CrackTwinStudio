@@ -75,6 +75,7 @@ try {
                         { material: mat, triBudget: 5e6, byteBudget: 1.5e9, ssePx: 2, movingScale: 2.5 });
   await tiles.ready;
   window.__tiles = tiles; window.__camera = camera;   // 개발자 도구 디버그용(__tiles.stats)
+  window.__viewer = { renderer, scene, camera, THREE };   // 진단용(이음새·구멍 검사) — 동작에는 관여하지 않는다
 } catch (e) {
   _say('보고서를 열 수 없습니다: ' + e.message);
   throw e;
