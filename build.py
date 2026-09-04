@@ -31,7 +31,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "크랙 디지털 트윈 스튜디오"
-VERSION = (2, 0, 0, 0)          # main 계열 첫 배포 빌드 — 계층 LOD 타일 포함
+VERSION = (2, 0, 1, 0)          # 2.0.1: 진행 로그 · 측정용 옥트리 컷
 COMPANY = "PRIMEPANO"
 ICON = os.path.join(HERE, "assets", "icon.ico")
 
