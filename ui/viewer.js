@@ -589,6 +589,8 @@ const _clock = new THREE.Clock();
     _idle = 0;
   }
   applyLook();                                   // yaw/pitch(+이동된 위치)를 반영 · up 항상 Z
+  // NaN 가드: 창 높이 0 인 순간에 만들어진 aspect 는 NaN 이라 영원히 아무것도 안 그려진다
+  { const a = W() / H(); if (Number.isFinite(a) && !(Math.abs(camera.aspect - a) <= 1e-4)) { camera.aspect = a; camera.updateProjectionMatrix(); } }
   camera.updateMatrixWorld();                    // 타일 선택이 이번 프레임의 카메라 행렬을 읽는다
   tiles.update(camera, H(), _idle < 0.4);        // 보이는 타일 선택·요청·해제 (조작 중엔 거칠게)
   GZ.update();
