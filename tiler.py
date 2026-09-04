@@ -47,6 +47,7 @@ LEAF_MAX_TRIS = 100_000     # 잎 노드 최대 삼각형 수 — 타일 하나 
 GRID = 128                  # 내부 노드 격자 분할 수(축당) — 표면 노드 ≈ 3~6만 면
 MAX_DEPTH = 12              # 모튼 코드 비트 수(축당) = 옥트리 최대 깊이
 MAGIC = b"TWT1"
+MEASURE_CELL_FACTOR = 1.8   # 측정용 컷 칸 크기 보정(실측 면 수/목표 = 3.5 → sqrt) — build_tiles 참조
 
 _PLY_NP = {"char": "i1", "int8": "i1", "uchar": "u1", "uint8": "u1",
            "short": "i2", "int16": "i2", "ushort": "u2", "uint16": "u2",
@@ -57,6 +58,28 @@ _COLOR_NAMES = (("red", "green", "blue"), ("r", "g", "b"), ("diffuse_red", "diff
 
 class PlyError(ValueError):
     """타일로 만들 수 없는 PLY — 호출측은 원본 mesh.ply 그대로 저장하는 경로로 물러난다."""
+
+
+class _Report:
+    """한 단계의 진행을 progress(0~1) 로 넘기고, 로그에는 절제해서(10%마다 또는 5초마다) 한 줄 찍는다.
+
+    긴 단계(6GB 읽기 1분 · 정렬 2분 · 타일 12분)에서 아무 말 없이 멈춘 것처럼 보이지 않게 한다.
+    w0~w1: 이 단계가 전체 타일 작업에서 차지하는 구간(가중치). label: 로그에 붙는 단계 이름.
+    """
+    def __init__(self, log, progress, w0, w1, label, prefix="메시 타일"):
+        self.log, self.progress, self.w0, self.w1, self.label, self.prefix = log, progress, w0, w1, label, prefix
+        self.last_f, self.last_t, self.t0 = -1.0, 0.0, time.time()
+
+    def __call__(self, frac, detail=""):
+        frac = max(0.0, min(1.0, frac))
+        overall = self.w0 + (self.w1 - self.w0) * frac
+        if self.progress:
+            self.progress(overall)
+        now = time.time()
+        if frac >= 1.0 or frac - self.last_f >= 0.1 or now - self.last_t >= 5.0:
+            self.last_f, self.last_t = frac, now
+            self.log(f"  [{self.prefix} {overall * 100:3.0f}%] {self.label} {frac * 100:.0f}%"
+                     + (f" · {detail}" if detail else "") + f" · {now - self.t0:.0f}초")
 
 
 # ---------------------------------------------------------------- PLY 읽기
@@ -100,11 +123,16 @@ def _vertex_dtype(props):
     return np.dtype(fields)
 
 
-def load_mesh(path, log):
-    """PLY → (P float32 국소좌표 (nV,3), C uint8 (nV,3)|None, F int32 (nF,3), origin[3]).
+def load_mesh(path, log, progress=None, local=True):
+    """PLY → (P (nV,3), C uint8 (nV,3)|None, F int32 (nF,3), origin[3]).
 
-    삼각형 메시가 아니거나(면 정점 수 ≠ 3) 형식이 맞지 않으면 PlyError.
+    local=True : P 는 원점(origin)을 뺀 float32 국소좌표 (타일용)
+    local=False: P 는 원점을 빼지 않은 float64 절대좌표, origin 은 [0,0,0] (파이프라인 측정용 —
+                 mm 정밀도를 float64 그대로 유지한다)
+    progress(0~1) 로 읽기 진행을 알린다(정점 0~0.6 · 면 0.6~1). 삼각형 메시가 아니거나
+    (면 정점 수 ≠ 3) 형식이 맞지 않으면 PlyError.
     """
+    rep_ = progress or (lambda f, d="": None)
     elements, off = read_header(path)
     names = [e["name"] for e in elements]
     if names[:2] != ["vertex", "face"]:
@@ -133,19 +161,22 @@ def load_mesh(path, log):
     mmF = np.memmap(path, dtype=fdt, mode="r", offset=face_off, shape=(nF,))
 
     # 원점: 표본으로 잡은 경계상자 중심(정수 m). 정확할 필요는 없고 좌표가 작아지기만 하면 된다.
-    step = max(1, nV // 200_000)
-    origin = []
-    for k in ("x", "y", "z"):
-        s = np.asarray(mmV[k][::step], dtype=np.float64)
-        origin.append(float(round((s.min() + s.max()) / 2)))
-    log(f"  원점 이동: {origin[0]:.0f}, {origin[1]:.0f}, {origin[2]:.0f}")
+    # (표본 20만 점이 파일 전체에 흩어져 있어 6GB 에서 수십 초 — 절대좌표가 필요한 측정용 로드는 건너뛴다)
+    origin = [0.0, 0.0, 0.0]
+    if local:
+        step = max(1, nV // 200_000)
+        origin = []
+        for k in ("x", "y", "z"):
+            s = np.asarray(mmV[k][::step], dtype=np.float64)
+            origin.append(float(round((s.min() + s.max()) / 2)))
+        log(f"  원점 이동: {origin[0]:.0f}, {origin[1]:.0f}, {origin[2]:.0f}")
 
     color = next((c for c in _COLOR_NAMES if all(n in vdt.names for n in c)), None)
     if color and any(vdt[n] != np.dtype("u1") for n in color):
         log("  ⚠ 색이 uchar 가 아니라 무시합니다")
         color = None
 
-    P = np.empty((nV, 3), np.float32)
+    P = np.empty((nV, 3), np.float32 if local else np.float64)
     C = np.empty((nV, 3), np.uint8) if color else None
     CH = 2_000_000
     for s in range(0, nV, CH):
@@ -156,6 +187,7 @@ def load_mesh(path, log):
         if color:
             for k, name in enumerate(color):
                 C[s:e, k] = blk[name]
+        rep_(0.6 * e / nV, f"정점 {e:,}/{nV:,}")
     del mmV
 
     F = np.empty((nF, 3), np.int32)
@@ -166,6 +198,7 @@ def load_mesh(path, log):
         if not np.all(blk["n"] == 3):
             raise PlyError("삼각형이 아닌 면이 있음(사각형 등) — 삼각형으로 내보내 주세요")
         F[s:e] = blk["v"]
+        rep_(0.6 + 0.4 * e / nF, f"면 {e:,}/{nF:,}")
     del mmF
     if int(F.max()) >= nV or int(F.min()) < 0:
         raise PlyError("면 인덱스가 정점 범위를 벗어남")
@@ -278,21 +311,43 @@ def simplify(parts, cmin, csize, grid=GRID):
     return Pn, Cn, tri.astype(np.uint32)
 
 
-def build_tiles(ply_path, zf, log, progress, leaf_max=LEAF_MAX_TRIS, grid=GRID):
+def build_tiles(ply_path, zf, log, progress, leaf_max=LEAF_MAX_TRIS, grid=GRID, measure_max_faces=None):
     """PLY 를 타일로 쪼개 zf(zipfile, 쓰기 모드)에 tiles/<id>.bin 으로 넣고 meta 의 tiles 항목을 돌려준다.
 
-    progress(0~1) 은 원본 삼각형이 잎 타일로 소비된 비율.
+    progress(0~1) 은 타일 작업 전체 진행률(읽기 8% · 공간 정렬 12% · 타일 생성 80% — 6GB 실측 비율).
+    로그에는 단계마다 10% 또는 5초 간격으로 진행 줄을 찍는다.
+
+    measure_max_faces 를 주면 (meta, measure) 를 돌려준다. measure 는 측정(역투영)용 메시 —
+    {"P": float64 절대좌표 (n,3), "F": int32 (m,3), "cell": 셀 크기 m, "faces_src": 원본 면 수}.
+    원본 면 수가 그 값 이하면 원본 그대로, 넘으면 옥트리에서 "칸 크기 ≤ 목표 < 부모 칸 크기" 인
+    노드들(루트→잎 경로마다 정확히 하나)을 모아 만든다 = 원본을 목표 칸 크기로 요약한 메시.
+    목표 칸 = 평균 변 길이 × sqrt(원본 면 수 / 상한) → 면 수가 상한 근처로 떨어진다.
+    왜 — trimesh 는 면마다 float64 삼각형·법선·외적을 캐시해 1억 9천만 면이면 20GB 를 넘는다(실측
+    MemoryError). 폭 측정은 인접한 두 광선의 착지점 차이라 표면이 몇 cm 격자로 요약돼도 국소 평면
+    위에서는 거의 그대로다(돔 반경 20m·3cm 격자의 현 오차 6µm).
     """
     t0 = time.time()
-    P, C, F, origin = load_mesh(ply_path, log)
+    P, C, F, origin = load_mesh(ply_path, log, progress=_Report(log, progress, 0.0, 0.08, "PLY 읽기"))
     nV, nF = len(P), len(F)
     log(f"  정점 {nV:,} · 면 {nF:,} · 색 {'있음' if C is not None else '없음'} ({time.time() - t0:.0f}초)")
+
+    # 측정용 컷의 목표 칸 크기
+    m_target, m_parts = None, []
+    if measure_max_faces and nF > measure_max_faces:
+        smp = F[np.random.default_rng(0).choice(nF, min(nF, 100_000), replace=False)]
+        e_mean = float(np.linalg.norm(P[smp[:, 0]].astype(np.float64) - P[smp[:, 1]].astype(np.float64), axis=1).mean())
+        # 격자 병합 결과는 칸당 삼각형 2개가 아니라 약 3.5개(클리크·노드 경계 중복) — 6GB 실측:
+        # 보정 없이 2.7cm 로 잡았더니 6,900만 면(목표 2천만의 3.5배). sqrt(3.5)≈1.8 배 큰 칸(4.8cm)에서 3,180만 면.
+        m_target = e_mean * float(np.sqrt(nF / measure_max_faces)) * MEASURE_CELL_FACTOR
+        log(f"  측정용 메시: 원본 면 {nF:,} > 상한 {measure_max_faces:,} → 칸 {m_target * 100:.1f}cm 로 요약"
+            f"(평균 변 {e_mean * 100:.2f}cm)")
 
     lo, hi = P.min(0).astype(np.float64), P.max(0).astype(np.float64)
     size = float((hi - lo).max()) * 1.0001 + 1e-6
     cube_min = (lo + hi) / 2 - size / 2
 
     # 면 → 첫 정점의 모튼 키 → 정렬. 정렬 뒤 노드 = 연속 구간.
+    rep_sort = _Report(log, progress, 0.08, 0.20, "공간 정렬")
     keys = np.empty(nF, np.uint64)
     scale = (1 << MAX_DEPTH) / size
     CH = 8_000_000
@@ -301,14 +356,19 @@ def build_tiles(ply_path, zf, log, progress, leaf_max=LEAF_MAX_TRIS, grid=GRID):
         q = ((P[F[s:e, 0]].astype(np.float64) - cube_min) * scale).astype(np.int64)
         np.clip(q, 0, (1 << MAX_DEPTH) - 1, out=q)
         keys[s:e] = morton(q)
+        rep_sort(0.3 * e / nF, f"모튼 키 {e:,}/{nF:,}")
+    rep_sort(0.3, "정렬 시작(면 %s개 — 수 분)" % f"{nF:,}")
     order = np.argsort(keys)
+    rep_sort(0.8, "정렬 완료 · 면 재배열")
     keys = keys[order]
     F = F[order]
     del order
+    rep_sort(1.0)
     log(f"  공간 정렬 완료 ({time.time() - t0:.0f}초)")
 
     nodes = []
     state = {"done": 0, "tris": 0, "last": 0.0}
+    rep_tile = _Report(log, progress, 0.20, 1.0, "타일 생성")
 
     def emit(Pt, Ct, It, err, children, child_boxes):
         nid = len(nodes)
@@ -329,9 +389,12 @@ def build_tiles(ply_path, zf, log, progress, leaf_max=LEAF_MAX_TRIS, grid=GRID):
             Pt, Ct = P[u], (C[u] if C is not None else None)
             It = inv.ravel().reshape(-1, 3).astype(np.uint32)
             nid, box = emit(Pt, Ct, It, 0.0, [], [])
+            if m_target is not None and (depth == 0 or 2 * csize / grid > m_target):   # 잎: 부모 칸이 목표보다 크면 채택
+                m_parts.append((Pt, It))
             state["done"] += n
             if time.time() - state["last"] > 0.5:
-                state["last"] = time.time(); progress(state["done"] / nF)
+                state["last"] = time.time()
+                rep_tile(state["done"] / nF, f"타일 {len(nodes):,}개 · 면 {state['done']:,}/{nF:,}")
             return nid, box, (Pt, Ct, It)
         shift = 3 * (MAX_DEPTH - depth - 1)
         half = csize / 2
@@ -348,16 +411,33 @@ def build_tiles(ply_path, zf, log, progress, leaf_max=LEAF_MAX_TRIS, grid=GRID):
             ids.append(cid); boxes.append(cbox); parts.append(mesh)
         Pm, Cm, Im = simplify(parts, cmin, csize, grid)
         nid, box = emit(Pm, Cm, Im, csize / grid, ids, boxes)
+        e_self = csize / grid
+        if m_target is not None and e_self <= m_target and (depth == 0 or 2 * e_self > m_target):
+            m_parts.append((Pm, Im))                 # 내부: 내 칸 ≤ 목표 < 부모 칸
         return nid, box, (Pm, Cm, Im)
 
     root, root_box, _ = build(0, 0, cube_min, size, 0, nF)
-    progress(1.0)
+    rep_tile(1.0, f"타일 {len(nodes):,}개")
     leaves = sum(1 for n in nodes if not n["c"])
     log(f"  타일 {len(nodes):,}개(잎 {leaves:,}) · 타일 삼각형 합계 {state['tris']:,} · "
         f"루트 {nodes[root]['t']:,}면 ({time.time() - t0:.0f}초)")
-    return {"version": 1, "origin": origin, "box": root_box, "root": root, "color": C is not None,
+    meta = {"version": 1, "origin": origin, "box": root_box, "root": root, "color": C is not None,
             "grid": grid, "leaf_max": leaf_max, "max_depth": MAX_DEPTH,
             "source": {"vertices": nV, "faces": nF}, "nodes": nodes}
+    if measure_max_faces is None:
+        return meta
+    # 측정용 메시 — 원본(상한 이하) 또는 옥트리 컷. 큰 배열(P·C·F·keys)은 먼저 놓아준다.
+    if m_target is None:
+        Pm, Fm = P.astype(np.float64) + np.asarray(origin), F.astype(np.int32)
+        cell = 0.0
+    else:
+        offs = np.cumsum([0] + [len(p_) for p_, _ in m_parts[:-1]])
+        Pm = np.concatenate([p_ for p_, _ in m_parts]).astype(np.float64) + np.asarray(origin)
+        Fm = np.concatenate([i_.astype(np.int64) + o for (_, i_), o in zip(m_parts, offs)]).astype(np.int32)
+        cell = m_target
+    del P, C, F, keys, m_parts
+    log(f"  측정용 메시 준비: 정점 {len(Pm):,} · 면 {len(Fm):,} · 칸 {cell * 100:.1f}cm")
+    return meta, {"P": Pm, "F": Fm, "cell": cell, "faces_src": nF}
 
 
 if __name__ == "__main__":

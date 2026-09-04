@@ -89,6 +89,12 @@ createTileSet(deps, src, opts) → { group, update, raycast, faceNormal, ready, 
   파일은 `os.replace` 를 막아 같은 이름으로 보고서를 다시 만들 때 실패했었다.
 - `/api/report/mesh` 는 옛 보고서용으로 남아 있다.
 
+### 진행 로그
+`tiler.build_tiles` 는 진행률(progress 0~1: 읽기 8% · 공간 정렬 12% · 타일 생성 80%)과 함께 로그에
+"[메시 타일 NN%] PLY 읽기/공간 정렬/타일 생성 NN% · 세부 · 경과초" 를 10% 또는 5초마다 찍는다
+(`_Report`). `measure_max_faces` 옵션은 main 브랜치 파이프라인이 측정용 요약 메시(옥트리 컷)를
+받기 위한 것으로, 이 브랜치는 쓰지 않는다(파일은 두 브랜치 동일하게 유지).
+
 ## 3. 어디 (Where)
 
 | 바꾸고 싶은 것 | 위치 |
