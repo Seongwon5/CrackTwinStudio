@@ -31,7 +31,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "크랙 디지털 트윈 스튜디오"
-VERSION = (2, 0, 1, 0)          # 2.0.1: 진행 로그 · 측정용 옥트리 컷
+VERSION = (2, 0, 2, 0)          # 2.0.2: 코스 LOD 구멍 제거(부채꼴·고리 메움) · 진행 로그 · 측정용 옥트리 컷
 COMPANY = "PRIMEPANO"
 ICON = os.path.join(HERE, "assets", "icon.ico")
 

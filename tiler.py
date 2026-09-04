@@ -250,6 +250,13 @@ def simplify(parts, cmin, csize, grid=GRID):
     빈틈없이 덮는다. 클리크가 두 대각선을 다 만들면 겹치지만 거의 같은 평면이라 티가 안 난다.
     감기(winding)는 자식 면 법선의 칸별 합으로 맞춘다(얇은 벽은 양면이 상쇄돼 임의 —
     뷰어가 양면 렌더·양면 교차라 보이는 데는 문제없다).
+
+    그래도 남는 구멍(실측: 원전 돔 코스 레벨에서 화면의 3~4%가 검은 점·선) — 접점에 대각선 인접이
+    없는 사각형(4-사이클)은 클리크로 못 채운다. 그래서 **칸별 부채꼴(dual fan)** 을 합친다: 칸마다
+    이웃 칸들을 그 칸의 접평면(이웃 벡터 PCA 법선) 위 각도 순으로 세워, 이웃한 두 이웃마다
+    삼각형(칸, 이웃i, 이웃i+1)을 만든다. 사각형 ABCD 는 A 의 부채꼴(A,B,D)과 C 의 부채꼴(C,D,B)로
+    빈틈없이 덮인다. 각도 틈이 FAN_MAX_GAP 보다 크면(표면 가장자리) 그 틈은 채우지 않는다.
+    클리크 ∪ 부채꼴을 정렬 삼각형 키로 중복 제거한다.
     """
     Pc = np.concatenate([p[0] for p in parts])
     Cc = np.concatenate([p[1] for p in parts]) if parts[0][1] is not None else None
@@ -302,6 +309,19 @@ def simplify(parts, cmin, csize, grid=GRID):
     ok = (look < n_e) & (keys[np.minimum(look, n_e - 1)] == v1 * m + v2)
     tri = np.stack([u[ii][ok], v1[ok], v2[ok]], axis=1)
 
+    # 부채꼴 삼각형을 합친다(클리크가 못 채우는 사각형 접점 보강)
+    fan = _fan_triangles(Pn, u, v, Nn, m)
+    if len(fan):
+        tri = np.concatenate([tri, fan])
+        srt = np.sort(tri, axis=1)
+        key3 = (srt[:, 0] * m + srt[:, 1]) * m + srt[:, 2]        # m ≤ 2^21 → 63비트 안
+        _, first = np.unique(key3, return_index=True)
+        tri = tri[np.sort(first)]
+    # 그래도 남는 작은 경계 고리(칸 몇 개 크기의 구멍)는 직접 메운다 — 요약 레벨에서 점·선으로 보이던 것
+    fill = _fill_small_loops(tri, m, FILL_MAX_LOOP)
+    if len(fill):
+        tri = np.concatenate([tri, fill])
+
     # 감기: 삼각형 법선이 세 칸 법선 합과 같은 쪽을 보게
     P0, P1, P2 = Pn[tri[:, 0]].astype(np.float64), Pn[tri[:, 1]].astype(np.float64), Pn[tri[:, 2]].astype(np.float64)
     tn = np.cross(P1 - P0, P2 - P0)
@@ -309,6 +329,100 @@ def simplify(parts, cmin, csize, grid=GRID):
     flip = np.einsum("ij,ij->i", tn, ref) < 0
     tri[flip, 1], tri[flip, 2] = tri[flip, 2], tri[flip, 1]
     return Pn, Cn, tri.astype(np.uint32)
+
+
+FAN_MAX_GAP = np.deg2rad(150.0)   # 부채꼴에서 이 각도보다 벌어진 이웃 쌍은 잇지 않는다(표면 가장자리)
+FILL_MAX_LOOP = 8                 # 이 길이 이하의 경계 고리(구멍)는 메운다 — 칸 몇 개짜리 틈
+
+
+def _fill_small_loops(tri, m, max_len):
+    """삼각형 하나에만 속한 변(경계 변)을 고리로 이어, 길이 ≤ max_len 인 고리를 부채꼴로 메운다.
+
+    요약 메시에 남는 구멍은 대개 칸 몇 개 크기의 작은 고리다(실측: 돔 루트 경계 변 20%가 이런 조각).
+    큰 고리(모델 가장자리·창문 같은 진짜 빈 곳)는 건드리지 않는다. 경계 정점이 세 갈래 이상이면
+    (비다양체) 그 고리는 건너뛴다. 반환 (k,3) int64.
+    """
+    if len(tri) == 0:
+        return np.zeros((0, 3), np.int64)
+    e = np.concatenate([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [2, 0]]]).astype(np.int64)
+    e.sort(axis=1)
+    key = e[:, 0] * m + e[:, 1]
+    uk, cnt = np.unique(key, return_counts=True)
+    bk = uk[cnt == 1]
+    if len(bk) == 0:
+        return np.zeros((0, 3), np.int64)
+    a, b = bk // m, bk % m
+    # 경계 정점 → 이웃 경계 정점(최대 2개). 3개 이상이면 비다양체 → 제외
+    nb = {}
+    for x, y in zip(a.tolist(), b.tolist()):
+        nb.setdefault(x, []).append(y); nb.setdefault(y, []).append(x)
+    seen = set(); out = []
+    for start, lst in nb.items():
+        if start in seen or len(lst) != 2:
+            continue
+        loop = [start]; prev, cur = start, lst[0]; ok = True
+        while cur != start:
+            l2 = nb.get(cur)
+            if l2 is None or len(l2) != 2 or len(loop) > max_len:
+                ok = False; break
+            loop.append(cur)
+            nxt = l2[0] if l2[1] == prev else l2[1]
+            prev, cur = cur, nxt
+        if ok and 3 <= len(loop) <= max_len:
+            seen.update(loop)
+            for i in range(1, len(loop) - 1):
+                out.append((loop[0], loop[i], loop[i + 1]))
+        else:
+            seen.add(start)
+    return np.asarray(out, np.int64).reshape(-1, 3)
+
+
+def _fan_triangles(Pn, u, v, Nn, m):
+    """칸별 부채꼴 삼각형. u<v 무향 인접(정렬됨)에서 칸마다 이웃을 접평면 각도 순으로 세워 잇는다.
+
+    접평면 법선 = 이웃 방향 벡터들의 PCA 최소 분산축(면 법선 합 Nn 이 있으면 그 부호로 맞춤).
+    이웃이 2개 이하인 칸은 건너뛴다. 반환 (k,3) int64 — 감기는 호출측이 맞춘다.
+    """
+    if len(u) == 0:
+        return np.zeros((0, 3), np.int64)
+    src = np.concatenate([u, v]); dst = np.concatenate([v, u])          # 유향으로 양방향
+    deg = np.bincount(src, minlength=m)
+    d = Pn[dst].astype(np.float64) - Pn[src].astype(np.float64)
+    ln = np.linalg.norm(d, axis=1); ln[ln == 0] = 1.0
+    d /= ln[:, None]
+    # 칸별 공분산(이웃 단위벡터) → 최소 고유벡터 = 법선
+    cov = np.zeros((m, 3, 3))
+    for a in range(3):
+        for b in range(a, 3):
+            cov[:, a, b] = np.bincount(src, weights=d[:, a] * d[:, b], minlength=m)
+            cov[:, b, a] = cov[:, a, b]
+    ok = deg >= 3
+    n = np.zeros((m, 3)); n[:, 2] = 1.0
+    if ok.any():
+        w, vec = np.linalg.eigh(cov[ok])                 # 오름차순 고유값 → [:, :, 0] 이 최소축
+        n[ok] = vec[:, :, 0]
+    sgn = np.einsum("ij,ij->i", n, Nn)
+    n[sgn < 0] *= -1                                      # 면 법선 합과 같은 쪽(있을 때만 의미)
+    # 접평면 기저 (t1, t2)
+    ref = np.where(np.abs(n[:, 0:1]) < 0.9, np.array([[1.0, 0, 0]]), np.array([[0, 1.0, 0]]))
+    t1 = np.cross(n, ref); t1 /= np.linalg.norm(t1, axis=1)[:, None]
+    t2 = np.cross(n, t1)
+    ang = np.arctan2(np.einsum("ij,ij->i", d, t2[src]), np.einsum("ij,ij->i", d, t1[src]))
+    keep = ok[src]
+    src, dst, ang = src[keep], dst[keep], ang[keep]
+    order = np.lexsort((ang, src))
+    src, dst, ang = src[order], dst[order], ang[order]
+    # 같은 칸 안에서 이웃한 쌍(마지막→첫째로 감아 돌기 포함)
+    n_e = len(src)
+    if n_e == 0:
+        return np.zeros((0, 3), np.int64)
+    start = np.searchsorted(src, src)                     # 그룹 시작
+    cnt = np.bincount(src, minlength=m)[src]
+    pos = np.arange(n_e) - start
+    nxt = start + (pos + 1) % cnt
+    gap = (ang[nxt] - ang + 2 * np.pi) % (2 * np.pi)
+    good = (gap <= FAN_MAX_GAP) & (dst != dst[nxt])
+    return np.stack([src[good], dst[good], dst[nxt][good]], axis=1).astype(np.int64)
 
 
 def build_tiles(ply_path, zf, log, progress, leaf_max=LEAF_MAX_TRIS, grid=GRID, measure_max_faces=None):
