@@ -986,18 +986,166 @@ def get_segmenter(log):
     return _segmenter
 
 
-def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR, limit=None):
-    """이미지들을 크랙 추론·3D 역투영해 scene_data(메시+카메라+크랙점군+크랙핫스팟)를 만든다.
-    핫스팟은 경사보정 스케일맵으로 폭·길이를 mm 산출하고, 병합 시 최적(정면·근접) 뷰를 채택한다."""
+def _rss_gb():
+    """현재 프로세스 메모리(Working Set, GB). psutil 없이 Win32 API 로 — 실패하면 0."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PMC(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+        pmc = PMC(); pmc.cb = ctypes.sizeof(PMC)
+        k32 = ctypes.windll.kernel32
+        fn = k32.K32GetProcessMemoryInfo
+        fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]; fn.restype = wintypes.BOOL
+        if not fn(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+            return 0.0
+        return pmc.WorkingSetSize / 1e9
+    except Exception:
+        return 0.0
+
+
+class Progress:
+    """전체 진행률 = 단계별 가중치 합. 대시보드 막대(progress)와 로그 줄을 함께 채운다.
+
+    왜 — 6GB 메시에서는 메시 읽기(분 단위)·embree 가속 구조(분 단위)·타일 생성(15분)처럼
+    로그가 한 줄도 안 찍히는 구간이 길어, 멈춘 건지 도는 건지 알 수 없었다. 이제:
+      · stage(이름)   단계 시작을 "▶ [전체 NN%] (k/7) 이름" 으로 알린다
+      · step(frac)    단계 안 진행 — 막대를 옮기고, 5% 또는 10초마다 "[전체 NN%] 이름 NN% · 세부" 를 찍는다
+      · 심장박동      20초 넘게 아무 보고가 없으면 "진행 중 · N초 경과" 를 스스로 찍는다(백그라운드 스레드)
+    가중치는 6GB·사진 1,090장 실측 비율. 한 단계가 빨리 끝나면 막대가 그만큼 건너뛴다.
+    progress 콜백은 (frac) 하나 또는 (c, t) 둘 다 받는다(backend._run_job 의 prog).
+    """
+    STAGES = [("메시 타일", 0.25), ("메시 로드", 0.05), ("모델 로드", 0.02), ("이미지 분석", 0.50),
+              ("병합·정량화", 0.05), ("리본 융합", 0.03), ("보고서 저장", 0.10)]
+    HEARTBEAT_SEC = 20.0
+
+    def __init__(self, log, progress=None):
+        import threading
+        self.log, self._progress = log, progress
+        self.idx, self.base, self.w, self.frac = -1, 0.0, 0.0, 0.0
+        self.t0 = time.time(); self.t_stage = self.t0
+        self.last_log_f, self.last_log_t, self.last_activity = -1.0, 0.0, time.time()
+        self.done = False
+        threading.Thread(target=self._heartbeat, daemon=True).start()
+
+    @property
+    def overall(self):
+        return min(1.0, self.base + self.w * self.frac)
+
+    def _emit(self):
+        if self._progress is None:
+            return
+        try:
+            self._progress(self.overall)             # (frac) 규약
+        except TypeError:
+            self._progress(int(self.overall * 1000), 1000)   # (c, t) 규약
+
+    def stage(self, name):
+        """다음 단계로. 이름은 STAGES 에 있어야 한다(가중치 조회)."""
+        names = [n for n, _ in self.STAGES]
+        i = names.index(name)
+        self.base = sum(w for _, w in self.STAGES[:i]); self.w = self.STAGES[i][1]
+        self.idx, self.frac = i, 0.0
+        self.t_stage = self.last_activity = time.time()
+        self.last_log_f, self.last_log_t = -1.0, 0.0
+        self.log(f"▶ [전체 {self.overall * 100:3.0f}%] ({i + 1}/{len(self.STAGES)}) {name} · "
+                 f"경과 {time.time() - self.t0:.0f}초 · 메모리 {_rss_gb():.1f}GB")
+        self._emit()
+
+    def step(self, frac, detail=""):
+        self.frac = max(0.0, min(1.0, frac)); self.last_activity = now = time.time()
+        self._emit()
+        if frac >= 1.0 or frac - self.last_log_f >= 0.05 or now - self.last_log_t >= 10.0:
+            self.last_log_f, self.last_log_t = frac, now
+            name = self.STAGES[self.idx][0] if self.idx >= 0 else ""
+            self.log(f"  [전체 {self.overall * 100:3.0f}%] {name} {frac * 100:.0f}%"
+                     + (f" · {detail}" if detail else "") + f" · {now - self.t_stage:.0f}초")
+
+    def touch(self):
+        """로그를 직접 찍는 코드가 '살아 있음'을 알릴 때(심장박동 억제)."""
+        self.last_activity = time.time()
+
+    def finish(self):
+        self.done = True; self.frac = 1.0; self._emit()
+        self.log(f"■ 전체 완료 · 총 {time.time() - self.t0:.0f}초")
+
+    def _heartbeat(self):
+        while not self.done:
+            time.sleep(5.0)
+            if self.done or self.idx < 0:
+                continue
+            if time.time() - self.last_activity >= self.HEARTBEAT_SEC:
+                self.last_activity = time.time()
+                self.log(f"  [전체 {self.overall * 100:3.0f}%] {self.STAGES[self.idx][0]} 진행 중 · "
+                         f"{time.time() - self.t_stage:.0f}초 경과 · 메모리 {_rss_gb():.1f}GB")
+
+
+# 측정(역투영)용 메시의 면 수 상한. trimesh 는 면마다 float64 삼각형·법선·외적을 캐시해 면 1억 9천만이면
+# 20GB 를 넘는다(실측 MemoryError). 넘으면 tiler 가 옥트리 컷(몇 cm 격자 요약)을 대신 준다 — 폭 측정은
+# 인접 광선 두 개의 착지 차라 국소 평면 위에서는 요약의 영향이 거의 없다(docs/DEV_LOD.md §측정용 메시).
+MEASURE_MAX_FACES = 20_000_000
+
+
+def _tile_mesh(ply_path, z, log, pr):
+    """타일 생성(zip 에 바로 씀). (tiles_meta, measure) — 타일로 못 만드는 PLY 면 (None, None)."""
+    import tiler
+    try:
+        return tiler.build_tiles(ply_path, z, log, pr.step, measure_max_faces=MEASURE_MAX_FACES)
+    except tiler.PlyError as e:
+        log(f"  ⚠ 타일 생성 불가({e}) — 메시 원본을 그대로 담고 측정도 원본으로 합니다.")
+        return None, None
+
+
+def _load_mesh_for_measure(ply_path, log, pr, measure=None):
+    """측정용 trimesh 메시 + 대각선. measure(타일러의 컷/원본)가 있으면 그것으로, 없으면 PLY 를 읽는다.
+    광선-메시 교차 가속 구조(embree)도 여기서 미리 만든다 — 첫 역투영에서 몰래 몇 분을 먹지 않게,
+    그리고 그 시간이 '메시 로드' 단계로 잡히게."""
     import trimesh
-    log("메시(PLY) 로드...")
-    # 예전에는 여기서 PLY 를 통째로 base64 문자열로 만들어(1.2GB → 1.6GB str) 함수 끝까지 붙들고
-    # 있었다. 메시 로드·이미지 594장 처리 내내 1.6GB 를 점유해 큰 모델에서 MemoryError 가 났다.
-    # v2 는 base64 를 쓰지 않고 저장 시점에 PLY 파일을 zip 으로 바로 복사한다.
-    mesh = trimesh.load(ply_path, force='mesh')
+    import tiler
+    if measure is not None:
+        pr.step(0.3, f"측정용 메시 조립 · 면 {len(measure['F']):,}개")
+        mesh = trimesh.Trimesh(vertices=measure["P"], faces=measure["F"], process=False)
+    else:
+        try:
+            P, C, F, _o = tiler.load_mesh(ply_path, log, local=False,
+                                          progress=lambda f, d="": pr.step(0.6 * f, d))
+            mesh = trimesh.Trimesh(vertices=P, faces=F, process=False)
+        except tiler.PlyError as e:
+            log(f"  (청크 리더 불가: {e} → trimesh.load)")
+            mesh = trimesh.load(ply_path, force='mesh')
+            pr.step(0.6, "trimesh.load 완료")
     if mesh.is_empty or len(mesh.faces) == 0:
         raise RuntimeError("PLY에 삼각형이 없습니다(메시가 아닌 포인트클라우드).")
-    diag = float(np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]))
+    pr.step(0.65, f"역투영 가속 구조(embree) 준비 · 면 {len(mesh.faces):,}개 — 큰 메시는 수 분")
+    # 인터섹터는 첫 질의 때 BVH 를 만든다(지연) → 광선 하나를 미리 쏴서 여기서 시간이 들게 한다.
+    lo, hi = mesh.vertices.min(0), mesh.vertices.max(0)
+    mesh.ray.intersects_location(np.asarray([(lo + hi) / 2 - [0, 0, hi[2] - lo[2]]], float),
+                                 np.asarray([[0.0, 0.0, 1.0]], float), multiple_hits=False)
+    pr.step(1.0, f"가속 구조 완료 · 메모리 {_rss_gb():.1f}GB")
+    return mesh, float(np.linalg.norm(hi - lo))
+
+
+def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR, limit=None,
+                     measure=None):
+    """이미지들을 크랙 추론·3D 역투영해 scene_data(메시+카메라+크랙점군+크랙핫스팟)를 만든다.
+    핫스팟은 경사보정 스케일맵으로 폭·길이를 mm 산출하고, 병합 시 최적(정면·근접) 뷰를 채택한다.
+    progress 는 Progress 객체 또는 (frac)/(c,t) 콜백. measure 는 tiler 가 준 측정용 메시(없으면 PLY 를 읽는다)."""
+    pr = progress if isinstance(progress, Progress) else Progress(log, progress)
+    pr.stage("메시 로드")
+    log(f"측정용 메시 준비... (PLY {os.path.getsize(ply_path) / 1e9:.2f} GB)")
+    # 예전에는 여기서 PLY 를 통째로 base64 문자열로 만들어(1.2GB → 1.6GB str) 함수 끝까지 붙들고
+    # 있었다. 메시 로드·이미지 594장 처리 내내 1.6GB 를 점유해 큰 모델에서 MemoryError 가 났다.
+    # v2 는 base64 를 쓰지 않고 tiler 가 타일로 쪼개 zip 에 넣는다(build_report 가 먼저 수행).
+    mesh, diag = _load_mesh_for_measure(ply_path, log, pr, measure)   # 경계는 trimesh.bounds 대신 직접(느림 회피)
+    measure_info = {"measure_faces": int(len(mesh.faces)),
+                    "measure_cell_m": round(float(measure["cell"]), 4) if measure else 0.0,
+                    "mesh_faces_src": int(measure["faces_src"]) if measure else int(len(mesh.faces))}
+    measure = None                                                    # 배열은 mesh 가 들고 있다
     txt_radius = TEXTPOINT_MERGE_M                                   # 절대값(m) — 모델 크기 무관
     log(f"메시 대각선 {diag:.1f}m · DBSCAN eps {DBSCAN_EPS_M*1000:.0f}mm · 복셀 {txt_radius*1000:.0f}mm")
 
@@ -1012,7 +1160,9 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         preview = ", ".join(no_xmp[:5]) + (f" 외 {len(no_xmp)-5}장" if len(no_xmp) > 5 else "")
         log(f"⚠ XMP(카메라 파라미터) 없어 제외: {len(no_xmp)}장 [{preview}]")
     log(f"이미지 {len(all_found)}장 발견 · 분석 대상 {len(pairs)}장 (detect={'ON' if detect else 'OFF'})")
+    pr.stage("모델 로드")
     seg = get_segmenter(log) if detect else None
+    pr.stage("이미지 분석")
     all_cameras, all_hotspots, all_crack_pts = [], [], []
     skipped = list(no_xmp)                       # 분석에서 빠진 이미지(사유 불문) 집계
 
@@ -1196,7 +1346,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
             except Exception as e:
                 log(f"  [오류] {name}: {e}")
                 skipped.append(name)                 # 실패도 집계에 포함
-            progress(i + 1, len(pairs))
+            pr.step((i + 1) / len(pairs), f"{i + 1}/{len(pairs)}장")
             _fill()
         # 후처리 결과 수확: 이미지 순서대로 통합 → 직렬 처리와 결과·순서 동일(결정적)
         for i, name, cam, fut in post_futs:
@@ -1215,6 +1365,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
     else:
         log(f"처리 완료: {n_ok}장 전부 성공")
 
+    pr.stage("병합·정량화")
     log("크랙 병합 및 정량화 집계 (DBSCAN)...")
     merged = []; inst2hot = {}
     reg_med = reg_p90 = None; _reg_view_errs = []      # 뷰 간 정합 오차(핫스팟 없으면 표본 없음)
@@ -1393,7 +1544,9 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         "source_folder": os.path.basename(os.path.normpath(folder)),
         "mesh_file": os.path.basename(ply_path),
         "mesh_diag_m": round(diag, 2),
-        "mesh_faces": int(len(mesh.faces)),
+        "mesh_faces": measure_info["mesh_faces_src"],     # 원본 면 수
+        "measure_faces": measure_info["measure_faces"],   # 측정(역투영)에 쓴 메시 면 수(요약이면 더 작다)
+        "measure_cell_m": measure_info["measure_cell_m"], # 요약 칸 크기(0 = 원본 그대로)
         "images_found": len(all_found),
         "images_analyzed": len(all_cameras),
         "images_skipped": len(skipped),
@@ -1417,6 +1570,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
     hot2insts = {}
     for hi, mi in inst2hot.items():
         hot2insts.setdefault(mi, []).append(hi)
+    pr.stage("리본 융합")
     log(f"  리본 융합 시작: 크랙 {len(merged)}개(뷰별 중심선 복셀 병합·스무딩) …")
     all_ribbons = []
     _t_fuse = time.time(); _nfuse = len(merged)
@@ -1431,8 +1585,8 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         fp, fw, fn = fuse_points(pts, ws, ns, FUSE_VOXEL_M)
         if len(fp) >= 2:
             all_ribbons.append({"poly": fp, "poly_w": fw, "poly_n": fn, "hot": mi})
-        if _nfuse >= 2000 and (mi + 1) % 2000 == 0:
-            log(f"    융합 {mi + 1}/{_nfuse} ({(mi + 1) / _nfuse * 100:.0f}%) · {time.time() - _t_fuse:.0f}s")
+        if (mi + 1) % 200 == 0 or mi + 1 == _nfuse:
+            pr.step((mi + 1) / _nfuse, f"{mi + 1}/{_nfuse}")
     log(f"  리본: 뷰별 인스턴스 {len(all_hotspots)}개 → 크랙당 융합 {len(all_ribbons)}개"
         f"(핫스팟 {len(merged)}) · {time.time() - _t_fuse:.0f}s")
 
@@ -1463,6 +1617,17 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
     # 재학습(검토 사이드카의 '오탐' 라벨 = 하드 네거티브)으로 해결하는 방향으로 전환.
 
     log(f"후처리 완료: 크랙 {len(merged)} · 리본 {len(all_ribbons)} · 텍스트 {len(crack_points)}")
+    # 측정용 메시(float64 정점 2.3GB + 면 2.3GB + embree BVH)를 여기서 놓아준다. trimesh 는 캐시가
+    # 자기 자신을 참조해 스코프를 벗어나도 바로 안 풀리므로 gc 를 직접 돌린다 — 안 그러면 뒤이은
+    # 타일 생성(최대 9GB)과 겹쳐 32GB PC 에서도 MemoryError 가 났다(6GB 메시 실측).
+    import gc
+    try:
+        mesh.ray = None
+    except Exception:
+        pass
+    del mesh
+    gc.collect()
+    log(f"  측정용 메시 해제 · 메모리 {_rss_gb():.1f}GB")
     return {"ply_path": ply_path, "text_points": crack_points, "ribbons": all_ribbons,
             "cameras": all_cameras, "hotspots": merged, "report_meta": report_meta}
 
@@ -1487,35 +1652,13 @@ def save_report(scene_data, out_path, log=print, progress=None):
     생성이 중간에 실패하면 손상된 .twin 이 남았다(예: 1234.twin = 1.6GB 빈 껍데기)."""
     if not out_path.lower().endswith(".twin"):
         out_path += ".twin"
-    cams = scene_data["cameras"]
     tmp = out_path + ".tmp"
-    tiles_meta = None
+    pr = progress if isinstance(progress, Progress) else Progress(log, progress)
     try:
         with zipfile.ZipFile(tmp, "w", allowZip64=True) as z:
-            try:
-                import tiler
-                tiles_meta = tiler.build_tiles(scene_data["ply_path"], z, log, progress or (lambda f: None))
-            except tiler.PlyError as e:
-                log(f"  ⚠ 타일 생성 불가({e}) — 메시 원본만 담습니다.")
-            if KEEP_MESH_PLY or tiles_meta is None:
-                z.write(scene_data["ply_path"], "mesh.ply", compress_type=zipfile.ZIP_STORED)
-            for c in cams:
-                cid = c["id"]
-                z.writestr(f"img/{cid:04d}_thumb.jpg", c.pop("_thumb"), zipfile.ZIP_STORED)
-                z.writestr(f"img/{cid:04d}_full.jpg", c.pop("_full"), zipfile.ZIP_STORED)
-                mb = c.pop("_mask", None)                        # 검출 마스크(있는 이미지만)
-                if mb is not None:
-                    z.writestr(f"img/{cid:04d}_mask.png", mb, zipfile.ZIP_STORED)
-            meta = {"version": 2,
-                    "counts": {"cameras": len(cams), "hotspots": len(scene_data["hotspots"])},
-                    "report_meta": scene_data.get("report_meta", {}),
-                    "text_points": scene_data["text_points"],
-                    "ribbons": scene_data.get("ribbons", []),   # 모든 2D 인스턴스의 3D 리본
-                    "cameras": cams,
-                    "hotspots": scene_data["hotspots"]}
-            if tiles_meta:
-                meta["tiles"] = tiles_meta           # 뷰어가 있으면 타일, 없으면 mesh.ply 를 찾는다
-            z.writestr("meta.json", json.dumps(meta, ensure_ascii=False), zipfile.ZIP_DEFLATED)
+            pr.stage("메시 타일")
+            tiles_meta, _m = _tile_mesh(scene_data["ply_path"], z, log, pr)
+            _write_report_entries(z, scene_data, tiles_meta, log, pr)
         os.replace(tmp, out_path)                # 원자적 교체(성공 시에만 최종 파일이 생김)
     except BaseException:
         if os.path.exists(tmp):
@@ -1525,13 +1668,61 @@ def save_report(scene_data, out_path, log=print, progress=None):
     return out_path
 
 
+def _write_report_entries(z, scene_data, tiles_meta, log, pr):
+    """이미지·(필요 시 mesh.ply)·meta.json 을 zip 에 쓴다. '보고서 저장' 단계."""
+    cams = scene_data["cameras"]
+    pr.stage("보고서 저장")
+    if KEEP_MESH_PLY or tiles_meta is None:
+        z.write(scene_data["ply_path"], "mesh.ply", compress_type=zipfile.ZIP_STORED)
+    for n_c, c in enumerate(cams):
+        if (n_c + 1) % 50 == 0 or n_c + 1 == len(cams):
+            pr.step((n_c + 1) / max(1, len(cams)), f"이미지 {n_c + 1}/{len(cams)}장")
+        cid = c["id"]
+        z.writestr(f"img/{cid:04d}_thumb.jpg", c.pop("_thumb"), zipfile.ZIP_STORED)
+        z.writestr(f"img/{cid:04d}_full.jpg", c.pop("_full"), zipfile.ZIP_STORED)
+        mb = c.pop("_mask", None)                        # 검출 마스크(있는 이미지만)
+        if mb is not None:
+            z.writestr(f"img/{cid:04d}_mask.png", mb, zipfile.ZIP_STORED)
+    meta = {"version": 2,
+            "counts": {"cameras": len(cams), "hotspots": len(scene_data["hotspots"])},
+            "report_meta": scene_data.get("report_meta", {}),
+            "text_points": scene_data["text_points"],
+            "ribbons": scene_data.get("ribbons", []),   # 모든 2D 인스턴스의 3D 리본
+            "cameras": cams,
+            "hotspots": scene_data["hotspots"]}
+    if tiles_meta:
+        meta["tiles"] = tiles_meta           # 뷰어가 있으면 타일, 없으면 mesh.ply 를 찾는다
+    z.writestr("meta.json", json.dumps(meta, ensure_ascii=False), zipfile.ZIP_DEFLATED)
+
+
 def build_report(folder, ply_path, out_path, log, progress, detect=True, thr=CRACK_THR, limit=None):
-    """분석 → scene_data 생성 → .twin 저장까지 한 번에 수행한다."""
-    scene = build_scene_data(folder, ply_path, log, progress, detect=detect, thr=thr, limit=limit)
-    log(f"보고서 저장 중: {os.path.basename(out_path)} (메시 타일 · 이미지) …")
-    _t_save = time.time()
-    # 타일 생성 진행률은 기존 (c, t) 규약에 맞춰 0~100 으로 다시 보고한다(막대가 한 번 더 찬다).
-    p = save_report(scene, out_path, log=log, progress=lambda f: progress(int(f * 100), 100))
-    log(f"보고서 저장: {p} ({os.path.getsize(p)/1e6:.1f} MB) · 카메라 {len(scene['cameras'])} · "
-        f"크랙 {len(scene['hotspots'])} · {time.time() - _t_save:.0f}s")
-    return p
+    """타일 생성 → 측정용 메시 → 분석(scene_data) → .twin 저장.
+
+    타일을 먼저 만드는 이유: 큰 메시(면 1억 9천만)는 trimesh 가 통째로 못 들고, 타일러가 만드는
+    옥트리 컷이 곧 측정용 요약 메시라서(_tile_mesh → measure) 그걸 분석에 쓴다. zip(.tmp)은 처음부터
+    끝까지 열어 두고 타일·이미지·meta 순으로 채운 뒤 원자적으로 교체한다."""
+    if not out_path.lower().endswith(".twin"):
+        out_path += ".twin"
+    pr = Progress(log, progress)                 # 전체 진행률(7단계 가중치) — 한 막대로 찬다
+    tmp = out_path + ".tmp"
+    _t0 = time.time()
+    try:
+        with zipfile.ZipFile(tmp, "w", allowZip64=True) as z:
+            pr.stage("메시 타일")
+            log(f"3D 메시 타일 생성: {os.path.basename(ply_path)} ({os.path.getsize(ply_path) / 1e9:.2f} GB)")
+            tiles_meta, measure = _tile_mesh(ply_path, z, log, pr)
+            scene = build_scene_data(folder, ply_path, log, pr, detect=detect, thr=thr, limit=limit,
+                                     measure=measure)
+            measure = None
+            log(f"보고서 저장 중: {os.path.basename(out_path)} (이미지 · 메타) …")
+            _write_report_entries(z, scene, tiles_meta, log, pr)
+        os.replace(tmp, out_path)                # 원자적 교체(성공 시에만 최종 파일이 생김)
+    except BaseException:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)                  # 실패한 임시 파일은 남기지 않는다
+            except OSError: pass
+        raise
+    log(f"보고서 저장: {out_path} ({os.path.getsize(out_path)/1e6:.1f} MB) · 카메라 {len(scene['cameras'])} · "
+        f"크랙 {len(scene['hotspots'])} · 총 {time.time() - _t0:.0f}s")
+    pr.finish()
+    return out_path

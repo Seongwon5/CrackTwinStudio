@@ -275,8 +275,8 @@ def _run_job(job_id, folder, ply, out_path, detect):
     j = _jobs[job_id]
     # 잡 로그에 한 줄 추가. 최근 200줄만 남긴다(장시간 분석에서 무한 증가 방지).
     def log(m): j["log"].append(str(m)); j["log"][:] = j["log"][-200:]
-    # 진행률 갱신(0.0~1.0). 파이프라인이 이미지 c/t 를 넘겨준다.
-    def prog(c, t): j["progress"] = (c / t) if t else 0.0
+    # 진행률 갱신(0.0~1.0). pipeline.Progress 가 전체 비율 하나(frac)를 넘긴다 — (c, t) 도 받는다.
+    def prog(c, t=None): j["progress"] = max(0.0, min(1.0, (c / t) if t else float(c)))
     try:
         j["result"] = P.build_report(folder, ply, out_path, log, prog, detect=detect); j["progress"] = 1.0
     except Exception as e:

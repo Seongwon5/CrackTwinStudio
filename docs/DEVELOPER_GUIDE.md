@@ -623,6 +623,8 @@ _jobs = {}   # job_id -> {progress, done, error, result, log[], stats?}
 | 균열 신뢰도 구간 | `pipeline.CONF_BOUNDS` (0.7 / 0.9) |
 | 내장 이미지 화질·용량 | `pipeline.FULL_MAX_PX`, `FULL_JPEG_Q`, `THUMB_MAX_PX` |
 | 타일 크기·격자·요약 방식 | `tiler.LEAF_MAX_TRIS`, `GRID`, `simplify()` — `docs/DEV_LOD.md` §3 |
+| 측정용 메시 면 수 상한(요약 칸) | `pipeline.MEASURE_MAX_FACES` (2천만) — `docs/DEV_LOD.md` §2-1 |
+| 진행률 단계 가중치·심장박동 | `pipeline.Progress.STAGES` · `HEARTBEAT_SEC` |
 | 뷰어 타일 예산·정제 문턱 | `ui/viewer.js` `createTileSet(... { triBudget, byteBudget, ssePx })` |
 | 원본 mesh.ply 도 함께 담기 | `pipeline.KEEP_MESH_PLY` (디버그용, 기본 False) |
 | XMP 파서 (다른 SW 지원) | `pipeline.parse_xmp()` |

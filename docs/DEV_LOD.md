@@ -89,6 +89,29 @@ createTileSet(deps, src, opts) → { group, update, raycast, faceNormal, ready, 
   파일은 `os.replace` 를 막아 같은 이름으로 보고서를 다시 만들 때 실패했었다.
 - `/api/report/mesh` 는 옛 보고서용으로 남아 있다.
 
+## 2-1. main 브랜치 전용 — 측정용 메시와 진행 로그
+
+### 측정용 메시(옥트리 컷)
+main 의 분석은 trimesh 로 이미지 픽셀을 메시에 역투영한다. trimesh 는 면마다 float64 삼각형·법선·외적을
+캐시해 면 1억 9천만이면 20GB 를 넘긴다(실측 MemoryError). 그래서 `build_report` 는 **타일을 먼저 만들고**,
+`tiler.build_tiles(..., measure_max_faces=MEASURE_MAX_FACES)` 가 돌려주는 **옥트리 컷**을 측정용 메시로 쓴다.
+- 컷 = 루트→잎 경로마다 "내 칸 ≤ 목표 < 부모 칸" 인 노드 하나씩(잎이면 부모 칸 > 목표). 목표 칸 =
+  평균 변 길이 × sqrt(원본 면 수 / 상한) → 면 수가 상한(2천만) 근처로 떨어진다. 6GB 기준 약 3cm.
+- 원본 면 수가 상한 이하면 원본 그대로(칸 0).
+- 정확도: 폭은 인접 광선 두 개의 착지 차라 국소 평면에서는 요약의 영향이 없다. 돔 반경 20m·3cm 격자의
+  현 오차 6µm. report_meta 에 `measure_faces`·`measure_cell_m`·`mesh_faces`(원본) 가 남는다.
+- 처리 순서: 메시 타일 → 메시 로드(컷 → trimesh, embree 가속 구조는 광선 1개로 미리 생성) → 모델 로드 →
+  이미지 분석 → 병합 → 융합 → (측정용 메시 해제 + gc) → 보고서 저장(이미지·meta). zip(.tmp) 은
+  처음부터 열어 두고 채운다.
+
+### 진행 로그 (`pipeline.Progress`)
+- 7단계 가중치(타일 25 · 메시 로드 5 · 모델 2 · 이미지 50 · 병합 5 · 융합 3 · 저장 10%)로 전체 %를 만든다.
+  `stage(이름)` 이 "▶ [전체 NN%] (k/7) 이름 · 경과 · 메모리", `step(frac, 세부)` 이 5% 또는 10초마다
+  "[전체 NN%] 이름 NN% · 세부" 를 찍고, 20초 넘게 보고가 없으면 심장박동 스레드가 "진행 중 · N초 경과 · 메모리"
+  를 찍는다. 대시보드 막대는 같은 값을 받는다(backend `prog(c, t=None)`).
+- tiler 안쪽은 `_Report` 가 같은 형식으로 "[메시 타일 NN%] PLY 읽기/공간 정렬/타일 생성 NN% · 세부" 를 찍는다.
+- 바꾸려면: 가중치 `Progress.STAGES` · 심장박동 간격 `Progress.HEARTBEAT_SEC` · 로그 간격은 `step()`/`_Report.__call__`.
+
 ## 3. 어디 (Where)
 
 | 바꾸고 싶은 것 | 위치 |
