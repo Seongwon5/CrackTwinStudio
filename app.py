@@ -160,7 +160,11 @@ def selftest():
     check("skimage.morphology", lambda: __import__("skimage.morphology").__name__)
     check("scipy.ndimage", lambda: __import__("scipy.ndimage").__name__)
     check("PIL", lambda: __import__("PIL.Image").__name__)
-    check("model/best.pt", lambda: f"{os.path.getsize(os.path.join(B.HERE, 'model', 'best.pt')) / 1e6:.0f}MB")
+    def _weights():                                # 실제로 쓰는 가중치 파일을 pipeline 에서 읽는다
+        import pipeline
+        p = pipeline.CRACK_WEIGHTS
+        return f"{os.path.basename(p)} {os.path.getsize(p) / 1e6:.0f}MB"
+    check("크랙 가중치", _weights)
     check("tiler", lambda: __import__("tiler").__name__)
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

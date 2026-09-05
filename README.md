@@ -93,8 +93,8 @@ tiler.py          PLY → 계층 LOD 타일 (6GB 메시 지원 · docs/DEV_LOD.m
 build.py          배포용 빌드 (PyInstaller 폴더 배포)
 ui/               대시보드 + three.js 뷰어
 libs/             three.js r160 오프라인 번들
-network/          best.pt 언피클용 DeepLabV3+ 패키지
-model/best.pt     크랙 검출 가중치 (FP16, 약 118MB · Git LFS)
+network/          가중치 언피클용 DeepLabV3+ 패키지
+model/            크랙 검출 가중치 (conglomerate.pt · FP32, 약 236MB · Git LFS)
 tools/            대시보드 기능 모듈 (검사 비교 · PDF)
 reports/          생성된 .twin 보고서 (Git 미포함)
 docs/             개발자 문서 · 사용자 매뉴얼 · 설계 문서
@@ -139,7 +139,7 @@ mm **절대값은 신뢰할 수 없으며**, 보고서에 `scale_warning` 으로
 
 이 저장소에는 제3자 구성요소가 포함됩니다. **재배포·상용 이용 전 각 원본 라이선스를 확인하세요.**
 
-- **크랙 검출 모델 `model/best.pt`** — DeepLabV3+ 기반, VT/beric7 *Conglomerate* 가중치 계열 (FP16 변환)
+- **크랙 검출 모델 `model/conglomerate.pt`** — DeepLabV3+ 기반, VT/beric7 *Conglomerate* 가중치
 - **신경망 `network/`** — [VainF/DeepLabV3Plus-Pytorch](https://github.com/VainF/DeepLabV3Plus-Pytorch) (MIT)
 - **3D 엔진 `libs/`** — [three.js](https://github.com/mrdoob/three.js) r160 (MIT)
 

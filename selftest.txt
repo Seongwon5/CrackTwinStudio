@@ -7,5 +7,5 @@ ok   cv2: 5.0.0
 ok   skimage.morphology: skimage
 ok   scipy.ndimage: scipy
 ok   PIL: PIL
-ok   model/best.pt: 118MB
+ok   크랙 가중치: conglomerate.pt 236MB
 ok   tiler: tiler

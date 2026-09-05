@@ -176,18 +176,24 @@ function fmtUnc(h){ return (h && h.w_unc_mm != null) ? ' ±' + cmm(h.w_unc_mm).t
 // ===== 심각도(절대 폭 기준, 단일 체계) =====
 // 예전엔 '심각도(상대 순위)'와 '판정 등급 A~D'가 따로 있어 기준이 둘이었다 → 하나로 통일.
 // 보정(cmm)된 폭으로 매번 재계산하므로 캘리브레이션 즉시 반영된다.
-const SEV_B = (DATA.report_meta && DATA.report_meta.severity_bounds_mm) || [0.5, 1.0, 3.0, 5.0, 10.0];
-const SEV_KEYS = ['S1','S2','S3','S4','S5','S6'];
-const SEV_NAME = {S1:'경미', S2:'관찰', S3:'보통', S4:'심각', S5:'매우 심각', S6:'특이값'};
-const SEV_HEX  = {S1:'#9ccb5b', S2:'#2e9e5b', S3:'#f0c419', S4:'#ee8a3c', S5:'#d9433c', S6:'#8a6bc4'};
+// 경계 1/3/10/30mm — 척도 전체가 1~50mm 를 덮는 등비(√10) 분할. 근거는 pipeline.SEV_BOUNDS_MM 주석 참조.
+const SEV_DEFAULT_B = [1, 3, 10, 30];
+const _mB = DATA.report_meta && DATA.report_meta.severity_bounds_mm;
+// 경계 개수가 지금 등급 수와 맞을 때만 보고서의 값을 쓴다. 구형 보고서(경계 5개 + '특이값' 등급)는
+// 지금 척도로 다시 매긴다 — 등급은 어차피 폭에서 매번 재계산하고, 보고서마다 기준이 다르면
+// '절대 기준이라 다른 보고서와 그대로 비교된다'는 전제가 깨진다. 보고서 자신의 경계값은 meta 에 남는다.
+const SEV_B = (Array.isArray(_mB) && _mB.length === SEV_DEFAULT_B.length) ? _mB : SEV_DEFAULT_B;
+const SEV_KEYS = ['S1','S2','S3','S4','S5'];
+const SEV_NAME = {S1:'경미', S2:'관찰', S3:'보통', S4:'심각', S5:'매우 심각'};
+const SEV_HEX  = {S1:'#9ccb5b', S2:'#2e9e5b', S3:'#f0c419', S4:'#ee8a3c', S5:'#d9433c'};
 function sevWidth(h){                                // 심각도 판정에 쓰는 대표 폭(보정 반영)
   return cmm(h.width_mm_p95 != null ? h.width_mm_p95
              : (h.width_mm_median != null ? h.width_mm_median : h.width_mm_max));
 }
-function sevGrade(w){                                // 폭(mm) → 'S1'~'S6'
+function sevGrade(w){                                // 폭(mm) → 'S1'~'S5'
   if(w == null) return null;
   let k = 0; for(const b of SEV_B) if(w >= b) k++;
-  return SEV_KEYS[k];
+  return SEV_KEYS[Math.min(k, SEV_KEYS.length - 1)];   // 경계가 더 많은 보고서라도 등급 밖으로 나가지 않게
 }
 function hotSev(i){ return sevGrade(sevWidth(DATA.hotspots[i])); }   // 균열 i 의 심각도 등급
 function hotSevColor(i){                             // 균열 i 의 심각도 색(등급 없으면 회색)
@@ -573,9 +579,9 @@ rebuildRibbons(false);                                // 부팅: 필터 상태�
 // ===== 필터: 심각도 · 균열 신뢰도 (AND 로 적용) =====
 // 병합 버퍼 하나라 메시 visible 로는 개별 크랙을 끌 수 없다 →
 // 정점 알파(RGBA)를 0/1 로 바꿔 alphaTest 로 걸러낸다(지오메트리 재생성 없음, 드로우콜 불변).
-const sevVisible={S1:true,S2:true,S3:true,S4:true,S5:true,S6:true};
+const sevVisible={S1:true,S2:true,S3:true,S4:true,S5:true};
 const confVisible={0:true,1:true,2:true};
-const _sevCount={S1:0,S2:0,S3:0,S4:0,S5:0,S6:0};
+const _sevCount={S1:0,S2:0,S3:0,S4:0,S5:0};
 const _confCount={0:0,1:0,2:0};
 // 심각도·신뢰도 구간별 개수를 다시 센다(칩에 표시되는 숫자).
 // 캘리브레이션이 바뀌면 폭이 달라져 등급도 달라지므로 그때마다 다시 부른다.

@@ -60,11 +60,13 @@
     <div id="sevLegend" style="margin-top:12px;font-size:var(--fs-cap);color:var(--tx-2);">
       <div style="margin-bottom:5px;color:var(--tx-3)">심각도 <span style="color:var(--tx-3)">— 균열 폭(p95·보정 mm) 기준</span></div>
       <div style="height:8px;border-radius:5px;
-        background:linear-gradient(90deg,#9ccb5b,#2e9e5b,#f0c419,#ee8a3c,#d9433c,#8a6bc4);"></div>
+        background:linear-gradient(90deg,#9ccb5b,#2e9e5b,#f0c419,#ee8a3c,#d9433c);"></div>
       <div id="sevRows" style="margin-top:5px;line-height:1.75;"></div>
       <div style="margin-top:4px;color:var(--tx-3);line-height:1.45;">
-        절대 기준이라 다른 보고서·다른 시점과 그대로 비교됩니다.
-        <b>특이값(10mm 초과)</b>은 콘크리트 균열로는 비현실적이라 측정 오류를 의심해야 합니다.</div>
+        절대 기준이라 다른 보고서·다른 시점과 그대로 비교됩니다. 등급 폭은 1mm~50mm 를
+        등비(약 3.2배)로 나눈 것입니다 — 폭 분포가 로그정규에 가까워 등간격으로는 한 칸에 몰립니다.
+        <b>50mm 를 넘는 폭</b>은 척도 밖이라 측정 오류(실척 미보정·경사 폭주)를 의심해야 하며,
+        위쪽 <b>측정 스케일 확인 필요</b> 경고로 따로 표시됩니다.</div>
       <div id="confLegend" style="margin-top:12px;">
         <div style="margin-bottom:5px;color:var(--tx-3)">균열 신뢰도 <span style="color:var(--tx-3)">— AI가 균열이라고 본 확률</span></div>
         <div id="confRows" style="line-height:1.8;"></div>

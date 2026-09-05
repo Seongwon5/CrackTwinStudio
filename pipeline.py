@@ -2,7 +2,7 @@
 """
 pipeline.py  ―  크랙 디지털 트윈 분석 파이프라인 (통합 모듈)
 ================================================================
-이미지+XMP 폴더와 3D 메시(PLY)를 받아 best.pt(DeepLabV3)로 크랙을 검출하고,
+이미지+XMP 폴더와 3D 메시(PLY)를 받아 conglomerate.pt(DeepLabV3)로 크랙을 검출하고,
 크랙을 3D로 역투영해 실척(mm) 폭·길이를 산출한 자체완결형 보고서(.twin)를 만든다.
 필요한 함수만 한 파일에 모았다: 기하(XMP/카메라/역투영) · 크랙추론 · 정량화 · 보고서.
 """
@@ -22,10 +22,10 @@ import trimesh
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
-    sys.path.insert(0, HERE)                       # best.pt 언피클용 network 패키지 경로
+    sys.path.insert(0, HERE)                       # 가중치 언피클용 network 패키지 경로
 
 # ---- 설정값 ----
-CRACK_WEIGHTS = os.path.join(HERE, "model", "best.pt")
+CRACK_WEIGHTS = os.path.join(HERE, "model", "conglomerate.pt")
 IMG_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 # 병합 반경은 '절대값(m)'이다. 모델 대각선 비율로 잡으면 안 된다 — 크랙은 mm 단위의 절대 크기
 # 특징이라 모델이 커진다고 같이 커지지 않는다. (비율(0.01/0.002) 방식일 때 실측:
@@ -70,15 +70,20 @@ SCALE_GATE_RATIO = 3.0            # [2D 폴백 방어] 국소 스케일 > 3×중
 # 추적 가능하게 하고, 뷰어는 캘리브레이션 보정 mm 로 실시간 재계산한다.
 # ---- 심각도(절대 폭 기준, 단일 체계) ----
 # 예전엔 '심각도(상대 순위)'와 '판정 등급 A~D'가 따로 있어 화면에 기준이 둘이었다 → 하나로 통일.
-# 경계(mm): 0.5 / 1 / 3 / 5 / 10.  10mm 초과는 콘크리트 균열로는 비현실적이라 '특이값'으로 분리해
-# 측정 오류(실척 미보정·경사 폭주)를 눈에 띄게 한다.
-SEV_BOUNDS_MM = (0.5, 1.0, 3.0, 5.0, 10.0)
-SEV_LABELS = ("S1", "S2", "S3", "S4", "S5", "S6")
-SEV_NAMES = ("경미", "관찰", "보통", "심각", "매우 심각", "특이값")
+# 경계(mm): 1 / 3 / 10 / 30 — 척도 전체가 1~50mm 를 덮는다.
+# 왜 등비(√10 ≈ 3.16 배)인가: 균열 폭 분포는 로그정규에 가까워서 등간격으로 자르면 대부분이
+# 한 칸에 몰린다(옛 경계 0.5/1/3/5/10 에서 실제로 그랬다). 등비면 어느 규모에서도 등급이 갈린다.
+# 읽기 쉽게 1 / 3 / 10 / 30 으로 반올림했다(십진 반 자리씩).
+# 옛 6번째 등급 '특이값(10mm 초과)'은 없앴다 — 콘크리트에서 30mm 넘는 균열은 드물지만 실재하고,
+# 그걸 '측정 오류'로 단정하면 진짜 큰 균열이 등급에서 빠진다. 실척 의심은 등급이 아니라
+# report_meta.scale_warning(폭 50mm 초과 = 척도 전체의 상한을 넘음)이 전담한다.
+SEV_BOUNDS_MM = (1.0, 3.0, 10.0, 30.0)
+SEV_LABELS = ("S1", "S2", "S3", "S4", "S5")
+SEV_NAMES = ("경미", "관찰", "보통", "심각", "매우 심각")
 
 
 def severity_of(w_mm):
-    """대표 폭(mm) → 심각도 S1~S6."""
+    """대표 폭(mm) → 심각도 S1~S5."""
     if w_mm is None:
         return None
     return SEV_LABELS[sum(w_mm >= b for b in SEV_BOUNDS_MM)]
@@ -429,7 +434,7 @@ def fuse_points(pts, ws, ns, voxel):
 
 
 # ==================================================================
-# 2. 크랙 세그멘테이션 (best.pt · 타일 추론 + FP16 배치 가속)
+# 2. 크랙 세그멘테이션 (conglomerate.pt · 타일 추론 + FP16 배치 가속)
 # ==================================================================
 def _tile_coords(size, tile, overlap):
     """한 축을 tile 크기로 겹쳐 덮는 시작좌표들(마지막은 가장자리에 정렬)."""
@@ -450,7 +455,7 @@ def _hann2d(h, w, floor=0.12):
 
 
 class CrackSegmenter:
-    """best.pt(4채널, 크랙=채널1)로 raw-BGR 타일 추론해 크랙 확률맵/마스크를 낸다.
+    """검출 모델(4채널, 크랙=채널1)로 raw-BGR 타일 추론해 크랙 확률맵/마스크를 낸다.
 
     타일 크기 주의: DeepLabV3 의 ASPP 에는 AdaptiveAvgPool2d(1) 전역 풀링 브랜치가 있어
     '타일 크기 = 전역 문맥 창'이다. 즉 tile 을 바꾸면 모델 동작 자체가 바뀐다(단순 분할이 아님).
@@ -904,7 +909,7 @@ def build_scale_map(shape, uv, locs, ray_idx, tri_idx, d_world, C, fx, mesh, fal
 # 추론(확률맵) 캐시 — 같은 사진은 두 번 추론하지 않는다
 # ==================================================================
 # 병합·정량화·융합 파라미터만 바꾼 재실행에서 GPU 추론(전체 시간의 75~92%)을 통째로
-# 건너뛴다. 키는 이미지 내용(부분 해시)+방향+모델(best.pt)+타일 설정 — 어느 하나라도
+# 건너뛴다. 키는 이미지 내용(부분 해시)+방향+모델 파일(크기·시각)+타일 설정 — 어느 하나라도
 # 바뀌면 자동 미스. 값은 uint8(1/255) 양자화 PNG(장당 1~4MB). thr 는 확률맵과 무관하므로
 # 키에 넣지 않는다(마스크가 아니라 확률맵을 캐시). 캐시 실패는 전부 무해(추론으로 폴백).
 
@@ -966,7 +971,7 @@ _segmenter = None
 
 
 def get_segmenter(log):
-    """best.pt(전체모델)를 로드해 CrackSegmenter 를 1회 생성/캐시한다.
+    """검출 가중치(전체모델 객체)를 로드해 CrackSegmenter 를 1회 생성/캐시한다.
     GPU 에서는 FP16(.half())로 변환 — 추론 속도↑·VRAM 절반. CPU 는 FP16 이 에뮬레이션이라 오히려
     느리므로 FP32 유지. 추론 시 softmax 는 out.float() 로 계산하므로 수치 안정성은 유지된다."""
     global _segmenter
@@ -975,7 +980,7 @@ def get_segmenter(log):
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         # 타일이 항상 같은 크기(512×512)라 cuDNN 알고리즘 오토튠이 그대로 재사용된다.
         torch.backends.cudnn.benchmark = True
-        log(f"크랙 모델(best.pt) 로드... [{dev}]")
+        log(f"크랙 모델({os.path.basename(CRACK_WEIGHTS)}) 로드... [{dev}]")
         m = torch.load(CRACK_WEIGHTS, map_location=dev, weights_only=False)
         if dev == "cuda" and USE_FP16:
             m = m.half(); log("  FP16 양자화 적용(GPU)")
@@ -1523,7 +1528,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
                            "width_flag": w_flag,                           # 두 방식 괴리(>1.3×) — 착지·스케일 의심
                            "length_mm": round(float(L), 2),               # 최장경로(대표)
                            "length_total_mm": round(float(L_tot), 2),      # 총연장(가지 포함)
-                           "sev": sev,                                     # 심각도 S1~S6(무보정 mm 기준 — 뷰어는 보정 재계산)
+                           "sev": sev,                                     # 심각도 S1~S5(무보정 mm 기준 — 뷰어는 보정 재계산)
                            "gsd_mm": gsd,                                  # 대표 뷰 GSD — 폭<2×GSD 면 "≤" 검열 표기
                            "w_unc_mm": w_unc,                              # 뷰 간 산포(IQR/2, 뷰≥3)
                            "_members": member_idxs,   # 이 크랙(핫스팟)에 속한 뷰별 인스턴스 idx(리본 매핑용)
@@ -1563,7 +1568,7 @@ def build_scene_data(folder, ply_path, log, progress, detect=True, thr=CRACK_THR
         "detect": bool(detect),
         "width_mm_range": [round(min(widths), 2), round(max(widths), 2)] if widths else None,
         # 측정 신뢰도 경고: 실척 전제("PLY 1단위=1m")가 깨지면 폭이 비현실적으로 커진다.
-        "scale_warning": (max(widths) > 50.0) if widths else False,
+        "scale_warning": (max(widths) > 50.0) if widths else False,   # 50mm = 심각도 척도의 상한
         # 심각도 기준값 기록(추적 가능성) — 뷰어·보고서가 보정 mm 로 재계산할 때 같은 기준을 쓴다
         "severity_bounds_mm": list(SEV_BOUNDS_MM),
         "severity_names": list(SEV_NAMES),

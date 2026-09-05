@@ -13,8 +13,9 @@ viewer-simple 브랜치는 단일 exe(--onefile)지만 여기는 폴더(--onedir
 
 번들에 들어가는 것
   ui/ libs/ assets/    대시보드·뷰어·three.js·아이콘
-  model/best.pt        크랙 검출 모델 (pipeline.CRACK_WEIGHTS = <번들>/model/best.pt)
-  network/             best.pt 언피클에 필요한 패키지 (pipeline 이 sys.path 에 번들 경로를 넣는다)
+  model/<가중치>.pt    크랙 검출 모델 — WEIGHTS 하나만 넣는다(model/ 폴더째 넣으면 안 쓰는
+                       가중치까지 따라 들어가 번들이 그만큼 커진다). pipeline.CRACK_WEIGHTS 와 같아야 한다.
+  network/             가중치 언피클에 필요한 패키지 (pipeline 이 sys.path 에 번들 경로를 넣는다)
   tools/               compare_twins · export_report · twin_mesh (backend 가 sys.path 에 넣는다)
 보고서(reports/)·추론 캐시(cache/)는 exe 가 놓인 폴더에 생긴다(backend.BASE · pipeline.BASE).
 
@@ -34,7 +35,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "크랙 디지털 트윈 스튜디오"
-VERSION = (2, 0, 3, 0)          # 2.0.3: 배포 번들 embree 누락 수정(메모리 고갈) · --selftest
+VERSION = (2, 0, 4, 0)          # 2.0.4: 타일 경계 균열 수정 · 검출 모델 conglomerate.pt · 심각도 5등급
+WEIGHTS = "conglomerate.pt"     # 번들에 넣을 크랙 검출 가중치 — pipeline.CRACK_WEIGHTS 와 같아야 한다
 COMPANY = "PRIMEPANO"
 ICON = os.path.join(HERE, "assets", "icon.ico")
 
@@ -68,7 +70,7 @@ def main():
 
     sep = ";" if os.name == "nt" else ":"
     data = [("ui", "ui"), ("libs", "libs"), ("assets/icon.ico", "assets"),
-            ("model", "model"), ("network", "network"), ("tools", "tools")]
+            (os.path.join("model", WEIGHTS), "model"), ("network", "network"), ("tools", "tools")]
     fast = "--fast" in sys.argv                    # 분석 캐시 재사용(재빌드용)
     dist = os.path.join(HERE, "dist")
     if "--dist" in sys.argv:                       # 실행 중인 앱 폴더를 덮어쓰지 않고 다른 곳에 빌드

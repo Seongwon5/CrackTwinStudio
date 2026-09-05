@@ -264,9 +264,15 @@ def simplify(parts, cmin, csize, grid=GRID):
     Ic = np.concatenate([p[2].astype(np.int64) + o for p, o in zip(parts, offs)])
 
     cell = csize / grid
-    q = np.floor((Pc - cmin) / cell).astype(np.int64)
-    np.clip(q, 0, grid - 1, out=q)
-    cid = (q[:, 0] * grid + q[:, 1]) * grid + q[:, 2]
+    # 격자를 정육면체 밖으로 PAD 칸 넓힌다 — 밖으로 나간 정점을 경계 칸에 **접어 넣지**(clip) 않는다.
+    # 접으면 노드 경계를 넘는 삼각형(첫 정점이 이 노드라 이 노드가 맡는다)이 경계에 납작하게
+    # 뭉개져, 요약 메시가 제 정육면체 앞에서 끊긴다. 이웃 노드도 똑같이 끊기니 경계마다 한 칸짜리
+    # 균열이 남고, 레벨마다 되풀이돼 위로 갈수록 커진다(멀리서 보면 타일 사이 빈틈).
+    # 밖 칸을 그대로 두면 이웃 노드의 요약과 한 칸 겹치며 경계가 메워진다(겹침은 양면 렌더라 무해).
+    g2 = grid + 2 * PAD
+    q = np.floor((Pc - cmin) / cell).astype(np.int64) + PAD
+    np.clip(q, 0, g2 - 1, out=q)                      # PAD 보다 더 멀리 나간 것만 접는다(사실상 없음)
+    cid = (q[:, 0] * g2 + q[:, 1]) * g2 + q[:, 2]
     uniq, inv, cnt = np.unique(cid, return_inverse=True, return_counts=True)
     inv = inv.ravel()
     m = len(uniq)
@@ -333,6 +339,7 @@ def simplify(parts, cmin, csize, grid=GRID):
 
 FAN_MAX_GAP = np.deg2rad(150.0)   # 부채꼴에서 이 각도보다 벌어진 이웃 쌍은 잇지 않는다(표면 가장자리)
 FILL_MAX_LOOP = 8                 # 이 길이 이하의 경계 고리(구멍)는 메운다 — 칸 몇 개짜리 틈
+PAD = 2                           # 격자를 정육면체 밖으로 몇 칸 넓힐지 — simplify() 의 경계 균열 방지
 
 
 def _fill_small_loops(tri, m, max_len):

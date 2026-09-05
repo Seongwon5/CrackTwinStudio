@@ -3,7 +3,7 @@
 
     py tools/export_report.py <report.twin> [-o out.pdf] [--rows 300] [--photos 24]
 
-· 심각도(경미~특이값)·균열 신뢰도는 .twin 저장값과 동일 규칙(meta 경계값)으로 재계산.
+· 심각도(경미~매우 심각)·균열 신뢰도는 뷰어와 동일 규칙으로 재계산.
 · 검토 사이드카(<twin>.review.json)가 있으면 검토 상태·메모를 대장에 반영.
 · 주의: 수치는 파이프라인 무보정 mm 기준(뷰어의 2점 캘리브레이션은 로컬 설정이라 미반영)
   — 표지에 명시한다.
@@ -38,19 +38,19 @@ REV_LABEL = {"confirmed": "확인", "rejected": "오탐", "edited": "수정"}
 
 
 # 심각도(절대 폭 기준, 단일 체계) — 판정 등급 A~D 는 폐지하고 이것으로 통일했다.
-SEV_KEYS = ["S1", "S2", "S3", "S4", "S5", "S6"]
+SEV_KEYS = ["S1", "S2", "S3", "S4", "S5"]
 SEV_NAME = {"S1": "경미", "S2": "관찰", "S3": "보통",
-            "S4": "심각", "S5": "매우 심각", "S6": "특이값"}
+            "S4": "심각", "S5": "매우 심각"}
 SEV_HEX = {"S1": "#9ccb5b", "S2": "#2e9e5b", "S3": "#f0c419",
-           "S4": "#ee8a3c", "S5": "#d9433c", "S6": "#8a6bc4"}
+           "S4": "#ee8a3c", "S5": "#d9433c"}
 
 
 def _sev(h, bounds, cal=1.0):
-    """대표 폭(p95) → 심각도 S1~S6. meta 의 경계값을 그대로 쓰고, 캘리브레이션 계수를 반영한다."""
+    """대표 폭(p95) → 심각도 S1~S5. 경계값은 뷰어와 같은 규칙으로 고르고, 캘리브레이션 계수를 반영한다."""
     w = h.get("width_mm_p95") or h.get("width_mm_median") or h.get("width_mm_max") or h.get("width_mm")
     if w is None:
         return None
-    return SEV_KEYS[sum(w * cal >= b for b in bounds)]
+    return SEV_KEYS[min(sum(w * cal >= b for b in bounds), len(SEV_KEYS) - 1)]
 
 
 def _conf_band(h, bounds):
@@ -95,7 +95,12 @@ def build_pdf(twin, out_pdf, log=print, max_rows=300, top_photos=24, debug_png=N
             return f"≤{2 * g * cal:.{d}f}"
         return f"{w:.{d}f}"
 
-    sev_bounds = rm.get("severity_bounds_mm", [0.5, 1.0, 3.0, 5.0, 10.0])
+    # 경계 개수가 등급 수와 맞을 때만 보고서 값을 쓴다 — 구형 보고서(경계 5개 + '특이값')는
+    # 지금 척도로 다시 매긴다(뷰어 viewer.js 의 SEV_B 와 같은 규칙이라 화면과 PDF 가 어긋나지 않는다).
+    SEV_DEFAULT_B = [1.0, 3.0, 10.0, 30.0]
+    sev_bounds = rm.get("severity_bounds_mm")
+    if not (isinstance(sev_bounds, list) and len(sev_bounds) == len(SEV_DEFAULT_B)):
+        sev_bounds = SEV_DEFAULT_B
     sevs = [_sev(h, sev_bounds, cal) for h in hots]
     cbnd = rm.get("conf_bounds", [0.7, 0.9])
     confs = [_conf_band(h, cbnd) for h in hots]

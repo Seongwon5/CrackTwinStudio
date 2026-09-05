@@ -5,23 +5,25 @@ CrackTwinStudio 에 포함되거나 사용되는 모델·코드·데이터의 �
 
 ---
 
-## 1. 크랙 검출 모델 — `model/best.pt`
+## 1. 크랙 검출 모델 — `model/conglomerate.pt`
 
 - **정체**: DeepLabV3+ (ResNet-101 백본, output_stride=8) 기반 콘크리트 크랙
   세그멘테이션 모델. 출력 4채널 중 **채널 1 = 크랙**.
-- **계보(베이스)**: Virginia Tech / beric7 `concrete_crack_detection` 의
-  **Conglomerate** 콘크리트 크랙 가중치 계열.
+- **계보**: Virginia Tech / beric7 `concrete_crack_detection` 의
+  **Conglomerate** 콘크리트 크랙 가중치.
   - 레포: https://github.com/beric7/concrete_crack_detection
   - 가중치(Conglomerate): https://doi.org/10.7294/16628596
   - (참고, 전역 장면용 LCW 가중치: https://doi.org/10.7294/16628707 )
-- **본 프로젝트 처리**: 배포 용량 절감을 위해 **FP16(반정밀도)로 변환**
-  (약 225MB → 약 118MB, 검출 결과 실질 동일: 마스크 IoU ≈ 0.9995).
-- **주의**: 이 `best.pt` 가 위 공개 가중치에서 추가 파인튜닝된 것이라면,
-  그 학습 데이터·과정은 별도로 문서화해 두어야 한다.
+- **본 프로젝트 처리**: 파일은 FP32 원본(약 236MB) 그대로 쓰고, GPU 추론에서만
+  실행 중 `.half()` 로 FP16 변환한다(속도↑·VRAM↓, 파일은 그대로).
+- **이력**: 2.0.3 까지는 `model/best.pt`(FP16, 약 118MB)를 썼다. 2.0.4 에서
+  `conglomerate.pt` 로 교체했다. 두 파일은 **FP16 반올림으로 설명되지 않는 차이**가
+  있으므로(파라미터 최대 편차 0.023 ≈ FP16 ulp 의 10배 이상) 같은 체크포인트가 아니다 —
+  교체하면 검출 결과가 달라진다. 임계값 `pipeline.CRACK_THR` 는 재검증 대상이다.
 
 ## 2. 신경망 아키텍처 — `network/` 패키지
 
-- `best.pt`(전체 모델 객체) 언피클에 필요한 DeepLabV3+ 구현.
+- 가중치(전체 모델 객체) 언피클에 필요한 DeepLabV3+ 구현.
 - **출처**: VainF, *DeepLabV3Plus-Pytorch*
   - https://github.com/VainF/DeepLabV3Plus-Pytorch (MIT License)
   - beric7 레포의 `Training - Testing/network` 로 재배포된 것을 그대로 포함.
@@ -63,9 +65,9 @@ Conglomerate 데이터셋은 여러 공개 콘크리트 크랙 데이터셋을 �
 ---
 
 ### 요약
-- 포함된 학습 산출물(`best.pt`)·아키텍처(`network`)는 **VT/beric7 + VainF** 계열,
+- 포함된 학습 산출물(`conglomerate.pt`)·아키텍처(`network`)는 **VT/beric7 + VainF** 계열,
   3D 엔진은 **three.js(MIT)** 이다.
 - 학습 데이터의 근본 출처는 **Conglomerate(figshare) 및 그 구성 공개 데이터셋들**.
 - 사용자 입력(이미지/XMP/PLY)은 별도 소유물이며 미포함.
-- **재배포 시**: best.pt·network(원 라이선스), three.js(MIT), 구성 데이터셋의
+- **재배포 시**: conglomerate.pt·network(원 라이선스), three.js(MIT), 구성 데이터셋의
   인용/라이선스 조건을 확인·준수할 것.
