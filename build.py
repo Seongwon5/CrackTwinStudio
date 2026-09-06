@@ -21,7 +21,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NAME = "원전 디지털 트윈 스튜디오"
-VERSION = (1, 1, 2, 0)
+VERSION = (1, 1, 3, 0)          # 1.1.3: 타일 경계 균열 수정(요약 격자를 노드 밖으로 PAD 칸 확장)
 COMPANY = "PRIMEPANO"
 ICON = os.path.join(HERE, "assets", "icon.ico")
 
